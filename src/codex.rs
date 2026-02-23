@@ -107,7 +107,11 @@ fn parse_iso_timestamp(s: &str) -> Option<i64> {
         return None;
     }
     let date_part = &s[..10];
-    let time_part = if s.len() >= 19 { &s[11..19] } else { return None };
+    let time_part = if s.len() >= 19 {
+        &s[11..19]
+    } else {
+        return None;
+    };
 
     let dp: Vec<&str> = date_part.split('-').collect();
     let tp: Vec<&str> = time_part.split(':').collect();

@@ -853,7 +853,9 @@ enabled = false
 #[test]
 fn test_codex_rollout_parsing() {
     let tmp = TempDir::new().unwrap();
-    let rollout = tmp.path().join("rollout-2025-06-01T10-00-00-test-uuid.jsonl");
+    let rollout = tmp
+        .path()
+        .join("rollout-2025-06-01T10-00-00-test-uuid.jsonl");
     fs::write(
         &rollout,
         r#"{"type":"session_start","timestamp":"2025-06-01T10:00:00Z","payload":{"cwd":"/home/dev/project"}}
