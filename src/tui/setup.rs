@@ -9,7 +9,7 @@ use ratatui::Frame;
 
 use crate::config::{find_real_git, Config};
 
-const FIELD_COUNT: usize = 14;
+const FIELD_COUNT: usize = 15;
 
 struct TextInput {
     value: String,
@@ -188,6 +188,10 @@ impl SetupApp {
                     value: cfg.codex.enabled,
                 },
                 FieldState::Toggle {
+                    label: "OpenCode",
+                    value: cfg.opencode.enabled,
+                },
+                FieldState::Toggle {
                     label: "Telemetry",
                     value: cfg.telemetry.enabled,
                 },
@@ -276,8 +280,11 @@ impl SetupApp {
             codex: crate::config::ToolConfig {
                 enabled: self.toggle_val(12),
             },
-            telemetry: crate::config::TelemetryConfig {
+            opencode: crate::config::ToolConfig {
                 enabled: self.toggle_val(13),
+            },
+            telemetry: crate::config::TelemetryConfig {
+                enabled: self.toggle_val(14),
                 send_diffs: false,
             },
         }

@@ -44,6 +44,30 @@ pub struct SessionSummary {
     pub name: String,
     pub mode: String,
     pub message_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<SessionStats>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionStats {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files_touched: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tool_call_count: u32,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 /// Collect ToolContext for a given tool's sessions.
@@ -63,6 +87,31 @@ pub fn tool_context_from_sessions(
             name: recent.name.clone(),
             mode: recent.mode.clone(),
             message_count: msg_count,
+            stats: None,
+        }),
+    })
+}
+
+/// Collect ToolContext with stats for a given tool's sessions.
+pub fn tool_context_from_sessions_with_stats(
+    sessions: &[crate::cursor::Session],
+    count_fn: impl Fn(&str, &str) -> u32,
+    stats_fn: impl Fn(&str, &str) -> Option<SessionStats>,
+) -> Option<ToolContext> {
+    if sessions.is_empty() {
+        return None;
+    }
+    let recent = &sessions[0];
+    let msg_count = count_fn(&recent.project_path, &recent.session_id);
+    let stats = stats_fn(&recent.project_path, &recent.session_id);
+    Some(ToolContext {
+        active_sessions: sessions.len() as u32,
+        recent_session: Some(SessionSummary {
+            id: recent.session_id.clone(),
+            name: recent.name.clone(),
+            mode: recent.mode.clone(),
+            message_count: msg_count,
+            stats,
         }),
     })
 }
@@ -83,6 +132,7 @@ mod tests {
                     name: "Fix auth".into(),
                     mode: "agent".into(),
                     message_count: 15,
+                    stats: None,
                 }),
             },
         );
@@ -95,6 +145,15 @@ mod tests {
                     name: "Refactor DB".into(),
                     mode: "opus-4.5".into(),
                     message_count: 8,
+                    stats: Some(SessionStats {
+                        model: Some("claude-opus-4-5".into()),
+                        input_tokens: Some(15000),
+                        output_tokens: Some(8000),
+                        total_cost_usd: Some(0.45),
+                        duration_secs: Some(120),
+                        files_touched: vec!["src/db.rs".into(), "src/main.rs".into()],
+                        tool_call_count: 5,
+                    }),
                 }),
             },
         );

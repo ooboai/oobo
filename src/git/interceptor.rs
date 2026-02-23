@@ -120,17 +120,31 @@ pub fn collect_all_tool_context(cfg: &Config, project_root: &str) -> BTreeMap<St
         };
     }
 
+    macro_rules! collect_tool_with_stats {
+        ($enabled:expr, $name:expr, $sessions:expr, $count_fn:expr, $stats_fn:expr) => {
+            if $enabled {
+                let sessions = $sessions;
+                if let Some(ctx) =
+                    tool_context_from_sessions_with_stats(&sessions, $count_fn, $stats_fn)
+                {
+                    tools.insert($name.into(), ctx);
+                }
+            }
+        };
+    }
+
     collect_tool!(
         cfg.cursor.enabled,
         "cursor",
         cursor::sessions_for_project(project_root).unwrap_or_default(),
         cursor::transcript::count_messages
     );
-    collect_tool!(
+    collect_tool_with_stats!(
         cfg.claude.enabled,
         "claude",
         crate::claude::sessions_for_project(project_root).unwrap_or_default(),
-        crate::claude::transcript::count_messages
+        crate::claude::transcript::count_messages,
+        crate::claude::transcript::stats_for_session
     );
     collect_tool!(
         cfg.windsurf.enabled,
@@ -156,11 +170,12 @@ pub fn collect_all_tool_context(cfg: &Config, project_root: &str) -> BTreeMap<St
         crate::continue_dev::sessions_for_project(project_root).unwrap_or_default(),
         crate::continue_dev::transcript::count_messages
     );
-    collect_tool!(
+    collect_tool_with_stats!(
         cfg.copilot.enabled,
         "copilot",
         crate::copilot::sessions_for_project(project_root).unwrap_or_default(),
-        crate::copilot::transcript::count_messages
+        crate::copilot::transcript::count_messages,
+        crate::copilot::transcript::stats_for_session
     );
     collect_tool!(
         cfg.zed.enabled,
@@ -168,11 +183,19 @@ pub fn collect_all_tool_context(cfg: &Config, project_root: &str) -> BTreeMap<St
         crate::zed::sessions_for_project(project_root).unwrap_or_default(),
         crate::zed::transcript::count_messages
     );
-    collect_tool!(
+    collect_tool_with_stats!(
         cfg.codex.enabled,
         "codex",
         crate::codex::sessions_for_project(project_root).unwrap_or_default(),
-        crate::codex::transcript::count_messages
+        crate::codex::transcript::count_messages,
+        crate::codex::transcript::stats_for_session
+    );
+    collect_tool_with_stats!(
+        cfg.opencode.enabled,
+        "opencode",
+        crate::opencode::sessions_for_project(project_root).unwrap_or_default(),
+        crate::opencode::transcript::count_messages,
+        crate::opencode::transcript::stats_for_session
     );
 
     tools

@@ -203,6 +203,47 @@ pub mod transcript {
         String::new()
     }
 
+    pub fn extract_stats(path: &Path) -> Option<crate::server::payload::SessionStats> {
+        let content = fs::read_to_string(path).ok()?;
+        let data: serde_json::Value = serde_json::from_str(&content).ok()?;
+        let requests = data.get("requests").and_then(|v| v.as_array())?;
+
+        let model = requests
+            .first()
+            .and_then(|r| r.get("modelId"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let first_ts = data.get("creationDate").and_then(|v| v.as_i64());
+        let last_ts = requests
+            .last()
+            .and_then(|r| r.get("timestamp"))
+            .and_then(|v| v.as_i64());
+
+        let duration_secs = match (first_ts, last_ts) {
+            (Some(f), Some(l)) if l > f => Some(((l - f) / 1000) as u64),
+            _ => None,
+        };
+
+        Some(crate::server::payload::SessionStats {
+            model,
+            input_tokens: None,
+            output_tokens: None,
+            total_cost_usd: None,
+            duration_secs,
+            files_touched: Vec::new(),
+            tool_call_count: 0,
+        })
+    }
+
+    pub fn stats_for_session(
+        project_path: &str,
+        session_id: &str,
+    ) -> Option<crate::server::payload::SessionStats> {
+        let path = find_transcript_path(project_path, session_id)?;
+        extract_stats(&path)
+    }
+
     pub fn read_transcript(path: &Path, max_messages: u32) -> String {
         let messages = parse_messages(path);
         let start = if messages.len() > max_messages as usize {

@@ -140,6 +140,145 @@ pub fn read_transcript(path: &Path, max_messages: u32) -> String {
     output.join("\n")
 }
 
+/// Extract session stats from a Claude transcript file.
+pub fn extract_stats(path: &Path) -> Option<crate::server::payload::SessionStats> {
+    let file = fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+
+    let mut model: Option<String> = None;
+    let mut input_tokens: u64 = 0;
+    let mut output_tokens: u64 = 0;
+    let mut total_cost: f64 = 0.0;
+    let mut files_touched: Vec<String> = Vec::new();
+    let mut tool_call_count: u32 = 0;
+    let mut first_ts: Option<i64> = None;
+    let mut last_ts: Option<i64> = None;
+
+    for line in reader.lines().map_while(Result::ok) {
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        let entry: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if let Some(ts) = super::parse_timestamp(&entry) {
+            if first_ts.is_none() {
+                first_ts = Some(ts);
+            }
+            last_ts = Some(ts);
+        }
+
+        let entry_type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        if entry_type == "assistant" {
+            if let Some(msg) = entry.get("message") {
+                if model.is_none() {
+                    if let Some(m) = msg.get("model").and_then(|v| v.as_str()) {
+                        model = Some(m.to_string());
+                    }
+                }
+
+                if let Some(usage) = msg.get("usage") {
+                    input_tokens += usage
+                        .get("input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    output_tokens += usage
+                        .get("output_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                }
+
+                if let Some(content) = msg.get("content").and_then(|v| v.as_array()) {
+                    for part in content {
+                        let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                        if part_type == "tool_use" {
+                            tool_call_count += 1;
+                            let tool_name = part.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                            if (tool_name == "Write" || tool_name == "Edit")
+                                || tool_name == "MultiEdit"
+                            {
+                                if let Some(input) = part.get("input") {
+                                    if let Some(fp) =
+                                        input.get("file_path").and_then(|v| v.as_str())
+                                    {
+                                        let f = fp.to_string();
+                                        if !files_touched.contains(&f) {
+                                            files_touched.push(f);
+                                        }
+                                    }
+                                    if let Some(fp) = input.get("path").and_then(|v| v.as_str()) {
+                                        let f = fp.to_string();
+                                        if !files_touched.contains(&f) {
+                                            files_touched.push(f);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if entry_type == "result" {
+            if let Some(result) = entry.get("result") {
+                if let Some(usage) = result.get("usage") {
+                    input_tokens += usage
+                        .get("input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    output_tokens += usage
+                        .get("output_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                }
+            }
+            if let Some(c) = entry.get("costUSD").and_then(|v| v.as_f64()) {
+                total_cost += c;
+            }
+        }
+    }
+
+    let duration_secs = match (first_ts, last_ts) {
+        (Some(f), Some(l)) if l > f => Some(((l - f) / 1000) as u64),
+        _ => None,
+    };
+
+    Some(crate::server::payload::SessionStats {
+        model,
+        input_tokens: if input_tokens > 0 {
+            Some(input_tokens)
+        } else {
+            None
+        },
+        output_tokens: if output_tokens > 0 {
+            Some(output_tokens)
+        } else {
+            None
+        },
+        total_cost_usd: if total_cost > 0.0 {
+            Some(total_cost)
+        } else {
+            None
+        },
+        duration_secs,
+        files_touched,
+        tool_call_count,
+    })
+}
+
+pub fn stats_for_session(
+    project_path: &str,
+    session_id: &str,
+) -> Option<crate::server::payload::SessionStats> {
+    let path = find_transcript_path(project_path, session_id)?;
+    extract_stats(&path)
+}
+
 fn extract_user_text(entry: &serde_json::Value) -> Option<String> {
     let msg = entry.get("message")?;
     let content = msg.get("content")?;

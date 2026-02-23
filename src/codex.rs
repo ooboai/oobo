@@ -306,6 +306,82 @@ pub mod transcript {
         String::new()
     }
 
+    pub fn extract_stats(path: &Path) -> Option<crate::server::payload::SessionStats> {
+        let content = fs::read_to_string(path).ok()?;
+        let mut files_touched: Vec<String> = Vec::new();
+        let mut tool_call_count: u32 = 0;
+        let mut first_ts: Option<i64> = None;
+        let mut last_ts: Option<i64> = None;
+
+        for line in content.lines() {
+            let v: serde_json::Value = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            let ts = v
+                .get("timestamp")
+                .and_then(|t| t.as_str())
+                .and_then(parse_iso_timestamp)
+                .or_else(|| v.get("timestamp").and_then(|t| t.as_i64()));
+
+            if let Some(t) = ts {
+                if first_ts.is_none() {
+                    first_ts = Some(t);
+                }
+                last_ts = Some(t);
+            }
+
+            let event_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+            if event_type == "response_item" {
+                if let Some(payload) = v.get("payload") {
+                    let item_type = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    if item_type == "function_call" || item_type == "tool_call" {
+                        tool_call_count += 1;
+                        if let Some(args) = payload
+                            .get("arguments")
+                            .and_then(|a| a.as_str())
+                            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                        {
+                            for key in ["path", "file_path", "file"] {
+                                if let Some(fp) = args.get(key).and_then(|v| v.as_str()) {
+                                    let f = fp.to_string();
+                                    if !files_touched.contains(&f) {
+                                        files_touched.push(f);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let duration_secs = match (first_ts, last_ts) {
+            (Some(f), Some(l)) if l > f => Some(((l - f) / 1000) as u64),
+            _ => None,
+        };
+
+        Some(crate::server::payload::SessionStats {
+            model: None,
+            input_tokens: None,
+            output_tokens: None,
+            total_cost_usd: None,
+            duration_secs,
+            files_touched,
+            tool_call_count,
+        })
+    }
+
+    pub fn stats_for_session(
+        _project_path: &str,
+        session_id: &str,
+    ) -> Option<crate::server::payload::SessionStats> {
+        let path = find_transcript_path("", session_id)?;
+        extract_stats(&path)
+    }
+
     pub fn read_transcript(path: &Path, max_messages: u32) -> String {
         let messages = parse_messages(path);
         let start = if messages.len() > max_messages as usize {

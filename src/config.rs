@@ -29,6 +29,8 @@ pub struct Config {
     #[serde(default)]
     pub codex: ToolConfig,
     #[serde(default)]
+    pub opencode: ToolConfig,
+    #[serde(default)]
     pub telemetry: TelemetryConfig,
 }
 
@@ -217,6 +219,7 @@ mod tests {
         assert!(cfg.zed.enabled);
         assert!(cfg.copilot.enabled);
         assert!(cfg.trae.enabled);
+        assert!(cfg.opencode.enabled);
         assert!(cfg.telemetry.enabled);
         assert!(!cfg.telemetry.send_diffs);
     }
@@ -241,6 +244,7 @@ mod tests {
             copilot: ToolConfig { enabled: true },
             trae: ToolConfig { enabled: false },
             codex: ToolConfig { enabled: true },
+            opencode: ToolConfig { enabled: true },
             telemetry: TelemetryConfig {
                 enabled: true,
                 send_diffs: true,

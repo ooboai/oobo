@@ -256,6 +256,7 @@ fn test_config_save_and_load() {
         copilot: oobo::config::ToolConfig { enabled: true },
         trae: oobo::config::ToolConfig { enabled: true },
         codex: oobo::config::ToolConfig { enabled: true },
+        opencode: oobo::config::ToolConfig { enabled: true },
         telemetry: oobo::config::TelemetryConfig {
             enabled: true,
             send_diffs: true,
@@ -536,6 +537,7 @@ fn test_event_payload_roundtrip() {
                 name: "Debug authentication".into(),
                 mode: "agent".into(),
                 message_count: 42,
+                stats: None,
             }),
         },
     );
@@ -548,6 +550,7 @@ fn test_event_payload_roundtrip() {
                 name: "Refactor module".into(),
                 mode: "opus-4.5".into(),
                 message_count: 10,
+                stats: None,
             }),
         },
     );
@@ -560,6 +563,7 @@ fn test_event_payload_roundtrip() {
                 name: "aider chat".into(),
                 mode: "aider".into(),
                 message_count: 5,
+                stats: None,
             }),
         },
     );
@@ -829,6 +833,7 @@ fn test_config_all_tools_default_enabled() {
     assert!(cfg.copilot.enabled);
     assert!(cfg.trae.enabled);
     assert!(cfg.codex.enabled);
+    assert!(cfg.opencode.enabled);
 }
 
 #[test]

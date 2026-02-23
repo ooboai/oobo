@@ -32,7 +32,7 @@
 
 ### Supported tools
 
-Cursor, Claude Code, Windsurf, Aider, Continue.dev, GitHub Copilot Chat, Zed, Trae, and OpenAI Codex CLI.
+Cursor, Claude Code, Windsurf, Aider, Continue.dev, GitHub Copilot Chat, Zed, Trae, OpenAI Codex CLI, and OpenCode.
 
 All tools are enabled by default. Toggle any of them with `oobo setup`.
 

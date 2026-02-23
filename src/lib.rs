@@ -9,6 +9,7 @@ pub mod continue_dev;
 pub mod copilot;
 pub mod cursor;
 pub mod git;
+pub mod opencode;
 pub mod server;
 pub mod session;
 pub mod setup;

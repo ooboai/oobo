@@ -9,6 +9,7 @@ mod continue_dev;
 mod copilot;
 mod cursor;
 mod git;
+mod opencode;
 mod server;
 mod session;
 mod setup;

@@ -38,6 +38,10 @@ pub fn find_transcript_path(session: &Session) -> Option<PathBuf> {
             &session.project_path,
             &session.session_id,
         ),
+        "opencode" => crate::opencode::transcript::find_transcript_path(
+            &session.project_path,
+            &session.session_id,
+        ),
         _ => cursor::transcript::find_transcript_path(&session.project_path, &session.session_id),
     }
 }
@@ -66,6 +70,9 @@ pub fn count_messages(session: &Session) -> u32 {
         "codex" => {
             crate::codex::transcript::count_messages(&session.project_path, &session.session_id)
         }
+        "opencode" => {
+            crate::opencode::transcript::count_messages(&session.project_path, &session.session_id)
+        }
         _ => cursor::transcript::count_messages(&session.project_path, &session.session_id),
     }
 }
@@ -81,6 +88,7 @@ pub fn parse_messages(path: &std::path::Path, source: &str) -> Vec<Message> {
         "copilot" => crate::copilot::transcript::parse_messages(path),
         "zed" => crate::zed::transcript::parse_messages(path),
         "codex" => crate::codex::transcript::parse_messages(path),
+        "opencode" => crate::opencode::transcript::parse_messages(path),
         _ => cursor::transcript::parse_messages(path),
     }
 }
@@ -96,6 +104,7 @@ pub fn read_transcript(path: &std::path::Path, max_messages: u32, source: &str) 
         "copilot" => crate::copilot::transcript::read_transcript(path, max_messages),
         "zed" => crate::zed::transcript::read_transcript(path, max_messages),
         "codex" => crate::codex::transcript::read_transcript(path, max_messages),
+        "opencode" => crate::opencode::transcript::read_transcript(path, max_messages),
         _ => cursor::transcript::read_transcript(path, max_messages),
     }
 }
@@ -126,6 +135,7 @@ pub fn find_session_any(id_prefix: &str) -> Result<Session, String> {
     try_source!(crate::copilot::sessions_for_project(&project_root));
     try_source!(crate::zed::sessions_for_project(&project_root));
     try_source!(crate::codex::sessions_for_project(&project_root));
+    try_source!(crate::opencode::sessions_for_project(&project_root));
 
     try_source!(cursor::all_sessions());
     try_source!(claude::all_sessions());
@@ -135,6 +145,7 @@ pub fn find_session_any(id_prefix: &str) -> Result<Session, String> {
     try_source!(crate::copilot::all_sessions());
     try_source!(crate::zed::all_sessions());
     try_source!(crate::codex::all_sessions());
+    try_source!(crate::opencode::all_sessions());
 
     Err(format!("session not found: {id_prefix}"))
 }
@@ -187,6 +198,10 @@ pub fn all_for_project(project_root: &str, cfg: &crate::config::Config) -> Vec<S
         cfg.codex.enabled,
         crate::codex::sessions_for_project(project_root)
     );
+    collect!(
+        cfg.opencode.enabled,
+        crate::opencode::sessions_for_project(project_root)
+    );
 
     sessions.sort_by_key(|s| std::cmp::Reverse(s.sort_key()));
     sessions
@@ -220,6 +235,7 @@ pub fn all_sessions(cfg: &crate::config::Config) -> Vec<Session> {
     collect!(cfg.copilot.enabled, crate::copilot::all_sessions());
     collect!(cfg.zed.enabled, crate::zed::all_sessions());
     collect!(cfg.codex.enabled, crate::codex::all_sessions());
+    collect!(cfg.opencode.enabled, crate::opencode::all_sessions());
 
     sessions.sort_by_key(|s| std::cmp::Reverse(s.sort_key()));
     sessions
