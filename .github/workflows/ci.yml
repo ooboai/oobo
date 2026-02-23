@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-targets
+
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all-targets
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  docker-test:
+    name: Docker (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        distro: [ubuntu, debian, alpine]
+        include:
+          - distro: ubuntu
+            image: ubuntu:22.04
+            pkg_cmd: "apt-get update && apt-get install -y curl gcc git pkg-config libssl-dev"
+          - distro: debian
+            image: debian:bookworm
+            pkg_cmd: "apt-get update && apt-get install -y curl gcc git pkg-config libssl-dev"
+          - distro: alpine
+            image: alpine:3.19
+            pkg_cmd: "apk add --no-cache curl gcc git musl-dev openssl-dev pkgconfig"
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Install system dependencies
+        run: ${{ matrix.pkg_cmd }}
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Build and test
+        run: |
+          . "$HOME/.cargo/env"
+          cargo test --all-targets

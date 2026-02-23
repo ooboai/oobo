@@ -1,0 +1,18 @@
+/target
+Cargo.lock
+*.swp
+*.swo
+.DS_Store
+
+# Config with potential secrets
+config.toml
+*.env
+.env.*
+
+# Editor/IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+Thumbs.db

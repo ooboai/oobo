@@ -1,0 +1,20 @@
+user:
+What is the current database schema?
+assistant:
+The database has the following tables:
+
+- users (id, email, name, created_at)
+- posts (id, user_id, title, body, created_at)
+- comments (id, post_id, user_id, body, created_at)
+
+Each table has appropriate foreign key constraints.
+user:
+How do I add a new column?
+assistant:
+You can add a new column with an ALTER TABLE statement:
+
+```sql
+ALTER TABLE users ADD COLUMN avatar_url TEXT;
+```
+
+Make sure to create a migration file for this change.

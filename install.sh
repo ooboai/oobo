@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# oobo-git installer
+# Usage: curl -fsSL https://oobo.ai/oobo-git/install.sh | bash
+#
+# Environment variables:
+#   OOBO_INSTALL_DIR  — override install directory (default: ~/.oobo/bin)
+#   OOBO_VERSION      — install a specific version (default: latest)
+#   OOBO_NO_MODIFY_PATH — set to 1 to skip PATH modification
+
+set -euo pipefail
+
+REPO="NoCodeInc/oobo-git"
+INSTALL_DIR="${OOBO_INSTALL_DIR:-$HOME/.oobo/bin}"
+BINARY_NAME="oobo"
+
+# ── Colors ───────────────────────────────────────────────────────────────────
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+info()  { echo -e "${BLUE}${BOLD}info${RESET}  $*"; }
+ok()    { echo -e "${GREEN}${BOLD}ok${RESET}    $*"; }
+warn()  { echo -e "${YELLOW}${BOLD}warn${RESET}  $*"; }
+error() { echo -e "${RED}${BOLD}error${RESET} $*" >&2; exit 1; }
+
+# ── Platform Detection ───────────────────────────────────────────────────────
+
+detect_platform() {
+    local os arch
+
+    os="$(uname -s)"
+    arch="$(uname -m)"
+
+    case "$os" in
+        Darwin)  os="apple-darwin" ;;
+        Linux)
+            if ldd --version 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]; then
+                os="unknown-linux-musl"
+            else
+                os="unknown-linux-gnu"
+            fi
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            os="pc-windows-msvc"
+            ;;
+        *)
+            error "Unsupported operating system: $os"
+            ;;
+    esac
+
+    case "$arch" in
+        x86_64|amd64)   arch="x86_64" ;;
+        aarch64|arm64)  arch="aarch64" ;;
+        *)
+            error "Unsupported architecture: $arch"
+            ;;
+    esac
+
+    echo "${arch}-${os}"
+}
+
+# ── Version Detection ────────────────────────────────────────────────────────
+
+get_latest_version() {
+    if command -v curl &>/dev/null; then
+        curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+            | grep '"tag_name"' \
+            | head -1 \
+            | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/'
+    elif command -v wget &>/dev/null; then
+        wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" \
+            | grep '"tag_name"' \
+            | head -1 \
+            | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/'
+    else
+        error "Neither curl nor wget found. Install one and retry."
+    fi
+}
+
+# ── Download ─────────────────────────────────────────────────────────────────
+
+download() {
+    local url="$1" dest="$2"
+
+    if command -v curl &>/dev/null; then
+        curl -fsSL "$url" -o "$dest"
+    elif command -v wget &>/dev/null; then
+        wget -qO "$dest" "$url"
+    else
+        error "Neither curl nor wget found."
+    fi
+}
+
+# ── PATH Management ─────────────────────────────────────────────────────────
+
+add_to_path() {
+    local dir="$1"
+
+    if [[ "${OOBO_NO_MODIFY_PATH:-0}" == "1" ]]; then
+        return
+    fi
+
+    # Already in PATH?
+    if echo "$PATH" | tr ':' '\n' | grep -qx "$dir"; then
+        return
+    fi
+
+    local shell_name rc_file export_line
+    shell_name="$(basename "${SHELL:-/bin/sh}")"
+    export_line="export PATH=\"${dir}:\$PATH\" # oobo-git"
+
+    case "$shell_name" in
+        zsh)
+            rc_file="$HOME/.zshrc"
+            ;;
+        bash)
+            if [[ -f "$HOME/.bash_profile" ]]; then
+                rc_file="$HOME/.bash_profile"
+            else
+                rc_file="$HOME/.bashrc"
+            fi
+            ;;
+        fish)
+            rc_file="$HOME/.config/fish/config.fish"
+            export_line="set -gx PATH ${dir} \$PATH # oobo-git"
+            ;;
+        *)
+            rc_file="$HOME/.profile"
+            ;;
+    esac
+
+    if [[ -f "$rc_file" ]] && grep -q "# oobo-git" "$rc_file" 2>/dev/null; then
+        return
+    fi
+
+    echo "" >> "$rc_file"
+    echo "$export_line" >> "$rc_file"
+    info "Added ${dir} to PATH in ${rc_file}"
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+main() {
+    echo ""
+    echo -e "${BOLD}  oobo-git installer${RESET}"
+    echo "  ──────────────────"
+    echo ""
+
+    local platform version archive_name url tmpdir
+
+    platform="$(detect_platform)"
+    info "Detected platform: ${platform}"
+
+    version="${OOBO_VERSION:-}"
+    if [[ -z "$version" ]]; then
+        info "Fetching latest version..."
+        version="$(get_latest_version)"
+        if [[ -z "$version" ]]; then
+            error "Could not determine latest version. Set OOBO_VERSION manually."
+        fi
+    fi
+    info "Version: ${version}"
+
+    archive_name="oobo-${version}-${platform}.tar.gz"
+    url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
+
+    info "Downloading ${url}..."
+    tmpdir="$(mktemp -d)"
+    trap 'rm -rf "$tmpdir"' EXIT
+
+    download "$url" "${tmpdir}/${archive_name}"
+
+    info "Extracting..."
+    tar -xzf "${tmpdir}/${archive_name}" -C "$tmpdir"
+
+    mkdir -p "$INSTALL_DIR"
+    mv "${tmpdir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+    chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
+
+    ok "Installed ${BINARY_NAME} to ${INSTALL_DIR}/${BINARY_NAME}"
+
+    add_to_path "$INSTALL_DIR"
+
+    echo ""
+    echo -e "${GREEN}${BOLD}  Installation complete!${RESET}"
+    echo ""
+    echo "  To get started:"
+    echo "    1. Restart your shell or run:  source ~/.zshrc  (or your shell's rc file)"
+    echo "    2. Run:  oobo setup"
+    echo ""
+    echo "  Quick reference:"
+    echo "    oobo sessions list    — view AI chat sessions"
+    echo "    oobo dash             — check configuration"
+    echo "    oobo alias install    — make 'git' use oobo transparently"
+    echo ""
+}
+
+main "$@"

@@ -1,0 +1,44 @@
+[package]
+name = "oobo"
+version = "0.1.0"
+edition = "2021"
+description = "Git wrapper that captures AI chat context alongside your commits — supports Cursor, Claude Code, Windsurf, Aider, Continue.dev, Copilot, Zed, Trae, Codex"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/NoCodeInc/oobo-git"
+homepage = "https://oobo.ai"
+readme = "README.md"
+
+[lib]
+name = "oobo"
+path = "src/lib.rs"
+
+[[bin]]
+name = "oobo"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+tokio = { version = "1", features = ["rt", "time", "macros"] }
+dirs = "6"
+dialoguer = "0.11"
+chrono = { version = "0.4", features = ["serde"] }
+url = "2"
+console = "0.15"
+ratatui = "0.30"
+crossterm = "0.28"
+
+[dev-dependencies]
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1

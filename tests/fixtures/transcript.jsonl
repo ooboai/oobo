@@ -1,0 +1,4 @@
+{"role":"user","message":{"content":[{"type":"text","text":"How do I fix the authentication bug?"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"The authentication bug is caused by a missing token validation step. Here's how to fix it:\n\n1. Open `src/auth.rs`\n2. Add the validation check before the token decode\n3. Return a 401 if validation fails"}]}}
+{"role":"user","message":{"content":[{"type":"text","text":"Can you show me the code?"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Sure, here's the updated code:\n\n```rust\npub fn validate_token(token: &str) -> Result<Claims, AuthError> {\n    if token.is_empty() {\n        return Err(AuthError::MissingToken);\n    }\n    decode_token(token)\n}\n```"}]}}
