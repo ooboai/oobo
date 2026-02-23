@@ -46,6 +46,14 @@ pub struct SessionSummary {
     pub message_count: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stats: Option<SessionStats>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub messages: Vec<TranscriptMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptMessage {
+    pub role: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -74,6 +82,7 @@ fn is_zero(v: &u32) -> bool {
 pub fn tool_context_from_sessions(
     sessions: &[crate::cursor::Session],
     count_fn: impl Fn(&str, &str) -> u32,
+    transcript: Option<Vec<TranscriptMessage>>,
 ) -> Option<ToolContext> {
     if sessions.is_empty() {
         return None;
@@ -88,6 +97,7 @@ pub fn tool_context_from_sessions(
             mode: recent.mode.clone(),
             message_count: msg_count,
             stats: None,
+            messages: transcript.unwrap_or_default(),
         }),
     })
 }
@@ -97,6 +107,7 @@ pub fn tool_context_from_sessions_with_stats(
     sessions: &[crate::cursor::Session],
     count_fn: impl Fn(&str, &str) -> u32,
     stats_fn: impl Fn(&str, &str) -> Option<SessionStats>,
+    transcript: Option<Vec<TranscriptMessage>>,
 ) -> Option<ToolContext> {
     if sessions.is_empty() {
         return None;
@@ -112,6 +123,7 @@ pub fn tool_context_from_sessions_with_stats(
             mode: recent.mode.clone(),
             message_count: msg_count,
             stats,
+            messages: transcript.unwrap_or_default(),
         }),
     })
 }
@@ -133,6 +145,7 @@ mod tests {
                     mode: "agent".into(),
                     message_count: 15,
                     stats: None,
+                    messages: Vec::new(),
                 }),
             },
         );
@@ -154,6 +167,16 @@ mod tests {
                         files_touched: vec!["src/db.rs".into(), "src/main.rs".into()],
                         tool_call_count: 5,
                     }),
+                    messages: vec![
+                        TranscriptMessage {
+                            role: "user".into(),
+                            text: "Refactor the DB layer".into(),
+                        },
+                        TranscriptMessage {
+                            role: "assistant".into(),
+                            text: "I'll restructure the database module...".into(),
+                        },
+                    ],
                 }),
             },
         );

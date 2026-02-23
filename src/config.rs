@@ -67,6 +67,8 @@ pub struct TelemetryConfig {
     pub enabled: bool,
     #[serde(default)]
     pub send_diffs: bool,
+    #[serde(default)]
+    pub send_transcripts: bool,
 }
 
 fn default_server_url() -> String {
@@ -106,6 +108,7 @@ impl Default for TelemetryConfig {
         Self {
             enabled: true,
             send_diffs: false,
+            send_transcripts: false,
         }
     }
 }
@@ -248,6 +251,7 @@ mod tests {
             telemetry: TelemetryConfig {
                 enabled: true,
                 send_diffs: true,
+                send_transcripts: false,
             },
         };
         let serialized = toml::to_string_pretty(&cfg).unwrap();

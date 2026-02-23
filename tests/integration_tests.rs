@@ -260,6 +260,7 @@ fn test_config_save_and_load() {
         telemetry: oobo::config::TelemetryConfig {
             enabled: true,
             send_diffs: true,
+            send_transcripts: false,
         },
     };
 
@@ -538,6 +539,7 @@ fn test_event_payload_roundtrip() {
                 mode: "agent".into(),
                 message_count: 42,
                 stats: None,
+                messages: Vec::new(),
             }),
         },
     );
@@ -551,6 +553,7 @@ fn test_event_payload_roundtrip() {
                 mode: "opus-4.5".into(),
                 message_count: 10,
                 stats: None,
+                messages: Vec::new(),
             }),
         },
     );
@@ -564,6 +567,7 @@ fn test_event_payload_roundtrip() {
                 mode: "aider".into(),
                 message_count: 5,
                 stats: None,
+                messages: Vec::new(),
             }),
         },
     );

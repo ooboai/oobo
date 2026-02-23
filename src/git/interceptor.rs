@@ -27,7 +27,7 @@ pub fn on_write_op(cfg: &Config, args: &[&str]) -> Result<(), String> {
     let branch = proxy::current_branch(cfg).unwrap_or_default();
     let git_context = collect_git_context(cfg, &op);
 
-    let tools = collect_all_tool_context(cfg, &project_root);
+    let tools = collect_all_tool_context(cfg, &project_root, cfg.telemetry.send_transcripts);
 
     let payload = EventPayload {
         event: format!("git.{op}"),
@@ -106,14 +106,23 @@ fn parse_shortstat(stat: &str, ctx: &mut GitContext) {
     }
 }
 
-pub fn collect_all_tool_context(cfg: &Config, project_root: &str) -> BTreeMap<String, ToolContext> {
+pub fn collect_all_tool_context(
+    cfg: &Config,
+    project_root: &str,
+    include_transcripts: bool,
+) -> BTreeMap<String, ToolContext> {
     let mut tools = BTreeMap::new();
 
     macro_rules! collect_tool {
-        ($enabled:expr, $name:expr, $sessions:expr, $count_fn:expr) => {
+        ($enabled:expr, $name:expr, $sessions:expr, $count_fn:expr, $source:expr) => {
             if $enabled {
                 let sessions = $sessions;
-                if let Some(ctx) = tool_context_from_sessions(&sessions, $count_fn) {
+                let transcript = if include_transcripts {
+                    load_transcript(&sessions, $source)
+                } else {
+                    None
+                };
+                if let Some(ctx) = tool_context_from_sessions(&sessions, $count_fn, transcript) {
                     tools.insert($name.into(), ctx);
                 }
             }
@@ -121,12 +130,17 @@ pub fn collect_all_tool_context(cfg: &Config, project_root: &str) -> BTreeMap<St
     }
 
     macro_rules! collect_tool_with_stats {
-        ($enabled:expr, $name:expr, $sessions:expr, $count_fn:expr, $stats_fn:expr) => {
+        ($enabled:expr, $name:expr, $sessions:expr, $count_fn:expr, $stats_fn:expr, $source:expr) => {
             if $enabled {
                 let sessions = $sessions;
-                if let Some(ctx) =
-                    tool_context_from_sessions_with_stats(&sessions, $count_fn, $stats_fn)
-                {
+                let transcript = if include_transcripts {
+                    load_transcript(&sessions, $source)
+                } else {
+                    None
+                };
+                if let Some(ctx) = tool_context_from_sessions_with_stats(
+                    &sessions, $count_fn, $stats_fn, transcript,
+                ) {
                     tools.insert($name.into(), ctx);
                 }
             }
@@ -137,68 +151,102 @@ pub fn collect_all_tool_context(cfg: &Config, project_root: &str) -> BTreeMap<St
         cfg.cursor.enabled,
         "cursor",
         cursor::sessions_for_project(project_root).unwrap_or_default(),
-        cursor::transcript::count_messages
+        cursor::transcript::count_messages,
+        "cursor"
     );
     collect_tool_with_stats!(
         cfg.claude.enabled,
         "claude",
         crate::claude::sessions_for_project(project_root).unwrap_or_default(),
         crate::claude::transcript::count_messages,
-        crate::claude::transcript::stats_for_session
+        crate::claude::transcript::stats_for_session,
+        "claude"
     );
     collect_tool!(
         cfg.windsurf.enabled,
         "windsurf",
         crate::windsurf::sessions_for_project(project_root).unwrap_or_default(),
-        crate::windsurf::transcript::count_messages
+        crate::windsurf::transcript::count_messages,
+        "windsurf"
     );
     collect_tool!(
         cfg.trae.enabled,
         "trae",
         crate::trae::sessions_for_project(project_root).unwrap_or_default(),
-        crate::trae::transcript::count_messages
+        crate::trae::transcript::count_messages,
+        "trae"
     );
     collect_tool!(
         cfg.aider.enabled,
         "aider",
         crate::aider::sessions_for_project(project_root).unwrap_or_default(),
-        crate::aider::transcript::count_messages
+        crate::aider::transcript::count_messages,
+        "aider"
     );
     collect_tool!(
         cfg.continue_dev.enabled,
         "continue",
         crate::continue_dev::sessions_for_project(project_root).unwrap_or_default(),
-        crate::continue_dev::transcript::count_messages
+        crate::continue_dev::transcript::count_messages,
+        "continue"
     );
     collect_tool_with_stats!(
         cfg.copilot.enabled,
         "copilot",
         crate::copilot::sessions_for_project(project_root).unwrap_or_default(),
         crate::copilot::transcript::count_messages,
-        crate::copilot::transcript::stats_for_session
+        crate::copilot::transcript::stats_for_session,
+        "copilot"
     );
     collect_tool!(
         cfg.zed.enabled,
         "zed",
         crate::zed::sessions_for_project(project_root).unwrap_or_default(),
-        crate::zed::transcript::count_messages
+        crate::zed::transcript::count_messages,
+        "zed"
     );
     collect_tool_with_stats!(
         cfg.codex.enabled,
         "codex",
         crate::codex::sessions_for_project(project_root).unwrap_or_default(),
         crate::codex::transcript::count_messages,
-        crate::codex::transcript::stats_for_session
+        crate::codex::transcript::stats_for_session,
+        "codex"
     );
     collect_tool_with_stats!(
         cfg.opencode.enabled,
         "opencode",
         crate::opencode::sessions_for_project(project_root).unwrap_or_default(),
         crate::opencode::transcript::count_messages,
-        crate::opencode::transcript::stats_for_session
+        crate::opencode::transcript::stats_for_session,
+        "opencode"
     );
 
     tools
+}
+
+fn load_transcript(
+    sessions: &[crate::cursor::Session],
+    source: &str,
+) -> Option<Vec<TranscriptMessage>> {
+    if sessions.is_empty() {
+        return None;
+    }
+    let recent = &sessions[0];
+    let path = crate::session::find_transcript_path(recent)?;
+    let messages = crate::session::parse_messages(&path, source);
+    if messages.is_empty() {
+        return None;
+    }
+    Some(
+        messages
+            .into_iter()
+            .map(|m| TranscriptMessage {
+                role: m.role,
+                text: m.text,
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

@@ -19,7 +19,8 @@ pub fn run(cfg: &Config) -> Result<(), String> {
 
     println!("Syncing AI context for: {project_root}");
 
-    let tools = interceptor::collect_all_tool_context(cfg, &project_root);
+    let tools =
+        interceptor::collect_all_tool_context(cfg, &project_root, cfg.telemetry.send_transcripts);
 
     for (name, ctx) in &tools {
         println!("  {name}: {} sessions", ctx.active_sessions);

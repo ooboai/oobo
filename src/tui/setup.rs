@@ -9,7 +9,7 @@ use ratatui::Frame;
 
 use crate::config::{find_real_git, Config};
 
-const FIELD_COUNT: usize = 15;
+const FIELD_COUNT: usize = 16;
 
 struct TextInput {
     value: String,
@@ -195,6 +195,10 @@ impl SetupApp {
                     label: "Telemetry",
                     value: cfg.telemetry.enabled,
                 },
+                FieldState::Toggle {
+                    label: "Transcripts",
+                    value: cfg.telemetry.send_transcripts,
+                },
             ],
             focused: 0,
             editing: false,
@@ -286,6 +290,7 @@ impl SetupApp {
             telemetry: crate::config::TelemetryConfig {
                 enabled: self.toggle_val(14),
                 send_diffs: false,
+                send_transcripts: self.toggle_val(15),
             },
         }
     }
