@@ -197,9 +197,7 @@ impl Db {
 
 /// Derive a project ID from a filesystem path (e.g. "/Users/ted/my-app" → "Users-ted-my-app").
 pub fn path_to_project_id(path: &str) -> String {
-    path.trim_start_matches('/')
-        .replace('/', "-")
-        .replace('\\', "-")
+    path.trim_start_matches('/').replace(['/', '\\'], "-")
 }
 
 fn row_to_project(row: &rusqlite::Row) -> ProjectRow {

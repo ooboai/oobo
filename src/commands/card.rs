@@ -204,15 +204,9 @@ fn print_terminal(c: &CardData) {
         eprintln!();
         eprintln!("  \x1b[1mcommits\x1b[0m");
         if let Some(cpd) = c.commits_per_day {
-            eprintln!(
-                "  \x1b[90m{:<16}\x1b[0m {:.1}",
-                "per day", cpd
-            );
+            eprintln!("  \x1b[90m{:<16}\x1b[0m {:.1}", "per day", cpd);
         }
-        eprintln!(
-            "  \x1b[90m{:<16}\x1b[0m {}",
-            "active days", c.active_days
-        );
+        eprintln!("  \x1b[90m{:<16}\x1b[0m {}", "active days", c.active_days);
         eprintln!(
             "  \x1b[90m{:<16}\x1b[0m {} ({})",
             "ai-assisted", c.ai_commits, ai_pct_str
@@ -240,10 +234,7 @@ fn print_terminal(c: &CardData) {
             env!("CARGO_PKG_VERSION")
         );
     } else {
-        eprintln!(
-            "  \x1b[90moobo v{}\x1b[0m",
-            env!("CARGO_PKG_VERSION")
-        );
+        eprintln!("  \x1b[90moobo v{}\x1b[0m", env!("CARGO_PKG_VERSION"));
     }
     eprintln!();
 }
@@ -306,10 +297,7 @@ fn render_markdown(c: &CardData) -> String {
         md.push_str("\n## Commit Profile\n\n");
         md.push_str("| Metric | Value |\n");
         md.push_str("|--------|-------|\n");
-        md.push_str(&format!(
-            "| AI-Assisted Commits | {} |\n",
-            c.ai_commits
-        ));
+        md.push_str(&format!("| AI-Assisted Commits | {} |\n", c.ai_commits));
         md.push_str(&format!("| AI Code | {} |\n", ai_pct_str));
         if let Some(cpd) = c.commits_per_day {
             md.push_str(&format!("| Commits/Day | {:.1} |\n", cpd));

@@ -167,10 +167,7 @@ pub fn run() -> Result<(), String> {
                     };
                     let tokens = summary.total_tokens() as i64;
                     let tok_str = crate::tui::format_tokens(tokens);
-                    eprintln!(
-                        "  {label}: {tok_str} tokens ({} days)",
-                        summary.days
-                    );
+                    eprintln!("  {label}: {tok_str} tokens ({} days)", summary.days);
                 }
             }
         }
@@ -235,13 +232,33 @@ fn gather_tool_sources(db: &Db) -> Result<Vec<ToolSource>, String> {
 
     let known_tools: &[(&str, &str, bool, &str)] = &[
         ("claude", "Claude Code", true, "local JSONL (native tokens)"),
-        ("codex", "Codex CLI", true, "local JSONL + SQLite (native tokens)"),
+        (
+            "codex",
+            "Codex CLI",
+            true,
+            "local JSONL + SQLite (native tokens)",
+        ),
         ("opencode", "OpenCode", true, "local SQLite (native tokens)"),
-        ("copilot", "Copilot Chat", false, "VS Code chat sessions (tiktoken est.)"),
+        (
+            "copilot",
+            "Copilot Chat",
+            false,
+            "VS Code chat sessions (tiktoken est.)",
+        ),
         ("composer", "Cursor", false, "composerData + ai-tracking.db"),
-        ("windsurf", "Windsurf", false, "cascade .pb (encrypted, metadata only)"),
+        (
+            "windsurf",
+            "Windsurf",
+            false,
+            "cascade .pb (encrypted, metadata only)",
+        ),
         ("aider", "Aider", false, "local sessions (tiktoken est.)"),
-        ("trae", "Trae", false, "SQLCipher DB (encrypted, metadata only)"),
+        (
+            "trae",
+            "Trae",
+            false,
+            "SQLCipher DB (encrypted, metadata only)",
+        ),
         ("zed", "Zed", false, "local sessions (tiktoken est.)"),
         ("gemini", "Gemini CLI", true, "local JSON (native tokens)"),
     ];

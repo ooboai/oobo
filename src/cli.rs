@@ -66,16 +66,18 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     // ── Project commands (run inside a repo) ─────────────────────────────
-
     /// Browse AI chat sessions [list, show, search, export]
-    #[command(display_order = 1, after_help = "\x1b[1mExamples:\x1b[0m\n  \
+    #[command(
+        display_order = 1,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo sessions              Interactive TUI\n  \
                        oobo sessions --agent      JSON output\n  \
                        oobo sessions --all        All projects\n  \
                        oobo sessions list --agent  JSON (explicit subcommand)\n  \
                        oobo sessions show <id> --agent   Conversation as JSON\n  \
                        oobo sessions search auth --agent  Search as JSON\n  \
-                       oobo sessions export <id> --format md --out chat.md")]
+                       oobo sessions export <id> --format md --out chat.md"
+    )]
     Sessions {
         #[command(subcommand)]
         action: Option<SessionAction>,
@@ -104,10 +106,13 @@ pub enum Command {
     },
 
     /// Share a session (redacted) -- save locally or upload
-    #[command(display_order = 3, after_help = "\x1b[1mExamples:\x1b[0m\n  \
+    #[command(
+        display_order = 3,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo share <id>             Preview redacted session\n  \
                        oobo share <id> --out s.json  Save to file\n  \
-                       oobo share <id> --agent       JSON output")]
+                       oobo share <id> --agent       JSON output"
+    )]
     Share {
         /// Session ID or prefix
         session_id: String,
@@ -121,15 +126,21 @@ pub enum Command {
     Ship,
 
     /// Import anchors from existing repos
-    #[command(display_order = 5, after_help = "\x1b[1mExamples:\x1b[0m\n  \
+    #[command(
+        display_order = 5,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo sync               Import anchors from orphan branch\n  \
-                       oobo sync               Safe to run multiple times (idempotent)")]
+                       oobo sync               Safe to run multiple times (idempotent)"
+    )]
     Sync,
 
     /// Stop tracking this repo
-    #[command(display_order = 6, after_help = "\x1b[1mExamples:\x1b[0m\n  \
+    #[command(
+        display_order = 6,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo ignore             Ignore the current repo\n  \
-                       oobo ignore --list      Show all ignored repos")]
+                       oobo ignore --list      Show all ignored repos"
+    )]
     Ignore {
         /// Show all ignored repos
         #[arg(long)]
@@ -141,31 +152,36 @@ pub enum Command {
     Unignore,
 
     // ── Global commands (work from anywhere) ─────────────────────────────
-
     /// First-time configuration wizard
     #[command(display_order = 10)]
     Setup,
 
     /// Browse and manage all projects
-    #[command(display_order = 11, after_help = "\x1b[1mExamples:\x1b[0m\n  \
+    #[command(
+        display_order = 11,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo projects              Interactive TUI\n  \
                        oobo projects --agent      JSON output\n  \
                        oobo projects list --agent  JSON (explicit subcommand)\n  \
                        oobo projects show myapp --agent  Project details as JSON\n  \
-                       oobo projects forget myapp  Remove a project from tracking")]
+                       oobo projects forget myapp  Remove a project from tracking"
+    )]
     Projects {
         #[command(subcommand)]
         action: Option<ProjectAction>,
     },
 
     /// Token usage analytics, AI code attribution, and productivity metrics
-    #[command(display_order = 12, after_help = "\x1b[1mExamples:\x1b[0m\n  \
+    #[command(
+        display_order = 12,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo stats                         Global stats\n  \
                        oobo stats --agent                  JSON output\n  \
                        oobo stats --project myapp --agent   Per-project JSON\n  \
                        oobo stats --tool cursor --agent     Per-tool JSON\n  \
                        oobo stats --since 30d              Last 30 days\n  \
-                       oobo stats --since 2026-02-01       Since a date")]
+                       oobo stats --since 2026-02-01       Since a date"
+    )]
     Stats {
         /// Filter by project name or slug
         #[arg(long)]
@@ -182,10 +198,13 @@ pub enum Command {
     },
 
     /// Developer stats card (shareable, no private data)
-    #[command(display_order = 13, after_help = "\x1b[1mExamples:\x1b[0m\n  \
+    #[command(
+        display_order = 13,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo card                  Generate card + save oobo-card.md\n  \
                        oobo card --out dev.md     Save to custom path\n  \
-                       oobo card --agent          JSON output")]
+                       oobo card --agent          JSON output"
+    )]
     Card {
         /// Output as JSON
         #[arg(long)]
@@ -207,12 +226,15 @@ pub enum Command {
     },
 
     /// Compute token counts and analytics for indexed sessions
-    #[command(display_order = 16, after_help = "\x1b[1mExamples:\x1b[0m\n  \
+    #[command(
+        display_order = 16,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo index                     Index all sessions\n  \
                        oobo index --project myapp      Index a specific project\n  \
                        oobo index --force              Re-index already indexed sessions\n  \
                        oobo index --bg                 Run in background with notification\n  \
-                       oobo index --status             Check background indexing progress")]
+                       oobo index --status             Check background indexing progress"
+    )]
     Index {
         /// Index only sessions for this project (name, slug, or path)
         #[arg(long)]
@@ -229,9 +251,12 @@ pub enum Command {
     },
 
     /// Data source status and coverage for all tools
-    #[command(display_order = 17, after_help = "\x1b[1mExamples:\x1b[0m\n  \
+    #[command(
+        display_order = 17,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo sources                Show all data sources and coverage\n  \
-                       oobo sources --agent        JSON output")]
+                       oobo sources --agent        JSON output"
+    )]
     Sources,
 
     /// Configuration overview
@@ -239,21 +264,27 @@ pub enum Command {
     Dash,
 
     /// Configure API keys and remote server
-    #[command(display_order = 19, after_help = "\x1b[1mExamples:\x1b[0m\n  \
+    #[command(
+        display_order = 19,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo auth login              Log in to oobo.dev\n  \
                        oobo auth status             Show auth state\n  \
                        oobo auth anthropic <key>    Set Anthropic Admin API key\n  \
                        oobo auth openai <key>       Set OpenAI API key\n  \
-                       oobo auth set-remote <url>   Self-hosted server")]
+                       oobo auth set-remote <url>   Self-hosted server"
+    )]
     Auth {
         #[command(subcommand)]
         action: AuthAction,
     },
 
     /// Manage git→oobo shell alias [install, uninstall]
-    #[command(display_order = 20, after_help = "\x1b[1mExamples:\x1b[0m\n  \
+    #[command(
+        display_order = 20,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo alias install     Alias git→oobo in your shell\n  \
-                       oobo alias uninstall   Remove the alias")]
+                       oobo alias uninstall   Remove the alias"
+    )]
     Alias {
         #[command(subcommand)]
         action: AliasAction,
@@ -264,10 +295,13 @@ pub enum Command {
     Agent,
 
     /// Diagnose and auto-repair common issues
-    #[command(display_order = 22, after_help = "\x1b[1mExamples:\x1b[0m\n  \
+    #[command(
+        display_order = 22,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo inspect             Run diagnostics\n  \
                        oobo inspect --fix       Auto-repair what can be fixed\n  \
-                       oobo inspect --agent     JSON output")]
+                       oobo inspect --agent     JSON output"
+    )]
     Inspect {
         /// Auto-fix issues that can be repaired
         #[arg(long)]
@@ -449,8 +483,8 @@ pub enum HookAction {
 
 const OOBO_SUBCOMMANDS: &[&str] = &[
     "setup", "sessions", "alias", "dash", "ship", "projects", "stats", "scan", "index", "update",
-    "sources", "auth", "agent", "version", "hooks", "anchors", "a", "share", "inspect",
-    "sync", "ignore", "unignore", "card",
+    "sources", "auth", "agent", "version", "hooks", "anchors", "a", "share", "inspect", "sync",
+    "ignore", "unignore", "card",
 ];
 
 fn is_oobo_subcommand(args: &[String]) -> bool {
@@ -568,9 +602,7 @@ pub fn route(cfg: Config) -> Result<i32, String> {
                     json: json || agent_mode,
                 },
                 Some(other) => other,
-                None => ProjectAction::List {
-                    json: agent_mode,
-                },
+                None => ProjectAction::List { json: agent_mode },
             };
             crate::commands::projects::run(resolved)?;
             Ok(0)
@@ -653,7 +685,9 @@ pub fn route(cfg: Config) -> Result<i32, String> {
             match action {
                 HookAction::Agent { event } => {
                     let mut payload = String::new();
-                    if let Err(e) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload) {
+                    if let Err(e) =
+                        std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload)
+                    {
                         eprintln!("oobo: warning: could not read agent payload from stdin: {e}");
                     }
                     if payload.trim().is_empty() {
@@ -664,7 +698,8 @@ pub fn route(cfg: Config) -> Result<i32, String> {
                 HookAction::PostCommit { .. } => {
                     if let Some(root) = git::proxy::project_root(&cfg) {
                         if std::env::var("OOBO_INTERCEPTED").is_err() {
-                            if let Err(e) = crate::git::interceptor::on_write_op(&cfg, &["commit"]) {
+                            if let Err(e) = crate::git::interceptor::on_write_op(&cfg, &["commit"])
+                            {
                                 eprintln!("oobo: warning: {e}");
                             }
                         }
@@ -719,11 +754,7 @@ fn print_oobo_version(cfg: &Config, agent_mode: bool) {
         });
         crate::utils::print_json(&json);
     } else {
-        println!(
-            "oobo {} ({})",
-            version,
-            env!("CARGO_PKG_HOMEPAGE")
-        );
+        println!("oobo {} ({})", version, env!("CARGO_PKG_HOMEPAGE"));
         println!("git:  {git_ver}");
 
         let db_size = std::fs::metadata(&db_path)

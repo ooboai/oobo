@@ -639,10 +639,7 @@ fn render_alias(f: &mut Frame, area: ratatui::layout::Rect, wiz: &Wizard) {
 
     let lines: Vec<Line<'static>> = vec![
         Line::from(""),
-        Line::from(Span::styled(
-            "  Want to alias git to oobo?",
-            bold,
-        )),
+        Line::from(Span::styled("  Want to alias git to oobo?", bold)),
         Line::from(""),
         Line::from(Span::styled(
             "  When enabled, typing `git commit` automatically enriches your",

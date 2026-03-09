@@ -260,8 +260,7 @@ fn enrich_commit(
     } else {
         Vec::new()
     };
-    if let Err(e) =
-        super::orphan::write_anchor(project_root, &anchor, &session_links, &transcripts)
+    if let Err(e) = super::orphan::write_anchor(project_root, &anchor, &session_links, &transcripts)
     {
         eprintln!("oobo: warning: could not write anchor to orphan branch: {e}");
     }
@@ -323,9 +322,8 @@ fn collect_ai_files_touched(
 
             // Try to get files_touched from the tool's native stats
             if let Ok(sessions) = tool.sessions_for_project(project_root) {
-                if let Some(tool_session) = sessions
-                    .iter()
-                    .find(|s| s.session_id == session.session_id)
+                if let Some(tool_session) =
+                    sessions.iter().find(|s| s.session_id == session.session_id)
                 {
                     if let Some(stats) = tool.extract_native_stats(tool_session) {
                         for file in &stats.files_touched {
@@ -575,10 +573,7 @@ fn collect_session_transcripts(
 
 /// Resolve the effective transparency mode for a project. Per-project settings
 /// in the DB override the global config default.
-fn resolve_transparency(
-    cfg: &Config,
-    project_root: &str,
-) -> crate::core::anchor::TransparencyMode {
+fn resolve_transparency(cfg: &Config, project_root: &str) -> crate::core::anchor::TransparencyMode {
     if let Ok(db) = crate::db::Db::open() {
         if let Ok(settings) = db.get_project_settings_by_path(project_root) {
             if let Some(ref mode) = settings.transparency {

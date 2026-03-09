@@ -28,7 +28,12 @@ fn run_json(cfg: &Config) {
         let p = db.list_projects().map(|v| v.len()).unwrap_or(0);
         let (s, t) = db
             .aggregate_stats_global()
-            .map(|a| (a.session_count, a.total_input_tokens + a.total_output_tokens))
+            .map(|a| {
+                (
+                    a.session_count,
+                    a.total_input_tokens + a.total_output_tokens,
+                )
+            })
             .unwrap_or((0, 0));
         (p, s, t)
     } else {

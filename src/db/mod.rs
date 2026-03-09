@@ -206,13 +206,29 @@ mod tests {
         )
         .unwrap();
 
-        let row: (String, String, String, Option<String>, String, Option<String>) = db
+        let row: (
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+        ) = db
             .conn
             .query_row(
                 "SELECT commit_hash, session_id, agent, model, link_type, files_touched
                  FROM anchor_sessions WHERE commit_hash = ?1 AND session_id = ?2",
                 rusqlite::params!["abc123", "sess-42"],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
             )
             .unwrap();
 
