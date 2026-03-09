@@ -105,6 +105,12 @@ pub fn is_interactive() -> bool {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Mutex;
+
+    /// Tests that manipulate process-wide environment variables must hold this
+    /// lock so they don't race against each other when `cargo test` runs them
+    /// in parallel.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_commit_author_variants() {
@@ -125,6 +131,8 @@ mod tests {
 
     #[test]
     fn test_detect_with_active_session() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
 
@@ -166,11 +174,12 @@ mod tests {
 
     #[test]
     fn test_detect_no_sessions_no_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         fs::create_dir_all(root.join(".git")).unwrap();
 
-        // Clear env vars that would make detect() return Agent, so we test the TTY fallback
         let saved_cursor = std::env::var("CURSOR_TRACE_ID").ok();
         let saved_ci = std::env::var("CI").ok();
         std::env::remove_var("CURSOR_TRACE_ID");
@@ -193,6 +202,8 @@ mod tests {
 
     #[test]
     fn test_detect_env_cursor_trace() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
         let saved = std::env::var("CURSOR_TRACE_ID").ok();
 
         std::env::set_var("CURSOR_TRACE_ID", "trace-abc-123");

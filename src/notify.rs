@@ -1,5 +1,4 @@
 use std::fs;
-use std::path::PathBuf;
 
 use crate::paths;
 
@@ -64,7 +63,7 @@ pub fn send(title: &str, message: &str) {
 }
 
 #[cfg(target_os = "macos")]
-fn macos_notifier_path() -> PathBuf {
+fn macos_notifier_path() -> std::path::PathBuf {
     paths::oobo_home()
         .join("Oobo.app")
         .join("Contents")
