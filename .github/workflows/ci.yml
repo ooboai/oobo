@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
   check:
@@ -23,13 +24,14 @@ jobs:
     name: Test
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all-targets
+      - run: cargo test --all-targets -- --nocapture
 
   clippy:
     name: Clippy
@@ -65,6 +67,7 @@ jobs:
     name: Docker (${{ matrix.distro }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         distro: [ubuntu, debian, alpine]
         include:
@@ -93,4 +96,4 @@ jobs:
       - name: Build and test
         run: |
           . "$HOME/.cargo/env"
-          cargo test --all-targets
+          cargo test --all-targets -- --nocapture
