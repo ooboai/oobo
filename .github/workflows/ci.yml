@@ -31,7 +31,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all-targets -- --nocapture
+      - name: Run tests
+        run: cargo test --all-targets -- --nocapture 2>&1 | tee test-output.txt
+      - name: Upload test output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-${{ matrix.os }}
+          path: test-output.txt
 
   clippy:
     name: Clippy
@@ -96,4 +103,10 @@ jobs:
       - name: Build and test
         run: |
           . "$HOME/.cargo/env"
-          cargo test --all-targets -- --nocapture
+          cargo test --all-targets -- --nocapture 2>&1 | tee test-output.txt
+      - name: Upload test output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-docker-${{ matrix.distro }}
+          path: test-output.txt
