@@ -1,4 +1,4 @@
-# Contributing to oobo-git
+# Contributing to oobo
 
 Thanks for your interest in contributing! We welcome contributions from the community.
 
@@ -6,7 +6,7 @@ Thanks for your interest in contributing! We welcome contributions from the comm
 >
 > - Star the project
 > - Share it with colleagues who use AI coding tools
-> - Report bugs or request features via [issues](https://github.com/NoCodeInc/oobo-git/issues)
+> - Report bugs or request features via [issues](https://github.com/ooboai/oobo/issues)
 > - Improve the documentation
 
 ## Code of Conduct
@@ -17,7 +17,7 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 ### Report Bugs
 
-If you encounter a bug, [open an issue](https://github.com/NoCodeInc/oobo-git/issues/new?labels=bug) with:
+If you encounter a bug, [open an issue](https://github.com/ooboai/oobo/issues/new?labels=bug) with:
 
 - What you expected to happen
 - What actually happened
@@ -26,7 +26,7 @@ If you encounter a bug, [open an issue](https://github.com/NoCodeInc/oobo-git/is
 
 ### Suggest Features
 
-Have an idea? [Open a feature request](https://github.com/NoCodeInc/oobo-git/issues/new?labels=enhancement). Before creating a new issue, check if one already exists.
+Have an idea? [Open a feature request](https://github.com/ooboai/oobo/issues/new?labels=enhancement). Before creating a new issue, check if one already exists.
 
 ### Contribute Code
 
@@ -49,8 +49,8 @@ Have an idea? [Open a feature request](https://github.com/NoCodeInc/oobo-git/iss
 
 ```bash
 # Clone your fork
-git clone https://github.com/YOUR_USERNAME/oobo-git.git
-cd oobo-git
+git clone https://github.com/YOUR_USERNAME/oobo.git
+cd oobo
 
 # Build
 cargo build
@@ -69,24 +69,29 @@ cargo run -- dash
 
 ### Project Overview
 
-oobo-git is a Rust binary that acts as a transparent git proxy. Key modules:
+oobo is a Rust binary that acts as a transparent git decorator. Key modules:
 
 | Module | Purpose |
 |--------|---------|
 | `src/cli.rs` | Command-line argument parsing and routing |
-| `src/git/` | Git proxy, write operation detection, context collection |
-| `src/cursor/` | Cursor IDE local data extraction (SQLite, transcripts) |
-| `src/claude/` | Claude Code local data extraction (JSONL sessions) |
-| `src/vscode_fork.rs` | Shared VS Code fork extraction (Windsurf, Trae) |
-| `src/windsurf.rs` | Windsurf / Cascade support |
-| `src/trae.rs` | Trae IDE support |
-| `src/aider.rs` | Aider chat history (markdown) |
-| `src/continue_dev.rs` | Continue.dev session support |
-| `src/copilot.rs` | GitHub Copilot Chat session support |
-| `src/zed.rs` | Zed AI conversation support |
-| `src/codex.rs` | OpenAI Codex CLI session support |
+| `src/git/` | Git decorator, write operation detection, interceptor, orphan branch |
+| `src/tools/cursor/` | Cursor IDE local data extraction (SQLite, transcripts, usage API) |
+| `src/tools/claude/` | Claude Code local data extraction (JSONL sessions) |
+| `src/tools/vscode_fork.rs` | Shared VS Code fork extraction (Windsurf, Trae) |
+| `src/tools/windsurf.rs` | Windsurf / Cascade support |
+| `src/tools/trae.rs` | Trae IDE support |
+| `src/tools/aider.rs` | Aider chat history (markdown) |
+| `src/tools/copilot.rs` | GitHub Copilot Chat session support |
+| `src/tools/zed.rs` | Zed AI conversation support |
+| `src/tools/codex.rs` | OpenAI Codex CLI session support |
+| `src/tools/opencode.rs` | OpenCode session support |
+| `src/tools/gemini.rs` | Gemini CLI session support |
+| `src/core/` | Domain types: anchor, message, session, tool trait |
+| `src/commands/` | CLI subcommands (17 commands) |
+| `src/analytics/` | Token computation, attribution, git activity |
+| `src/db/` | SQLite persistence and migrations |
+| `src/remote/` | Fire-and-forget event dispatch |
 | `src/session.rs` | Multi-source session dispatch |
-| `src/server/` | HTTP event delivery |
 | `src/tui/` | Ratatui terminal UI for interactive commands |
 | `src/config.rs` | Configuration file management |
 
@@ -125,4 +130,4 @@ We try to give you the opportunity to make changes yourself, but may make minor 
 
 ## License
 
-By contributing to oobo-git, you agree that your contributions will be dual licensed under the [Apache License 2.0](LICENSE-APACHE) and [MIT License](LICENSE-MIT).
+By contributing to oobo, you agree that your contributions will be dual licensed under the [Apache License 2.0](LICENSE-APACHE) and [MIT License](LICENSE-MIT).

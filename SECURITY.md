@@ -1,45 +1,55 @@
 # Security Policy
 
+We take security seriously. We appreciate your efforts to responsibly disclose vulnerabilities and will make every effort to acknowledge your contributions.
+
 ## Reporting a Vulnerability
 
-If you believe you have found a security vulnerability in oobo-git, please report it responsibly.
+**Please do not report security vulnerabilities through public GitHub issues.**
 
-**Please do NOT report security vulnerabilities through public GitHub issues.**
+Instead, please send security-related reports to **[security@oobo.ai](mailto:security@oobo.ai)** or use [GitHub Security Advisories](https://github.com/ooboai/oobo/security/advisories/new).
 
-Instead, please email us at: **security@oobo.ai**
+### What to include
 
-You can also report vulnerabilities privately through [GitHub's security advisory feature](https://github.com/NoCodeInc/oobo-git/security/advisories/new).
-
-Please include:
-
-- Description of the vulnerability
+- A clear description of the vulnerability
+- Impact assessment — what an attacker could achieve
 - Steps to reproduce
-- Impact assessment
-- Any relevant proof-of-concept
+- Affected versions (if known)
+- Suggested fix (optional)
 
-We will acknowledge receipt within 2 business days and provide an initial assessment within 5 business days.
+### What to expect
+
+- **Acknowledgment** — we will acknowledge receipt within 2 business days
+- **Assessment** — initial assessment within 5 business days
+- **Resolution** — we aim to resolve critical vulnerabilities within 90 days
+- **Confidentiality** — all reports are kept confidential
 
 ## Supported Versions
 
-We accept vulnerability reports for the latest stable release of oobo-git.
+We recommend always running the latest version of oobo. Security fixes are applied to the latest release only.
 
-## Data Handling
+## Scope
 
-oobo-git reads data from local AI tool storage:
+This policy applies to:
 
-- **Cursor** — SQLite databases and transcript files in `~/Library/Application Support/Cursor/`
-- **Claude Code** — session JSONL files under `~/.claude/`
-- **Windsurf** — SQLite databases in `~/Library/Application Support/Windsurf/`
-- **Trae** — SQLite databases in `~/Library/Application Support/Trae/`
-- **Aider** — `.aider.chat.history.md` in project directories
-- **Continue.dev** — session files under `~/.continue/`
-- **GitHub Copilot Chat** — JSON session files in VS Code workspace storage
-- **Zed** — conversation files in `~/Library/Application Support/Zed/`
-- **OpenAI Codex CLI** — JSONL session logs in `~/.codex/sessions/`
+- The oobo CLI binary
+- Official oobo GitHub repositories
+- The install script at oobo.ai/install.sh
 
-All reads are read-only. oobo never writes to any AI tool's data, and never modifies git history.
+### Out of scope
 
-Event payloads are sent to the endpoint you configure. The CLI does not phone home or send data to any endpoint unless you explicitly configure one.
+- Issues in third-party dependencies (please report these upstream)
+- Denial of service requiring local access
+- Issues that cannot be exploited without direct access to the user's machine
+
+## Security Design
+
+- **Read-only** — oobo reads local AI tool data but never writes to it
+- **Local by default** — no data leaves your machine unless you explicitly configure a remote endpoint
+- **No telemetry** — oobo does not phone home or collect usage data
+- **Secret redaction** — session content is scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before any sharing or sync
+- **Config protection** — files containing API keys are automatically set to `0600` permissions on Unix
+
+For details on exactly what oobo reads from each tool, see [DATA-SOURCES.md](DATA-SOURCES.md).
 
 ## Safe Harbor
 

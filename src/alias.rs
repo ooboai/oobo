@@ -3,8 +3,9 @@ use std::path::PathBuf;
 
 use crate::cli::AliasAction;
 
-const ALIAS_MARKER: &str = "# oobo-git alias";
-const ALIAS_LINE: &str = "alias git=oobo # oobo-git alias";
+const ALIAS_MARKER: &str = "# oobo alias";
+const ALIAS_LINE_POSIX: &str = "alias git=oobo # oobo alias";
+const ALIAS_LINE_FISH: &str = "alias git oobo # oobo alias";
 
 pub fn run(action: AliasAction) -> Result<(), String> {
     match action {
@@ -37,9 +38,14 @@ pub fn install_alias() -> Result<(), String> {
     for rc in &rc_files {
         let content = fs::read_to_string(rc).unwrap_or_default();
         if content.contains(ALIAS_MARKER) {
-            continue; // already installed
+            continue;
         }
-        let addition = format!("\n{ALIAS_LINE}\n");
+        let line = if rc.to_string_lossy().contains("fish") {
+            ALIAS_LINE_FISH
+        } else {
+            ALIAS_LINE_POSIX
+        };
+        let addition = format!("\n{line}\n");
         fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -119,8 +125,11 @@ mod tests {
 
     #[test]
     fn test_alias_line_format() {
-        assert!(ALIAS_LINE.contains("alias git=oobo"));
-        assert!(ALIAS_LINE.contains(ALIAS_MARKER));
+        assert!(ALIAS_LINE_POSIX.contains("alias git=oobo"));
+        assert!(ALIAS_LINE_POSIX.contains(ALIAS_MARKER));
+        assert!(ALIAS_LINE_FISH.contains("alias git oobo"));
+        assert!(ALIAS_LINE_FISH.contains(ALIAS_MARKER));
+        assert!(!ALIAS_LINE_FISH.contains('='));
     }
 
     #[test]
@@ -129,15 +138,13 @@ mod tests {
         let rc = tmp.path().join(".zshrc");
         fs::write(&rc, "# existing content\n").unwrap();
 
-        // Simulate install
         let content = fs::read_to_string(&rc).unwrap();
-        let new_content = format!("{content}\n{ALIAS_LINE}\n");
+        let new_content = format!("{content}\n{ALIAS_LINE_POSIX}\n");
         fs::write(&rc, &new_content).unwrap();
 
         let after_install = fs::read_to_string(&rc).unwrap();
         assert!(after_install.contains(ALIAS_MARKER));
 
-        // Simulate uninstall
         let filtered: Vec<&str> = after_install
             .lines()
             .filter(|line| !line.contains(ALIAS_MARKER))
@@ -147,5 +154,89 @@ mod tests {
         let after_uninstall = fs::read_to_string(&rc).unwrap();
         assert!(!after_uninstall.contains(ALIAS_MARKER));
         assert!(after_uninstall.contains("existing content"));
+    }
+
+    #[test]
+    fn test_fish_path_selects_fish_syntax() {
+        let rc_path = PathBuf::from("/home/user/.config/fish/config.fish");
+        let line = if rc_path.to_string_lossy().contains("fish") {
+            ALIAS_LINE_FISH
+        } else {
+            ALIAS_LINE_POSIX
+        };
+        assert_eq!(line, ALIAS_LINE_FISH);
+        assert!(line.contains("alias git oobo"));
+        assert!(!line.contains('='));
+    }
+
+    #[test]
+    fn test_posix_path_selects_posix_syntax() {
+        let rc_path = PathBuf::from("/home/user/.zshrc");
+        let line = if rc_path.to_string_lossy().contains("fish") {
+            ALIAS_LINE_FISH
+        } else {
+            ALIAS_LINE_POSIX
+        };
+        assert_eq!(line, ALIAS_LINE_POSIX);
+        assert!(line.contains("alias git=oobo"));
+    }
+
+    #[test]
+    fn test_bashrc_path_selects_posix_syntax() {
+        let rc_path = PathBuf::from("/home/user/.bashrc");
+        let line = if rc_path.to_string_lossy().contains("fish") {
+            ALIAS_LINE_FISH
+        } else {
+            ALIAS_LINE_POSIX
+        };
+        assert_eq!(line, ALIAS_LINE_POSIX);
+    }
+
+    #[test]
+    fn test_install_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let rc = tmp.path().join(".zshrc");
+        fs::write(&rc, "# existing\n").unwrap();
+
+        let content = fs::read_to_string(&rc).unwrap();
+        assert!(!content.contains(ALIAS_MARKER));
+
+        let new_content = format!("{content}\n{ALIAS_LINE_POSIX}\n");
+        fs::write(&rc, &new_content).unwrap();
+
+        let after_first = fs::read_to_string(&rc).unwrap();
+        assert!(after_first.contains(ALIAS_MARKER));
+        let count = after_first.matches(ALIAS_MARKER).count();
+        assert_eq!(count, 1, "should have exactly one alias line");
+
+        if !after_first.contains(ALIAS_MARKER) {
+            let second = format!("{after_first}\n{ALIAS_LINE_POSIX}\n");
+            fs::write(&rc, &second).unwrap();
+        }
+
+        let after_second = fs::read_to_string(&rc).unwrap();
+        let count2 = after_second.matches(ALIAS_MARKER).count();
+        assert_eq!(count2, 1, "idempotent: should still have one alias line");
+    }
+
+    #[test]
+    fn test_uninstall_preserves_other_content() {
+        let tmp = TempDir::new().unwrap();
+        let rc = tmp.path().join(".bashrc");
+        let original = "export PATH=/usr/local/bin:$PATH\nexport EDITOR=vim\n";
+        let with_alias = format!("{original}{ALIAS_LINE_POSIX}\n");
+        fs::write(&rc, &with_alias).unwrap();
+
+        let content = fs::read_to_string(&rc).unwrap();
+        let filtered: Vec<&str> = content
+            .lines()
+            .filter(|line| !line.contains(ALIAS_MARKER))
+            .collect();
+        fs::write(&rc, filtered.join("\n") + "\n").unwrap();
+
+        let after = fs::read_to_string(&rc).unwrap();
+        assert!(!after.contains(ALIAS_MARKER));
+        assert!(after.contains("export PATH"));
+        assert!(after.contains("export EDITOR=vim"));
     }
 }

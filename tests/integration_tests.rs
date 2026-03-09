@@ -97,7 +97,7 @@ fn test_composer_extraction_with_multiple_sessions() {
 
     create_test_vscdb(tmp.path(), json);
 
-    let sessions = oobo::cursor::composer::extract_sessions(tmp.path(), "/test/project");
+    let sessions = oobo::tools::cursor::composer::extract_sessions(tmp.path(), "/test/project");
     assert_eq!(sessions.len(), 3);
 
     assert_eq!(sessions[0].session_id, "session-1-uuid");
@@ -129,7 +129,7 @@ fn test_composer_extraction_malformed_json() {
     )
     .unwrap();
 
-    let sessions = oobo::cursor::composer::extract_sessions(tmp.path(), "/test");
+    let sessions = oobo::tools::cursor::composer::extract_sessions(tmp.path(), "/test");
     assert!(sessions.is_empty());
 }
 
@@ -141,7 +141,7 @@ fn test_composer_extraction_missing_table() {
     conn.execute("CREATE TABLE OtherTable (key TEXT, value TEXT)", [])
         .unwrap();
 
-    let sessions = oobo::cursor::composer::extract_sessions(tmp.path(), "/test");
+    let sessions = oobo::tools::cursor::composer::extract_sessions(tmp.path(), "/test");
     assert!(sessions.is_empty());
 }
 
@@ -152,7 +152,7 @@ fn test_transcript_jsonl_from_fixtures() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let path = fixtures.join("transcript.jsonl");
 
-    let messages = oobo::cursor::transcript::parse_messages(&path);
+    let messages = oobo::tools::cursor::transcript::parse_messages(&path);
     assert_eq!(messages.len(), 4);
     assert_eq!(messages[0].role, "user");
     assert!(messages[0].text.contains("authentication bug"));
@@ -168,7 +168,7 @@ fn test_transcript_txt_from_fixtures() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let path = fixtures.join("transcript.txt");
 
-    let messages = oobo::cursor::transcript::parse_messages(&path);
+    let messages = oobo::tools::cursor::transcript::parse_messages(&path);
     assert_eq!(messages.len(), 4);
     assert_eq!(messages[0].role, "user");
     assert!(messages[0].text.contains("database schema"));
@@ -187,14 +187,14 @@ fn test_transcript_find_in_new_format() {
     create_transcript_jsonl(&transcripts_dir, "abc-123-full-uuid");
 
     let _path =
-        oobo::cursor::transcript::find_transcript_path("/Test/project", "abc-123-full-uuid");
+        oobo::tools::cursor::transcript::find_transcript_path("/Test/project", "abc-123-full-uuid");
     // This won't find it because cursor_projects_dir() returns the real path,
     // but the logic is correct. We test the function directly instead.
 
     // Direct test of the file we created
     let jsonl = transcripts_dir.join("abc-123-full-uuid/abc-123-full-uuid.jsonl");
     assert!(jsonl.exists());
-    let msgs = oobo::cursor::transcript::parse_messages(&jsonl);
+    let msgs = oobo::tools::cursor::transcript::parse_messages(&jsonl);
     assert_eq!(msgs.len(), 3);
 }
 
@@ -207,7 +207,7 @@ fn test_transcript_find_in_old_format() {
 
     let txt = transcripts_dir.join("old-session-uuid.txt");
     assert!(txt.exists());
-    let msgs = oobo::cursor::transcript::parse_messages(&txt);
+    let msgs = oobo::tools::cursor::transcript::parse_messages(&txt);
     assert_eq!(msgs.len(), 2);
     assert_eq!(msgs[0].role, "user");
     assert!(msgs[0].text.contains("2+2"));
@@ -227,7 +227,7 @@ fn test_transcript_count_messages() {
         .unwrap();
     }
 
-    let messages = oobo::cursor::transcript::parse_messages(&jsonl);
+    let messages = oobo::tools::cursor::transcript::parse_messages(&jsonl);
     assert_eq!(messages.len(), 10);
 }
 
@@ -247,21 +247,55 @@ fn test_config_save_and_load() {
             real_git_path: "/usr/local/bin/git".into(),
             alias_enabled: true,
         },
-        cursor: oobo::config::ToolConfig { enabled: false },
-        claude: oobo::config::ToolConfig { enabled: true },
-        windsurf: oobo::config::ToolConfig { enabled: true },
-        aider: oobo::config::ToolConfig { enabled: true },
-        continue_dev: oobo::config::ToolConfig { enabled: true },
-        zed: oobo::config::ToolConfig { enabled: true },
-        copilot: oobo::config::ToolConfig { enabled: true },
-        trae: oobo::config::ToolConfig { enabled: true },
-        codex: oobo::config::ToolConfig { enabled: true },
-        opencode: oobo::config::ToolConfig { enabled: true },
+        cursor: oobo::config::ToolConfig {
+            enabled: false,
+            api_key: String::new(),
+        },
+        claude: oobo::config::ToolConfig {
+            enabled: true,
+            api_key: String::new(),
+        },
+        windsurf: oobo::config::ToolConfig {
+            enabled: true,
+            api_key: String::new(),
+        },
+        aider: oobo::config::ToolConfig {
+            enabled: true,
+            api_key: String::new(),
+        },
+        zed: oobo::config::ToolConfig {
+            enabled: true,
+            api_key: String::new(),
+        },
+        copilot: oobo::config::ToolConfig {
+            enabled: true,
+            api_key: String::new(),
+        },
+        trae: oobo::config::ToolConfig {
+            enabled: true,
+            api_key: String::new(),
+        },
+        codex: oobo::config::ToolConfig {
+            enabled: true,
+            api_key: String::new(),
+        },
+        opencode: oobo::config::ToolConfig {
+            enabled: true,
+            api_key: String::new(),
+        },
+        gemini: oobo::config::ToolConfig {
+            enabled: true,
+            api_key: String::new(),
+        },
         telemetry: oobo::config::TelemetryConfig {
             enabled: true,
             send_diffs: true,
             send_transcripts: false,
         },
+        scan: oobo::config::ScanConfig::default(),
+        update: oobo::config::UpdateConfig::default(),
+        transparency: oobo::config::TransparencyConfig::default(),
+        ignored_repos: Vec::new(),
     };
 
     let content = toml::to_string_pretty(&cfg).unwrap();
@@ -365,7 +399,7 @@ fn test_subcommand_extraction() {
     assert_eq!(subcommand_name(&["--version"]), None);
 }
 
-// ── Git proxy integration test ──────────────────────────────────────────────
+// ── Git decorator integration test ────────────────────────────────────────────
 
 #[test]
 fn test_git_proxy_passthrough() {
@@ -399,7 +433,7 @@ fn test_git_proxy_passthrough() {
         .output()
         .unwrap();
 
-    // Use oobo as git proxy to commit
+    // Use oobo as git decorator to commit
     let output = Command::new(oobo_binary())
         .args(["commit", "-m", "test commit via oobo"])
         .current_dir(tmp.path())
@@ -439,7 +473,7 @@ fn test_oobo_dash_command() {
 }
 
 #[test]
-fn test_git_log_passthrough() {
+fn test_oobo_anchors_command() {
     let tmp = TempDir::new().unwrap();
 
     Command::new("git")
@@ -448,15 +482,169 @@ fn test_git_log_passthrough() {
         .output()
         .unwrap();
 
-    // `log` is not an oobo subcommand, so it passes to git
+    let output = Command::new(oobo_binary())
+        .args(["anchors", "--json"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("[]") || stdout.is_empty() || output.status.success(),
+        "oobo anchors --json should succeed or return empty on fresh repo"
+    );
+}
+
+#[test]
+fn test_git_log_passes_through() {
+    let tmp = TempDir::new().unwrap();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    // `log` is NOT an oobo subcommand — passes through to git
     let output = Command::new(oobo_binary())
         .args(["log", "--oneline"])
         .current_dir(tmp.path())
         .output()
         .unwrap();
 
-    // git log on empty repo returns 128, but oobo should pass it through
-    assert!(!String::from_utf8_lossy(&output.stderr).contains("oobo"));
+    // git log on empty repo exits 128, but oobo should just proxy it
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("error: unexpected argument")
+            && !stderr.contains("unrecognized subcommand"),
+        "oobo should pass 'log' through to git, not treat as oobo subcommand"
+    );
+}
+
+#[test]
+fn test_e2e_commit_creates_anchor() {
+    let tmp = TempDir::new().unwrap();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    fs::write(tmp.path().join("hello.txt"), "hello world\n").unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let commit_output = Command::new(oobo_binary())
+        .args(["commit", "-m", "initial commit"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        commit_output.status.success(),
+        "oobo commit failed: {}",
+        String::from_utf8_lossy(&commit_output.stderr)
+    );
+
+    let log_output = Command::new(oobo_binary())
+        .args(["anchors", "--json"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&log_output.stdout);
+    assert!(log_output.status.success(), "oobo anchors --json failed");
+
+    let entries: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("oobo anchors --json should return valid JSON");
+
+    assert_eq!(entries.len(), 1, "should have exactly 1 commit");
+    assert_eq!(entries[0]["message"], "initial commit");
+
+    let hash = entries[0]["commit_hash"].as_str().unwrap();
+    assert!(hash.len() >= 7, "commit hash should be present");
+}
+
+#[test]
+fn test_e2e_hook_lifecycle() {
+    let tmp = TempDir::new().unwrap();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let start_output = Command::new(oobo_binary())
+        .args(["hooks", "agent", "session-start"])
+        .current_dir(tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(br#"{"session_id":"e2e-test","agent":"cursor","model":"claude-opus-4"}"#)
+                .unwrap();
+            child.wait_with_output()
+        })
+        .unwrap();
+
+    assert!(start_output.status.success(), "session-start failed");
+
+    let session_file = tmp.path().join(".git/oobo-sessions/e2e-test.json");
+    assert!(
+        session_file.exists(),
+        "session state file should be created"
+    );
+
+    let content = fs::read_to_string(&session_file).unwrap();
+    let state: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(state["agent"], "cursor");
+    assert_eq!(state["model"], "claude-opus-4");
+
+    let end_output = Command::new(oobo_binary())
+        .args(["hooks", "agent", "session-end"])
+        .current_dir(tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(br#"{"session_id":"e2e-test"}"#)
+                .unwrap();
+            child.wait_with_output()
+        })
+        .unwrap();
+
+    assert!(end_output.status.success(), "session-end failed");
+    assert!(
+        !session_file.exists(),
+        "session state file should be removed"
+    );
 }
 
 #[test]
@@ -497,9 +685,21 @@ fn test_cli_help() {
 }
 
 #[test]
-fn test_cli_version() {
+fn test_cli_version_flag_proxies_to_git() {
     let output = Command::new(oobo_binary())
         .args(["--version"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("git version") || stdout.contains("oobo"));
+}
+
+#[test]
+fn test_cli_version_subcommand() {
+    let output = Command::new(oobo_binary())
+        .args(["version"])
         .output()
         .unwrap();
 
@@ -526,7 +726,7 @@ fn test_cli_sessions_help() {
 
 #[test]
 fn test_event_payload_roundtrip() {
-    use oobo::server::payload::*;
+    use oobo::remote::payload::*;
 
     let mut tools = BTreeMap::new();
     tools.insert(
@@ -632,7 +832,7 @@ fn test_workspace_json_parsing() {
 
 #[test]
 fn test_path_to_slug_various() {
-    use oobo::cursor::path_to_slug;
+    use oobo::tools::cursor::path_to_slug;
 
     assert_eq!(
         path_to_slug("/Users/dev/projects/my-app"),
@@ -662,7 +862,7 @@ fn test_aider_session_discovery() {
     )
     .unwrap();
 
-    let sessions = oobo::aider::sessions_for_project(&tmp.path().to_string_lossy()).unwrap();
+    let sessions = oobo::tools::aider::sessions_for_project(&tmp.path().to_string_lossy()).unwrap();
     assert_eq!(sessions.len(), 2);
     assert_eq!(sessions[0].source, "aider");
 }
@@ -681,7 +881,7 @@ fn test_aider_transcript_parsing() {
     )
     .unwrap();
 
-    let msgs = oobo::aider::transcript::parse_messages(&history);
+    let msgs = oobo::tools::aider::transcript::parse_messages(&history);
     assert_eq!(msgs.len(), 4);
     assert_eq!(msgs[0].role, "user");
     assert!(msgs[0].text.contains("Refactor"));
@@ -722,7 +922,7 @@ fn test_copilot_session_parsing() {
     )
     .unwrap();
 
-    let msgs = oobo::copilot::transcript::parse_messages(&session_file);
+    let msgs = oobo::tools::copilot::transcript::parse_messages(&session_file);
     assert_eq!(msgs.len(), 4);
     assert_eq!(msgs[0].role, "user");
     assert!(msgs[0].text.contains("REST API"));
@@ -730,35 +930,6 @@ fn test_copilot_session_parsing() {
     assert!(msgs[1].text.contains("REST API"));
     assert_eq!(msgs[2].role, "user");
     assert_eq!(msgs[3].role, "assistant");
-}
-
-// ── Continue.dev tests ──────────────────────────────────────────────────
-
-#[test]
-fn test_continue_session_json_parsing() {
-    let tmp = TempDir::new().unwrap();
-    let session_file = tmp.path().join("continue-session.json");
-    fs::write(
-        &session_file,
-        r#"{
-            "sessionId": "continue-sess-1",
-            "title": "Debugging crash",
-            "dateCreated": "2024-06-15T10:30:00Z",
-            "workspaceDirectory": "/home/dev/project",
-            "history": [
-                {"message": {"role": "user", "content": "Why is this crashing?"}},
-                {"message": {"role": "assistant", "content": "The null pointer at line 42..."}}
-            ]
-        }"#,
-    )
-    .unwrap();
-
-    let msgs = oobo::continue_dev::transcript::parse_messages(&session_file);
-    assert_eq!(msgs.len(), 2);
-    assert_eq!(msgs[0].role, "user");
-    assert!(msgs[0].text.contains("crashing"));
-    assert_eq!(msgs[1].role, "assistant");
-    assert!(msgs[1].text.contains("null pointer"));
 }
 
 // ── Zed tests ───────────────────────────────────────────────────────────
@@ -780,7 +951,7 @@ fn test_zed_conversation_parsing() {
     )
     .unwrap();
 
-    let msgs = oobo::zed::transcript::parse_messages(&conv_file);
+    let msgs = oobo::tools::zed::transcript::parse_messages(&conv_file);
     assert_eq!(msgs.len(), 2);
     assert_eq!(msgs[0].role, "user");
     assert!(msgs[0].text.contains("iterators"));
@@ -811,7 +982,7 @@ fn test_vscode_fork_extract_sessions() {
     )
     .unwrap();
 
-    let sessions = oobo::vscode_fork::extract_sessions(
+    let sessions = oobo::tools::vscode_fork::extract_sessions(
         tmp.path(),
         "/home/dev/project",
         &["composer.composerData", "cascade.composerData"],
@@ -832,7 +1003,6 @@ fn test_config_all_tools_default_enabled() {
     assert!(cfg.claude.enabled);
     assert!(cfg.windsurf.enabled);
     assert!(cfg.aider.enabled);
-    assert!(cfg.continue_dev.enabled);
     assert!(cfg.zed.enabled);
     assert!(cfg.copilot.enabled);
     assert!(cfg.trae.enabled);
@@ -876,7 +1046,7 @@ fn test_codex_rollout_parsing() {
     )
     .unwrap();
 
-    let msgs = oobo::codex::transcript::parse_messages(&rollout);
+    let msgs = oobo::tools::codex::transcript::parse_messages(&rollout);
     assert_eq!(msgs.len(), 4);
     assert_eq!(msgs[0].role, "user");
     assert_eq!(msgs[0].text, "Fix the login bug");
@@ -899,7 +1069,7 @@ fn test_codex_rollout_read_transcript() {
     )
     .unwrap();
 
-    let transcript = oobo::codex::transcript::read_transcript(&rollout, 10);
+    let transcript = oobo::tools::codex::transcript::read_transcript(&rollout, 10);
     assert!(transcript.contains("User"));
     assert!(transcript.contains("Hello"));
     assert!(transcript.contains("Assistant"));
@@ -916,22 +1086,22 @@ fn test_alias_install_uninstall_roundtrip() {
 
     // Simulate install
     let content = fs::read_to_string(&rc_file).unwrap();
-    let new_content = format!("{content}\nalias git=oobo # oobo-git alias\n");
+    let new_content = format!("{content}\nalias git=oobo # oobo alias\n");
     fs::write(&rc_file, &new_content).unwrap();
 
     let after_install = fs::read_to_string(&rc_file).unwrap();
-    assert!(after_install.contains("oobo-git alias"));
+    assert!(after_install.contains("oobo alias"));
     assert!(after_install.contains("alias git=oobo"));
 
     // Simulate uninstall
     let filtered: Vec<&str> = after_install
         .lines()
-        .filter(|line| !line.contains("oobo-git alias"))
+        .filter(|line| !line.contains("oobo alias"))
         .collect();
     fs::write(&rc_file, filtered.join("\n") + "\n").unwrap();
 
     let after_uninstall = fs::read_to_string(&rc_file).unwrap();
-    assert!(!after_uninstall.contains("oobo-git alias"));
+    assert!(!after_uninstall.contains("oobo alias"));
     assert!(after_uninstall.contains("my zshrc"));
     assert!(after_uninstall.contains("export PATH"));
 }

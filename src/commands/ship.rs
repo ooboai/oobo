@@ -1,8 +1,8 @@
 use crate::config::Config;
-use crate::cursor;
 use crate::git::interceptor;
-use crate::server;
-use crate::server::payload::*;
+use crate::remote;
+use crate::remote::payload::*;
+use crate::tools::cursor;
 
 /// Manually sync current project's AI context to the dashboard.
 pub fn run(cfg: &Config) -> Result<(), String> {
@@ -51,7 +51,7 @@ pub fn run(cfg: &Config) -> Result<(), String> {
         tools,
     };
 
-    server::send_event(cfg, &payload);
+    remote::send_event(cfg, &payload);
     println!("Sync event sent.");
     Ok(())
 }

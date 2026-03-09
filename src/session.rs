@@ -1,242 +1,211 @@
 use std::path::PathBuf;
 
-use crate::claude;
-use crate::cursor;
-use crate::cursor::transcript::Message;
-use crate::cursor::Session;
+use crate::config::Config;
+use crate::core::message::Message;
+use crate::core::session::Session;
+use crate::core::tool::ToolRegistry;
+use crate::tools;
 
-/// Find the transcript path for a session, dispatching based on source.
+fn reg() -> ToolRegistry {
+    tools::registry()
+}
+
+fn tool_or_default<'a>(
+    registry: &'a ToolRegistry,
+    source: &str,
+) -> Option<&'a dyn crate::core::tool::Tool> {
+    registry
+        .by_name(source)
+        .or_else(|| registry.by_name("composer"))
+}
+
+/// Find the transcript path for a session.
 pub fn find_transcript_path(session: &Session) -> Option<PathBuf> {
-    match session.source.as_str() {
-        "claude" => {
-            claude::transcript::find_transcript_path(&session.project_path, &session.session_id)
-        }
-        "windsurf" => crate::windsurf::transcript::find_transcript_path(
-            &session.project_path,
-            &session.session_id,
-        ),
-        "trae" => crate::trae::transcript::find_transcript_path(
-            &session.project_path,
-            &session.session_id,
-        ),
-        "aider" => crate::aider::transcript::find_transcript_path(
-            &session.project_path,
-            &session.session_id,
-        ),
-        "continue" => crate::continue_dev::transcript::find_transcript_path(
-            &session.project_path,
-            &session.session_id,
-        ),
-        "copilot" => crate::copilot::transcript::find_transcript_path(
-            &session.project_path,
-            &session.session_id,
-        ),
-        "zed" => {
-            crate::zed::transcript::find_transcript_path(&session.project_path, &session.session_id)
-        }
-        "codex" => crate::codex::transcript::find_transcript_path(
-            &session.project_path,
-            &session.session_id,
-        ),
-        "opencode" => crate::opencode::transcript::find_transcript_path(
-            &session.project_path,
-            &session.session_id,
-        ),
-        _ => cursor::transcript::find_transcript_path(&session.project_path, &session.session_id),
-    }
+    let r = reg();
+    let tool = tool_or_default(&r, &session.source)?;
+    tool.find_transcript(&session.project_path, &session.session_id)
 }
 
-/// Count messages in a session's transcript, dispatching based on source.
+/// Count messages in a session's transcript.
 pub fn count_messages(session: &Session) -> u32 {
-    match session.source.as_str() {
-        "claude" => claude::transcript::count_messages(&session.project_path, &session.session_id),
-        "windsurf" => {
-            crate::windsurf::transcript::count_messages(&session.project_path, &session.session_id)
-        }
-        "trae" => {
-            crate::trae::transcript::count_messages(&session.project_path, &session.session_id)
-        }
-        "aider" => {
-            crate::aider::transcript::count_messages(&session.project_path, &session.session_id)
-        }
-        "continue" => crate::continue_dev::transcript::count_messages(
-            &session.project_path,
-            &session.session_id,
-        ),
-        "copilot" => {
-            crate::copilot::transcript::count_messages(&session.project_path, &session.session_id)
-        }
-        "zed" => crate::zed::transcript::count_messages(&session.project_path, &session.session_id),
-        "codex" => {
-            crate::codex::transcript::count_messages(&session.project_path, &session.session_id)
-        }
-        "opencode" => {
-            crate::opencode::transcript::count_messages(&session.project_path, &session.session_id)
-        }
-        _ => cursor::transcript::count_messages(&session.project_path, &session.session_id),
+    let r = reg();
+    match tool_or_default(&r, &session.source) {
+        Some(tool) => tool.count_messages(&session.project_path, &session.session_id),
+        None => 0,
     }
 }
 
-/// Parse messages from a transcript file, dispatching based on source.
+/// Parse messages from a transcript file.
 pub fn parse_messages(path: &std::path::Path, source: &str) -> Vec<Message> {
-    match source {
-        "claude" => claude::transcript::parse_messages(path),
-        "windsurf" => crate::windsurf::transcript::parse_messages(path),
-        "trae" => crate::trae::transcript::parse_messages(path),
-        "aider" => crate::aider::transcript::parse_messages(path),
-        "continue" => crate::continue_dev::transcript::parse_messages(path),
-        "copilot" => crate::copilot::transcript::parse_messages(path),
-        "zed" => crate::zed::transcript::parse_messages(path),
-        "codex" => crate::codex::transcript::parse_messages(path),
-        "opencode" => crate::opencode::transcript::parse_messages(path),
-        _ => cursor::transcript::parse_messages(path),
+    let r = reg();
+    match tool_or_default(&r, source) {
+        Some(tool) => tool.parse_messages(path),
+        None => Vec::new(),
     }
 }
 
-/// Read transcript as formatted text, dispatching based on source.
+/// Parse messages by session ID (uses `parse_messages_by_id` for tools that override it).
+pub fn parse_messages_for_session(
+    project_path: &str,
+    session_id: &str,
+    source: &str,
+) -> Vec<Message> {
+    let r = reg();
+    match tool_or_default(&r, source) {
+        Some(tool) => tool.parse_messages_by_id(project_path, session_id),
+        None => Vec::new(),
+    }
+}
+
+/// Read transcript as formatted text.
 pub fn read_transcript(path: &std::path::Path, max_messages: u32, source: &str) -> String {
-    match source {
-        "claude" => claude::transcript::read_transcript(path, max_messages),
-        "windsurf" => crate::windsurf::transcript::read_transcript(path, max_messages),
-        "trae" => crate::trae::transcript::read_transcript(path, max_messages),
-        "aider" => crate::aider::transcript::read_transcript(path, max_messages),
-        "continue" => crate::continue_dev::transcript::read_transcript(path, max_messages),
-        "copilot" => crate::copilot::transcript::read_transcript(path, max_messages),
-        "zed" => crate::zed::transcript::read_transcript(path, max_messages),
-        "codex" => crate::codex::transcript::read_transcript(path, max_messages),
-        "opencode" => crate::opencode::transcript::read_transcript(path, max_messages),
-        _ => cursor::transcript::read_transcript(path, max_messages),
+    let r = reg();
+    match tool_or_default(&r, source) {
+        Some(tool) => tool.read_transcript(path, max_messages),
+        None => String::new(),
+    }
+}
+
+/// Read transcript by session ID (uses `read_transcript_by_id` for tools that override it).
+pub fn read_transcript_for_session(
+    project_path: &str,
+    session_id: &str,
+    max_messages: u32,
+    source: &str,
+) -> String {
+    let r = reg();
+    match tool_or_default(&r, source) {
+        Some(tool) => tool.read_transcript_by_id(project_path, session_id, max_messages),
+        None => String::new(),
     }
 }
 
 /// Find a session by ID prefix across all sources.
+/// Searches project-scoped sessions first, then falls back to all sessions.
 pub fn find_session_any(id_prefix: &str) -> Result<Session, String> {
-    let project_root = cursor::get_project_root();
+    let r = reg();
+    let project_root = crate::paths::git_project_root();
 
-    macro_rules! try_source {
-        ($result:expr) => {
-            if let Ok(sessions) = $result {
-                if let Some(s) = sessions
-                    .iter()
-                    .find(|s| s.session_id.starts_with(id_prefix))
-                {
-                    return Ok(s.clone());
-                }
+    for tool in r.all() {
+        if let Ok(sessions) = tool.sessions_for_project(&project_root) {
+            if let Some(s) = sessions
+                .iter()
+                .find(|s| s.session_id.starts_with(id_prefix))
+            {
+                return Ok(s.clone());
             }
-        };
+        }
     }
 
-    try_source!(cursor::sessions_for_project(&project_root));
-    try_source!(claude::sessions_for_project(&project_root));
-    try_source!(crate::windsurf::sessions_for_project(&project_root));
-    try_source!(crate::trae::sessions_for_project(&project_root));
-    try_source!(crate::aider::sessions_for_project(&project_root));
-    try_source!(crate::continue_dev::sessions_for_project(&project_root));
-    try_source!(crate::copilot::sessions_for_project(&project_root));
-    try_source!(crate::zed::sessions_for_project(&project_root));
-    try_source!(crate::codex::sessions_for_project(&project_root));
-    try_source!(crate::opencode::sessions_for_project(&project_root));
-
-    try_source!(cursor::all_sessions());
-    try_source!(claude::all_sessions());
-    try_source!(crate::windsurf::all_sessions());
-    try_source!(crate::trae::all_sessions());
-    try_source!(crate::continue_dev::all_sessions());
-    try_source!(crate::copilot::all_sessions());
-    try_source!(crate::zed::all_sessions());
-    try_source!(crate::codex::all_sessions());
-    try_source!(crate::opencode::all_sessions());
+    for tool in r.all() {
+        if let Ok(sessions) = tool.all_sessions() {
+            if let Some(s) = sessions
+                .iter()
+                .find(|s| s.session_id.starts_with(id_prefix))
+            {
+                return Ok(s.clone());
+            }
+        }
+    }
 
     Err(format!("session not found: {id_prefix}"))
 }
 
 /// Get all sessions across all sources for the current project.
-pub fn all_for_project(project_root: &str, cfg: &crate::config::Config) -> Vec<Session> {
-    let mut sessions = Vec::new();
-
-    macro_rules! collect {
-        ($enabled:expr, $result:expr) => {
-            if $enabled {
-                sessions.extend($result.unwrap_or_default());
-            }
-        };
-    }
-
-    collect!(
-        cfg.cursor.enabled,
-        cursor::sessions_for_project(project_root)
-    );
-    collect!(
-        cfg.claude.enabled,
-        claude::sessions_for_project(project_root)
-    );
-    collect!(
-        cfg.windsurf.enabled,
-        crate::windsurf::sessions_for_project(project_root)
-    );
-    collect!(
-        cfg.trae.enabled,
-        crate::trae::sessions_for_project(project_root)
-    );
-    collect!(
-        cfg.aider.enabled,
-        crate::aider::sessions_for_project(project_root)
-    );
-    collect!(
-        cfg.continue_dev.enabled,
-        crate::continue_dev::sessions_for_project(project_root)
-    );
-    collect!(
-        cfg.copilot.enabled,
-        crate::copilot::sessions_for_project(project_root)
-    );
-    collect!(
-        cfg.zed.enabled,
-        crate::zed::sessions_for_project(project_root)
-    );
-    collect!(
-        cfg.codex.enabled,
-        crate::codex::sessions_for_project(project_root)
-    );
-    collect!(
-        cfg.opencode.enabled,
-        crate::opencode::sessions_for_project(project_root)
-    );
-
+pub fn all_for_project(project_root: &str, cfg: &Config) -> Vec<Session> {
+    let r = reg();
+    let mut sessions: Vec<Session> = r
+        .enabled(cfg)
+        .flat_map(|tool| tool.sessions_for_project(project_root).unwrap_or_default())
+        .collect();
     sessions.sort_by_key(|s| std::cmp::Reverse(s.sort_key()));
     sessions
 }
 
 /// Get all sessions across all sources and all projects.
-pub fn all_sessions(cfg: &crate::config::Config) -> Vec<Session> {
-    let mut sessions = Vec::new();
-    let project_root = cursor::get_project_root();
-
-    macro_rules! collect {
-        ($enabled:expr, $result:expr) => {
-            if $enabled {
-                sessions.extend($result.unwrap_or_default());
-            }
-        };
-    }
-
-    collect!(cfg.cursor.enabled, cursor::all_sessions());
-    collect!(cfg.claude.enabled, claude::all_sessions());
-    collect!(cfg.windsurf.enabled, crate::windsurf::all_sessions());
-    collect!(cfg.trae.enabled, crate::trae::all_sessions());
-    collect!(
-        cfg.aider.enabled,
-        crate::aider::sessions_for_project(&project_root)
-    );
-    collect!(
-        cfg.continue_dev.enabled,
-        crate::continue_dev::all_sessions()
-    );
-    collect!(cfg.copilot.enabled, crate::copilot::all_sessions());
-    collect!(cfg.zed.enabled, crate::zed::all_sessions());
-    collect!(cfg.codex.enabled, crate::codex::all_sessions());
-    collect!(cfg.opencode.enabled, crate::opencode::all_sessions());
-
+pub fn all_sessions(cfg: &Config) -> Vec<Session> {
+    let r = reg();
+    let mut sessions: Vec<Session> = r
+        .enabled(cfg)
+        .flat_map(|tool| tool.all_sessions().unwrap_or_default())
+        .collect();
     sessions.sort_by_key(|s| std::cmp::Reverse(s.sort_key()));
     sessions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_session_any_nonexistent() {
+        let result = find_session_any("zzz-does-not-exist-99999");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("session not found"),
+            "expected 'session not found', got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_tool_or_default_known_source() {
+        let r = reg();
+        let tool = tool_or_default(&r, "composer");
+        assert!(tool.is_some());
+        assert_eq!(tool.unwrap().name(), "composer");
+    }
+
+    #[test]
+    fn test_tool_or_default_claude_source() {
+        let r = reg();
+        let tool = tool_or_default(&r, "claude");
+        assert!(tool.is_some());
+        assert_eq!(tool.unwrap().name(), "claude");
+    }
+
+    #[test]
+    fn test_tool_or_default_unknown_falls_back_to_composer() {
+        let r = reg();
+        let tool = tool_or_default(&r, "totally-unknown-tool");
+        assert!(
+            tool.is_some(),
+            "unknown source should fall back to composer"
+        );
+        assert_eq!(tool.unwrap().name(), "composer");
+    }
+
+    #[test]
+    fn test_parse_messages_nonexistent_path() {
+        let msgs = parse_messages(
+            std::path::Path::new("/tmp/nonexistent-oobo-transcript.jsonl"),
+            "claude",
+        );
+        assert!(msgs.is_empty());
+    }
+
+    #[test]
+    fn test_count_messages_nonexistent() {
+        let session = Session {
+            session_id: "fake-session-xyz".into(),
+            source: "claude".into(),
+            project_path: "/tmp/nonexistent-project".into(),
+            name: String::new(),
+            mode: String::new(),
+            workspace_dir: String::new(),
+            created_at: None,
+            updated_at: None,
+        };
+        assert_eq!(count_messages(&session), 0);
+    }
+
+    #[test]
+    fn test_read_transcript_nonexistent() {
+        let text = read_transcript(
+            std::path::Path::new("/tmp/no-such-transcript.jsonl"),
+            10,
+            "composer",
+        );
+        assert!(text.is_empty());
+    }
 }

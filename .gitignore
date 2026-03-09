@@ -1,5 +1,4 @@
 /target
-Cargo.lock
 *.swp
 *.swo
 .DS_Store
@@ -9,6 +8,9 @@ config.toml
 *.env
 .env.*
 
+# Internal docs (architecture, product strategy, specs)
+.docs/
+
 # Editor/IDE
 .idea/
 .vscode/
@@ -16,3 +18,8 @@ config.toml
 
 # OS
 Thumbs.db
+
+# Database and log files
+*.db
+*.sqlite
+*.log

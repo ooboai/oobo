@@ -7,31 +7,35 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 
+use super::kv_line;
 use crate::config::Config;
-use crate::cursor;
-use crate::server;
+use crate::remote;
+use crate::tools::cursor;
 
 struct ToolCount {
-    label: &'static str,
+    label: String,
     count: usize,
 }
 
 pub fn run(cfg: &Config) -> Result<(), String> {
     let project_root = cursor::get_project_root();
+    let reg = crate::tools::registry();
 
-    let tools: Vec<ToolCount> = TOOL_LIST
-        .iter()
-        .filter(|(key, _)| tool_enabled(cfg, key))
-        .map(|(key, label)| ToolCount {
-            label,
-            count: tool_session_count(key, &project_root),
+    let tools: Vec<ToolCount> = reg
+        .enabled(cfg)
+        .map(|t| ToolCount {
+            label: t.display_name().to_string(),
+            count: t
+                .sessions_for_project(&project_root)
+                .map(|s| s.len())
+                .unwrap_or(0),
         })
         .collect();
 
     let server_status = if cfg.server.api_key.is_empty() {
         "not configured — run oobo setup".to_string()
     } else {
-        match server::check_connection(cfg) {
+        match remote::check_connection(cfg) {
             Ok(msg) => msg,
             Err(e) => format!("error ({e})"),
         }
@@ -56,49 +60,6 @@ pub fn run(cfg: &Config) -> Result<(), String> {
 
     crate::tui::restore();
     Ok(())
-}
-
-const TOOL_LIST: &[(&str, &str)] = &[
-    ("cursor", "Cursor"),
-    ("claude", "Claude"),
-    ("windsurf", "Windsurf"),
-    ("trae", "Trae"),
-    ("aider", "Aider"),
-    ("continue", "Continue"),
-    ("copilot", "Copilot"),
-    ("zed", "Zed"),
-    ("codex", "Codex"),
-];
-
-fn tool_enabled(cfg: &Config, key: &str) -> bool {
-    match key {
-        "cursor" => cfg.cursor.enabled,
-        "claude" => cfg.claude.enabled,
-        "windsurf" => cfg.windsurf.enabled,
-        "trae" => cfg.trae.enabled,
-        "aider" => cfg.aider.enabled,
-        "continue" => cfg.continue_dev.enabled,
-        "copilot" => cfg.copilot.enabled,
-        "zed" => cfg.zed.enabled,
-        "codex" => cfg.codex.enabled,
-        _ => false,
-    }
-}
-
-fn tool_session_count(key: &str, root: &str) -> usize {
-    let result = match key {
-        "cursor" => cursor::sessions_for_project(root).map(|s| s.len()),
-        "claude" => crate::claude::sessions_for_project(root).map(|s| s.len()),
-        "windsurf" => crate::windsurf::sessions_for_project(root).map(|s| s.len()),
-        "trae" => crate::trae::sessions_for_project(root).map(|s| s.len()),
-        "aider" => crate::aider::sessions_for_project(root).map(|s| s.len()),
-        "continue" => crate::continue_dev::sessions_for_project(root).map(|s| s.len()),
-        "copilot" => crate::copilot::sessions_for_project(root).map(|s| s.len()),
-        "zed" => crate::zed::sessions_for_project(root).map(|s| s.len()),
-        "codex" => crate::codex::sessions_for_project(root).map(|s| s.len()),
-        _ => Ok(0),
-    };
-    result.unwrap_or(0)
 }
 
 fn render(
@@ -213,14 +174,4 @@ fn render(
         Span::styled(" quit", Style::default().fg(Color::DarkGray)),
     ]);
     f.render_widget(Paragraph::new(footer), chunks[4]);
-}
-
-fn kv_line(label: &str, value: &str) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(
-            format!("  {label:<14} "),
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::raw(value.to_string()),
-    ])
 }

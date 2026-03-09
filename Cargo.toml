@@ -2,11 +2,14 @@
 name = "oobo"
 version = "0.1.0"
 edition = "2021"
-description = "Git wrapper that captures AI chat context alongside your commits — supports Cursor, Claude Code, Windsurf, Aider, Continue.dev, Copilot, Zed, Trae, Codex"
+authors = ["Oobo Contributors"]
+description = "Git decorator for humans and agents — captures AI sessions, tokens, costs, and code attribution alongside your commits"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/NoCodeInc/oobo-git"
+repository = "https://github.com/ooboai/oobo"
 homepage = "https://oobo.ai"
 readme = "README.md"
+keywords = ["git", "ai", "developer-tools", "attribution", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [lib]
 name = "oobo"
@@ -30,6 +33,10 @@ url = "2"
 console = "0.15"
 ratatui = "0.30"
 crossterm = "0.28"
+tiktoken-rs = "0.6"
+libc = "0.2.182"
+thiserror = "2.0.18"
+regex = "1.12.3"
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,0 +1,297 @@
+pub mod ai_commits;
+pub mod api_usage;
+pub mod events;
+pub mod migrations;
+pub mod otel;
+pub mod projects;
+pub mod sessions;
+pub mod stats;
+
+use rusqlite::Connection;
+
+use crate::paths;
+
+pub fn collect_rows<T>(
+    rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>>,
+) -> Result<Vec<T>, String> {
+    let mut result = Vec::new();
+    for r in rows {
+        result.push(r.map_err(|e| format!("row error: {e}"))?);
+    }
+    Ok(result)
+}
+
+/// Handle to the oobo local SQLite database.
+pub struct Db {
+    pub conn: Connection,
+}
+
+impl Db {
+    /// Open (or create) the database at `~/.oobo/db/oobo.db`.
+    pub fn open() -> Result<Self, String> {
+        let db_dir = paths::oobo_db_dir();
+        paths::ensure_dir(&db_dir)?;
+
+        let db_path = paths::oobo_db_path();
+        let conn = Connection::open(&db_path)
+            .map_err(|e| format!("cannot open database {}: {e}", db_path.display()))?;
+
+        let db = Self { conn };
+        db.init()?;
+        Ok(db)
+    }
+
+    #[allow(dead_code)]
+    pub fn open_in_memory() -> Result<Self, String> {
+        let conn =
+            Connection::open_in_memory().map_err(|e| format!("cannot open in-memory db: {e}"))?;
+        let db = Self { conn };
+        db.init()?;
+        Ok(db)
+    }
+
+    fn init(&self) -> Result<(), String> {
+        self.conn
+            .execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+            .map_err(|e| format!("cannot set pragmas: {e}"))?;
+        migrations::run(&self.conn)?;
+        Ok(())
+    }
+
+    /// Check if this project has been hydrated recently (within `max_age_secs`).
+    pub fn needs_hydration(&self, project_root: &str, max_age_secs: i64) -> bool {
+        let result: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT last_hydrated_at FROM hydration_state WHERE project_root = ?1",
+                rusqlite::params![project_root],
+                |row| row.get(0),
+            )
+            .ok();
+        match result {
+            Some(ts) => (chrono::Utc::now().timestamp() - ts) > max_age_secs,
+            None => true,
+        }
+    }
+
+    /// Mark a project as hydrated.
+    pub fn mark_hydrated(&self, project_root: &str, anchor_count: usize) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO hydration_state (project_root, last_hydrated_at, anchor_count)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    project_root,
+                    chrono::Utc::now().timestamp(),
+                    anchor_count as i64,
+                ],
+            )
+            .map_err(|e| format!("mark_hydrated: {e}"))?;
+        Ok(())
+    }
+
+    /// Check if an anchor already exists in the local database.
+    pub fn anchor_exists(&self, commit_hash: &str) -> Result<bool, String> {
+        let exists: bool = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM anchors WHERE commit_hash = ?1)",
+                rusqlite::params![commit_hash],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("anchor_exists: {e}"))?;
+        Ok(exists)
+    }
+
+    /// Insert an anchor (enriched commit) into the local database.
+    pub fn insert_anchor(&self, commit_hash: &str, raw_json: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO anchors (commit_hash, raw_json, created_at)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![commit_hash, raw_json, chrono::Utc::now().timestamp(),],
+            )
+            .map_err(|e| format!("insert anchor: {e}"))?;
+        Ok(())
+    }
+
+    /// Insert a session link for an anchor into `anchor_sessions`.
+    pub fn insert_anchor_session(
+        &self,
+        commit_hash: &str,
+        session_id: &str,
+        agent: &str,
+        model: Option<&str>,
+        link_type: &str,
+        files_touched: Option<&[String]>,
+    ) -> Result<(), String> {
+        let ft_json = files_touched.map(|ft| serde_json::to_string(ft).unwrap_or_default());
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO anchor_sessions
+                 (commit_hash, session_id, agent, model, link_type, files_touched)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![commit_hash, session_id, agent, model, link_type, ft_json],
+            )
+            .map_err(|e| format!("insert anchor_session: {e}"))?;
+        Ok(())
+    }
+
+    /// Update a session's first_message field.
+    pub fn update_session_first_message(
+        &self,
+        session_id: &str,
+        first_message: &str,
+    ) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE sessions SET first_message = ?1 WHERE id = ?2",
+                rusqlite::params![first_message, session_id],
+            )
+            .map_err(|e| format!("update first_message: {e}"))?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_open_in_memory() {
+        let db = Db::open_in_memory().unwrap();
+        let version: i32 = db
+            .conn
+            .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
+            .unwrap();
+        assert!(version >= 1);
+    }
+
+    #[test]
+    fn test_wal_mode() {
+        let db = Db::open_in_memory().unwrap();
+        let mode: String = db
+            .conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        // In-memory databases use "memory" mode, not WAL
+        assert!(!mode.is_empty());
+    }
+
+    fn seed_project_and_session(db: &Db) {
+        db.conn
+            .execute_batch(
+                "INSERT INTO projects (id, path, name, discovered_at, last_seen_at)
+                 VALUES ('proj-1', '/tmp/proj', 'test-proj', 1000, 1000);
+                 INSERT INTO sessions (id, source, project_id, message_count, indexed_at)
+                 VALUES ('sess-1', 'cursor', 'proj-1', 3, 1000);",
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn test_insert_anchor_session_and_verify() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_anchor("abc123", r#"{"commit":"abc123"}"#)
+            .unwrap();
+
+        let files = vec!["src/main.rs".to_string(), "src/lib.rs".to_string()];
+        db.insert_anchor_session(
+            "abc123",
+            "sess-42",
+            "cursor",
+            Some("claude-opus"),
+            "explicit",
+            Some(&files),
+        )
+        .unwrap();
+
+        let row: (String, String, String, Option<String>, String, Option<String>) = db
+            .conn
+            .query_row(
+                "SELECT commit_hash, session_id, agent, model, link_type, files_touched
+                 FROM anchor_sessions WHERE commit_hash = ?1 AND session_id = ?2",
+                rusqlite::params!["abc123", "sess-42"],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            )
+            .unwrap();
+
+        assert_eq!(row.0, "abc123");
+        assert_eq!(row.1, "sess-42");
+        assert_eq!(row.2, "cursor");
+        assert_eq!(row.3.as_deref(), Some("claude-opus"));
+        assert_eq!(row.4, "explicit");
+        assert!(row.5.is_some());
+        let ft: Vec<String> = serde_json::from_str(&row.5.unwrap()).unwrap();
+        assert_eq!(ft, files);
+    }
+
+    #[test]
+    fn test_insert_anchor_session_without_model() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_anchor("def456", "{}").unwrap();
+
+        db.insert_anchor_session("def456", "sess-99", "claude", None, "inferred", None)
+            .unwrap();
+
+        let model: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT model FROM anchor_sessions WHERE commit_hash = ?1",
+                rusqlite::params!["def456"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(model.is_none());
+    }
+
+    #[test]
+    fn test_update_session_first_message() {
+        let db = Db::open_in_memory().unwrap();
+        seed_project_and_session(&db);
+
+        let before: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT first_message FROM sessions WHERE id = 'sess-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(before.is_none());
+
+        db.update_session_first_message("sess-1", "Fix the login bug")
+            .unwrap();
+
+        let after: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT first_message FROM sessions WHERE id = 'sess-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(after.as_deref(), Some("Fix the login bug"));
+    }
+
+    #[test]
+    fn test_update_session_first_message_overwrites() {
+        let db = Db::open_in_memory().unwrap();
+        seed_project_and_session(&db);
+
+        db.update_session_first_message("sess-1", "original")
+            .unwrap();
+        db.update_session_first_message("sess-1", "updated")
+            .unwrap();
+
+        let msg: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT first_message FROM sessions WHERE id = 'sess-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(msg.as_deref(), Some("updated"));
+    }
+}

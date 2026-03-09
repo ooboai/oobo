@@ -1,28 +1,33 @@
-mod aider;
 mod alias;
-mod claude;
+mod analytics;
+mod api;
 mod cli;
-mod codex;
 mod commands;
 mod config;
-mod continue_dev;
-mod copilot;
-mod cursor;
+mod core;
+mod db;
+mod error;
 mod git;
-mod opencode;
-mod server;
+mod hooks;
+mod notify;
+mod paths;
+mod redact;
+mod remote;
+mod scanner;
 mod session;
 mod setup;
-mod trae;
+mod tools;
 mod tui;
-mod vscode_fork;
-mod windsurf;
-mod zed;
+mod utils;
 
 use std::process;
 
 fn main() {
     let cfg = config::Config::load_or_default();
+
+    if let Err(e) = ensure_oobo_dirs() {
+        eprintln!("oobo: warning: {e}");
+    }
 
     match cli::route(cfg) {
         Ok(code) => process::exit(code),
@@ -31,4 +36,11 @@ fn main() {
             process::exit(1);
         }
     }
+}
+
+fn ensure_oobo_dirs() -> Result<(), String> {
+    paths::ensure_dir(&paths::oobo_home())?;
+    paths::ensure_dir(&paths::oobo_db_dir())?;
+    paths::ensure_dir(&paths::oobo_projects_dir())?;
+    Ok(())
 }

@@ -19,8 +19,6 @@ pub struct Config {
     #[serde(default)]
     pub aider: ToolConfig,
     #[serde(default)]
-    pub continue_dev: ToolConfig,
-    #[serde(default)]
     pub zed: ToolConfig,
     #[serde(default)]
     pub copilot: ToolConfig,
@@ -31,7 +29,17 @@ pub struct Config {
     #[serde(default)]
     pub opencode: ToolConfig,
     #[serde(default)]
+    pub gemini: ToolConfig,
+    #[serde(default)]
     pub telemetry: TelemetryConfig,
+    #[serde(default)]
+    pub scan: ScanConfig,
+    #[serde(default)]
+    pub update: UpdateConfig,
+    #[serde(default)]
+    pub transparency: TransparencyConfig,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignored_repos: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +62,9 @@ pub struct GitConfig {
 pub struct ToolConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Optional API key for pulling usage data from the tool's cloud API.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_key: String,
 }
 
 #[allow(dead_code)]
@@ -69,6 +80,48 @@ pub struct TelemetryConfig {
     pub send_diffs: bool,
     #[serde(default)]
     pub send_transcripts: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanConfig {
+    #[serde(default = "default_true")]
+    pub auto_scan: bool,
+    #[serde(default = "default_scan_interval")]
+    pub interval_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateConfig {
+    #[serde(default = "default_true")]
+    pub check_on_startup: bool,
+    #[serde(default = "default_update_interval")]
+    pub check_interval_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransparencyConfig {
+    #[serde(default = "default_transparency_mode")]
+    pub mode: String,
+}
+
+impl Default for TransparencyConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_transparency_mode(),
+        }
+    }
+}
+
+fn default_transparency_mode() -> String {
+    "off".to_string()
+}
+
+fn default_scan_interval() -> u64 {
+    3600
+}
+
+fn default_update_interval() -> u64 {
+    86400
 }
 
 fn default_server_url() -> String {
@@ -99,7 +152,10 @@ impl Default for GitConfig {
 
 impl Default for ToolConfig {
     fn default() -> Self {
-        Self { enabled: true }
+        Self {
+            enabled: true,
+            api_key: String::new(),
+        }
     }
 }
 
@@ -113,20 +169,31 @@ impl Default for TelemetryConfig {
     }
 }
 
-impl Config {
-    /// Directory where oobo stores its configuration and logs.
-    pub fn oobo_dir() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".oobo")
+impl Default for ScanConfig {
+    fn default() -> Self {
+        Self {
+            auto_scan: true,
+            interval_secs: default_scan_interval(),
+        }
     }
+}
 
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        Self {
+            check_on_startup: true,
+            check_interval_secs: default_update_interval(),
+        }
+    }
+}
+
+impl Config {
     pub fn config_path() -> PathBuf {
-        Self::oobo_dir().join("config.toml")
+        crate::paths::oobo_home().join("config.toml")
     }
 
     pub fn log_dir() -> PathBuf {
-        Self::oobo_dir().join("logs")
+        crate::paths::oobo_home().join("logs")
     }
 
     /// Load config from disk, or return defaults if it doesn't exist.
@@ -148,23 +215,53 @@ impl Config {
         Self::default()
     }
 
-    /// Persist config to disk.
+    /// Persist config to disk. Sets file permissions to 0600 on Unix when API keys are present.
     pub fn save(&self) -> Result<(), String> {
-        let dir = Self::oobo_dir();
+        let dir = crate::paths::oobo_home();
         fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
 
         let content =
             toml::to_string_pretty(self).map_err(|e| format!("cannot serialize config: {e}"))?;
 
         let path = Self::config_path();
-        fs::write(&path, content).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        fs::write(&path, &content).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+
+        #[cfg(unix)]
+        if self.has_any_key() {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(e) = fs::set_permissions(&path, fs::Permissions::from_mode(0o600)) {
+                eprintln!("oobo: warning: could not set config permissions: {e}");
+            }
+        }
+
         Ok(())
+    }
+
+    fn has_any_key(&self) -> bool {
+        !self.server.api_key.is_empty()
+            || !self.claude.api_key.is_empty()
+            || !self.cursor.api_key.is_empty()
+            || !self.copilot.api_key.is_empty()
+            || !self.windsurf.api_key.is_empty()
+            || !self.codex.api_key.is_empty()
+            || !self.gemini.api_key.is_empty()
+            || !self.opencode.api_key.is_empty()
     }
 
     /// True if the server is configured with a non-default API key.
     #[allow(dead_code)]
     pub fn is_configured(&self) -> bool {
         !self.server.api_key.is_empty()
+    }
+
+    /// Resolve the configured transparency mode.
+    /// Transparency only controls whether redacted transcripts are included on the
+    /// orphan branch. Anchor metadata is always written regardless of this setting.
+    pub fn transparency_mode(&self) -> crate::core::anchor::TransparencyMode {
+        match self.transparency.mode.as_str() {
+            "on" | "full" | "full_transparency" => crate::core::anchor::TransparencyMode::On,
+            _ => crate::core::anchor::TransparencyMode::Off,
+        }
     }
 
     /// Resolve the real git binary path.
@@ -174,6 +271,65 @@ impl Config {
         } else {
             &self.git.real_git_path
         }
+    }
+
+    /// Set a tool's enabled state by config key.
+    pub fn set_tool_enabled(&mut self, key: &str, enabled: bool) {
+        match key {
+            "cursor" => self.cursor.enabled = enabled,
+            "claude" => self.claude.enabled = enabled,
+            "windsurf" => self.windsurf.enabled = enabled,
+            "aider" => self.aider.enabled = enabled,
+            "zed" => self.zed.enabled = enabled,
+            "copilot" => self.copilot.enabled = enabled,
+            "trae" => self.trae.enabled = enabled,
+            "codex" => self.codex.enabled = enabled,
+            "opencode" => self.opencode.enabled = enabled,
+            "gemini" => self.gemini.enabled = enabled,
+            _ => {}
+        }
+    }
+
+    /// Check if a repo path is in the ignored list.
+    pub fn is_ignored(&self, project_root: &str) -> bool {
+        let canonical = std::fs::canonicalize(project_root)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| project_root.to_string());
+        self.ignored_repos.iter().any(|p| {
+            let c = std::fs::canonicalize(p)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| p.clone());
+            c == canonical
+        })
+    }
+
+    /// Add a repo path to the ignored list and save (legacy global config).
+    #[allow(dead_code)]
+    pub fn ignore_repo(&mut self, project_root: &str) -> Result<(), String> {
+        let canonical = std::fs::canonicalize(project_root)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| project_root.to_string());
+        if !self.is_ignored(&canonical) {
+            self.ignored_repos.push(canonical);
+            self.save()
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Remove a repo path from the ignored list and save (legacy global config).
+    #[allow(dead_code)]
+    pub fn unignore_repo(&mut self, project_root: &str) -> Result<(), String> {
+        let canonical = std::fs::canonicalize(project_root)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| project_root.to_string());
+        self.ignored_repos.retain(|p| {
+            let c = std::fs::canonicalize(p)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| p.clone());
+            c != canonical
+        });
+        self.save()
     }
 }
 
@@ -192,7 +348,6 @@ pub fn find_real_git() -> Option<String> {
         if line.is_empty() {
             continue;
         }
-        // Skip if it resolves to oobo
         if let Ok(resolved) = fs::canonicalize(line) {
             let name = resolved.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if name == "oobo" {
@@ -218,11 +373,11 @@ mod tests {
         assert!(cfg.claude.enabled);
         assert!(cfg.windsurf.enabled);
         assert!(cfg.aider.enabled);
-        assert!(cfg.continue_dev.enabled);
         assert!(cfg.zed.enabled);
         assert!(cfg.copilot.enabled);
         assert!(cfg.trae.enabled);
         assert!(cfg.opencode.enabled);
+        assert!(cfg.gemini.enabled);
         assert!(cfg.telemetry.enabled);
         assert!(!cfg.telemetry.send_diffs);
     }
@@ -232,32 +387,66 @@ mod tests {
         let cfg = Config {
             server: ServerConfig {
                 url: "https://my.server.com".into(),
-                api_key: "sk_test_123".into(),
+                api_key: "test_key_123".into(),
             },
             git: GitConfig {
                 real_git_path: "/usr/bin/git".into(),
                 alias_enabled: true,
             },
-            cursor: CursorConfig { enabled: false },
-            claude: ClaudeConfig { enabled: true },
-            windsurf: ToolConfig { enabled: true },
-            aider: ToolConfig { enabled: false },
-            continue_dev: ToolConfig { enabled: true },
-            zed: ToolConfig { enabled: true },
-            copilot: ToolConfig { enabled: true },
-            trae: ToolConfig { enabled: false },
-            codex: ToolConfig { enabled: true },
-            opencode: ToolConfig { enabled: true },
+            cursor: CursorConfig {
+                enabled: false,
+                api_key: String::new(),
+            },
+            claude: ClaudeConfig {
+                enabled: true,
+                api_key: String::new(),
+            },
+            windsurf: ToolConfig {
+                enabled: true,
+                api_key: String::new(),
+            },
+            aider: ToolConfig {
+                enabled: false,
+                api_key: String::new(),
+            },
+            zed: ToolConfig {
+                enabled: true,
+                api_key: String::new(),
+            },
+            copilot: ToolConfig {
+                enabled: true,
+                api_key: String::new(),
+            },
+            trae: ToolConfig {
+                enabled: false,
+                api_key: String::new(),
+            },
+            codex: ToolConfig {
+                enabled: true,
+                api_key: String::new(),
+            },
+            opencode: ToolConfig {
+                enabled: true,
+                api_key: String::new(),
+            },
+            gemini: ToolConfig {
+                enabled: true,
+                api_key: String::new(),
+            },
             telemetry: TelemetryConfig {
                 enabled: true,
                 send_diffs: true,
                 send_transcripts: false,
             },
+            scan: ScanConfig::default(),
+            update: UpdateConfig::default(),
+            transparency: TransparencyConfig::default(),
+            ignored_repos: Vec::new(),
         };
         let serialized = toml::to_string_pretty(&cfg).unwrap();
         let deserialized: Config = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.server.url, "https://my.server.com");
-        assert_eq!(deserialized.server.api_key, "sk_test_123");
+        assert_eq!(deserialized.server.api_key, "test_key_123");
         assert!(deserialized.git.alias_enabled);
         assert!(!deserialized.cursor.enabled);
         assert!(deserialized.claude.enabled);
@@ -276,7 +465,65 @@ mod tests {
     fn test_git_path_fallback() {
         let cfg = Config::default();
         let path = cfg.git_path();
-        // Should return something (either found git or fallback "git")
         assert!(!path.is_empty());
+    }
+
+    #[test]
+    fn test_is_ignored_empty() {
+        let cfg = Config::default();
+        assert!(!cfg.is_ignored("/some/path"));
+    }
+
+    #[test]
+    fn test_is_ignored_with_real_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+        let mut cfg = Config::default();
+        cfg.ignored_repos.push(path.clone());
+        assert!(cfg.is_ignored(&path));
+        assert!(!cfg.is_ignored("/nonexistent-oobo-test"));
+    }
+
+    #[test]
+    fn test_ignore_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+        let mut cfg = Config::default();
+        cfg.ignored_repos.push(path.clone());
+        let before = cfg.ignored_repos.len();
+        let canonical = std::fs::canonicalize(&path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or(path.clone());
+        if !cfg.is_ignored(&canonical) {
+            cfg.ignored_repos.push(canonical);
+        }
+        assert_eq!(cfg.ignored_repos.len(), before);
+    }
+
+    #[test]
+    fn test_unignore_removes_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+        let canonical = std::fs::canonicalize(&path)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or(path.clone());
+        let mut cfg = Config::default();
+        cfg.ignored_repos.push(canonical.clone());
+        assert!(cfg.is_ignored(&path));
+        cfg.ignored_repos.retain(|p| {
+            let c = std::fs::canonicalize(p)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| p.clone());
+            c != canonical
+        });
+        assert!(!cfg.is_ignored(&path));
+    }
+
+    #[test]
+    fn test_has_any_key_includes_opencode() {
+        let mut cfg = Config::default();
+        assert!(!cfg.has_any_key());
+        cfg.opencode.api_key = "sk-test".to_string();
+        assert!(cfg.has_any_key());
     }
 }

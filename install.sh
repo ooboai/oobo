@@ -1,31 +1,50 @@
 #!/usr/bin/env bash
-# oobo-git installer
-# Usage: curl -fsSL https://oobo.ai/oobo-git/install.sh | bash
+# oobo installer
+#
+# Human usage:
+#   curl -fsSL https://oobo.ai/install.sh | bash
+#
+# Agent usage:
+#   curl -fsSL https://oobo.ai/install.sh | bash -s -- --agent
 #
 # Environment variables:
-#   OOBO_INSTALL_DIR  — override install directory (default: ~/.oobo/bin)
-#   OOBO_VERSION      — install a specific version (default: latest)
+#   OOBO_INSTALL_DIR    — override install directory (default: ~/.oobo/bin)
+#   OOBO_VERSION        — install a specific version (default: latest)
 #   OOBO_NO_MODIFY_PATH — set to 1 to skip PATH modification
 
 set -euo pipefail
 
-REPO="NoCodeInc/oobo-git"
+REPO="ooboai/oobo"
 INSTALL_DIR="${OOBO_INSTALL_DIR:-$HOME/.oobo/bin}"
 BINARY_NAME="oobo"
+AGENT_MODE=0
 
-# ── Colors ───────────────────────────────────────────────────────────────────
+for arg in "$@"; do
+    case "$arg" in
+        --agent) AGENT_MODE=1 ;;
+    esac
+done
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-BOLD='\033[1m'
-RESET='\033[0m'
+# ── Output helpers ────────────────────────────────────────────────────────────
 
-info()  { echo -e "${BLUE}${BOLD}info${RESET}  $*"; }
-ok()    { echo -e "${GREEN}${BOLD}ok${RESET}    $*"; }
-warn()  { echo -e "${YELLOW}${BOLD}warn${RESET}  $*"; }
-error() { echo -e "${RED}${BOLD}error${RESET} $*" >&2; exit 1; }
+if [[ "$AGENT_MODE" == "1" ]]; then
+    RED='' GREEN='' YELLOW='' BLUE='' BOLD='' RESET=''
+    info()  { :; }
+    ok()    { :; }
+    warn()  { echo "warn: $*" >&2; }
+    error() { echo "{\"error\":\"$*\"}" >&2; exit 1; }
+else
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    BLUE='\033[0;34m'
+    BOLD='\033[1m'
+    RESET='\033[0m'
+    info()  { echo -e "${BLUE}${BOLD}info${RESET}  $*"; }
+    ok()    { echo -e "${GREEN}${BOLD}ok${RESET}    $*"; }
+    warn()  { echo -e "${YELLOW}${BOLD}warn${RESET}  $*"; }
+    error() { echo -e "${RED}${BOLD}error${RESET} $*" >&2; exit 1; }
+fi
 
 # ── Platform Detection ───────────────────────────────────────────────────────
 
@@ -111,7 +130,7 @@ add_to_path() {
 
     local shell_name rc_file export_line
     shell_name="$(basename "${SHELL:-/bin/sh}")"
-    export_line="export PATH=\"${dir}:\$PATH\" # oobo-git"
+    export_line="export PATH=\"${dir}:\$PATH\" # oobo"
 
     case "$shell_name" in
         zsh)
@@ -126,14 +145,14 @@ add_to_path() {
             ;;
         fish)
             rc_file="$HOME/.config/fish/config.fish"
-            export_line="set -gx PATH ${dir} \$PATH # oobo-git"
+            export_line="set -gx PATH ${dir} \$PATH # oobo"
             ;;
         *)
             rc_file="$HOME/.profile"
             ;;
     esac
 
-    if [[ -f "$rc_file" ]] && grep -q "# oobo-git" "$rc_file" 2>/dev/null; then
+    if [[ -f "$rc_file" ]] && grep -q "# oobo" "$rc_file" 2>/dev/null; then
         return
     fi
 
@@ -145,12 +164,14 @@ add_to_path() {
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
-    echo ""
-    echo -e "${BOLD}  oobo-git installer${RESET}"
-    echo "  ──────────────────"
-    echo ""
-
     local platform version archive_name url tmpdir
+
+    if [[ "$AGENT_MODE" != "1" ]]; then
+        echo ""
+        echo -e "${BOLD}  oobo installer${RESET}"
+        echo "  ──────────────────"
+        echo ""
+    fi
 
     platform="$(detect_platform)"
     info "Detected platform: ${platform}"
@@ -185,18 +206,28 @@ main() {
 
     add_to_path "$INSTALL_DIR"
 
-    echo ""
-    echo -e "${GREEN}${BOLD}  Installation complete!${RESET}"
-    echo ""
-    echo "  To get started:"
-    echo "    1. Restart your shell or run:  source ~/.zshrc  (or your shell's rc file)"
-    echo "    2. Run:  oobo setup"
-    echo ""
-    echo "  Quick reference:"
-    echo "    oobo sessions list    — view AI chat sessions"
-    echo "    oobo dash             — check configuration"
-    echo "    oobo alias install    — make 'git' use oobo transparently"
-    echo ""
+    # Make oobo available in this shell session immediately
+    export PATH="${INSTALL_DIR}:$PATH"
+
+    if [[ "$AGENT_MODE" == "1" ]]; then
+        # Agent mode: output structured JSON result
+        cat <<EOF
+{"status":"ok","version":"${version}","binary":"${INSTALL_DIR}/${BINARY_NAME}","platform":"${platform}"}
+EOF
+    else
+        echo ""
+        echo -e "${GREEN}${BOLD}  Installation complete!${RESET}"
+        echo ""
+        echo "  To get started:"
+        echo "    1. Restart your shell or run:  source ~/.zshrc  (or your shell's rc file)"
+        echo "    2. Run:  oobo setup"
+        echo ""
+        echo "  Quick reference:"
+        echo "    oobo sessions list    — view AI chat sessions"
+        echo "    oobo dash             — check configuration"
+        echo "    oobo alias install    — make 'git' use oobo transparently"
+        echo ""
+    fi
 }
 
 main "$@"

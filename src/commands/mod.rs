@@ -1,3 +1,17 @@
+pub mod agent;
+pub mod anchors;
+pub mod auth;
+pub mod card;
+pub mod check;
 pub mod dash;
+pub mod ignore;
+pub mod index;
+pub mod projects;
+pub mod scan;
 pub mod sessions;
+pub mod share;
 pub mod ship;
+pub mod sources;
+pub mod stats;
+pub mod sync;
+pub mod update;
