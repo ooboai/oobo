@@ -16,6 +16,7 @@ pub struct HookEvent {
     pub agent: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// Captures unknown fields from hook payloads for forward compatibility.
     #[serde(flatten)]
     #[allow(dead_code)]
     pub extra: serde_json::Value,

@@ -87,26 +87,6 @@ pub fn all_sessions() -> Result<Vec<Session>, String> {
     Ok(sessions)
 }
 
-/// Find a session by ID prefix, searching current project first, then all.
-#[allow(dead_code)]
-pub fn find_session(id_prefix: &str) -> Result<Session, String> {
-    let project_root = get_project_root();
-
-    if let Ok(sessions) = sessions_for_project(&project_root) {
-        if let Some(s) = sessions
-            .iter()
-            .find(|s| s.session_id.starts_with(id_prefix))
-        {
-            return Ok(s.clone());
-        }
-    }
-
-    let all = all_sessions()?;
-    all.into_iter()
-        .find(|s| s.session_id.starts_with(id_prefix))
-        .ok_or_else(|| format!("session not found: {id_prefix}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

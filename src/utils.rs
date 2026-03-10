@@ -3,14 +3,16 @@ use std::path::Path;
 use crate::tools::cursor::transcript::Message;
 
 pub const MAX_SESSION_NAME_LEN: usize = 60;
-#[allow(dead_code)]
-pub const MAX_TRANSCRIPT_MESSAGES: u32 = 500;
 
 /// Normalize any epoch timestamp (seconds, milliseconds, or microseconds) to seconds.
+/// Thresholds use strict `>=` to correctly classify boundary values:
+/// - >= 1e15 → microseconds
+/// - >= 1e12 → milliseconds (year ~2001 in seconds, but all real ms timestamps are >= ~1e12)
+/// - otherwise → seconds
 pub fn to_epoch_secs(ts: i64) -> i64 {
-    if ts > 1_000_000_000_000_000 {
+    if ts >= 1_000_000_000_000_000 {
         ts / 1_000_000
-    } else if ts > 1_000_000_000_000 {
+    } else if ts >= 1_000_000_000_000 {
         ts / 1_000
     } else {
         ts
@@ -282,5 +284,16 @@ mod tests {
     #[test]
     fn test_to_epoch_secs_zero() {
         assert_eq!(to_epoch_secs(0), 0);
+    }
+
+    #[test]
+    fn test_to_epoch_secs_boundary_milliseconds() {
+        // Exactly 1e12 is a millisecond timestamp (year ~2001), not seconds
+        assert_eq!(to_epoch_secs(1_000_000_000_000), 1_000_000_000);
+    }
+
+    #[test]
+    fn test_to_epoch_secs_boundary_microseconds() {
+        assert_eq!(to_epoch_secs(1_000_000_000_000_000), 1_000_000_000);
     }
 }

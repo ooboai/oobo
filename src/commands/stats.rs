@@ -5,7 +5,7 @@ use crate::db::Db;
 pub fn run(
     project: Option<String>,
     tool: Option<String>,
-    json: bool,
+    agent: bool,
     since: Option<String>,
 ) -> Result<(), String> {
     let db = Db::open()?;
@@ -31,7 +31,7 @@ pub fn run(
         )
     };
 
-    if json {
+    if agent {
         print_json(&stats, &project, &tool);
         return Ok(());
     }

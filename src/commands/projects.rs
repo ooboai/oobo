@@ -3,19 +3,19 @@ use std::io::IsTerminal;
 use crate::cli::ProjectAction;
 use crate::db::Db;
 
-pub fn run(action: ProjectAction) -> Result<(), String> {
+pub fn run(action: ProjectAction, agent: bool) -> Result<(), String> {
     let db = Db::open()?;
 
     match action {
-        ProjectAction::List { json } => {
-            if json {
+        ProjectAction::List => {
+            if agent {
                 list_projects_json(&db)
             } else {
                 list_projects(&db)
             }
         }
-        ProjectAction::Show { name, json } => {
-            if json {
+        ProjectAction::Show { name } => {
+            if agent {
                 show_project_json(&db, &name)
             } else {
                 show_project(&db, &name)
@@ -75,11 +75,9 @@ fn list_projects(db: &Db) -> Result<(), String> {
         displays.push(crate::tui::projects::ProjectDisplay {
             name: p.name.clone(),
             path: p.path.clone(),
-            slug: p.id.clone(),
             tools: tools.join(", "),
             session_count,
             tokens: stats.total_input_tokens + stats.total_output_tokens,
-            duration_secs: stats.total_duration_secs,
             input_tokens: stats.total_input_tokens,
             output_tokens: stats.total_output_tokens,
             sessions: session_displays,

@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::config::Config;
 use crate::db::Db;
 
-pub fn run(fix: bool, json: bool) -> Result<(), String> {
+pub fn run(fix: bool, agent: bool) -> Result<(), String> {
     let mut checks: Vec<CheckResult> = vec![
         check_config(),
         check_db(),
@@ -31,7 +31,7 @@ pub fn run(fix: bool, json: bool) -> Result<(), String> {
         }
     }
 
-    if json {
+    if agent {
         let items: Vec<serde_json::Value> = checks
             .iter()
             .map(|c| {

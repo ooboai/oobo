@@ -115,7 +115,7 @@ fn is_jsonl(path: &Path) -> bool {
     path.extension().is_some_and(|ext| ext == "jsonl")
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn read_jsonl_transcript(path: &Path, max_messages: u32) -> String {
     let file = match fs::File::open(path) {
         Ok(f) => f,
@@ -153,27 +153,6 @@ fn read_jsonl_transcript(path: &Path, max_messages: u32) -> String {
     }
 
     output.join("\n")
-}
-
-#[allow(dead_code)]
-fn read_txt_transcript(path: &Path, max_messages: u32) -> String {
-    match fs::read_to_string(path) {
-        Ok(text) => {
-            let lines: Vec<&str> = text.lines().collect();
-            let max_lines = (max_messages as usize) * 50; // rough estimate
-            if lines.len() > max_lines {
-                let mut result: String = lines[..max_lines].join("\n");
-                result.push_str(&format!(
-                    "\n\n... ({} more lines truncated)",
-                    lines.len() - max_lines
-                ));
-                result
-            } else {
-                text
-            }
-        }
-        Err(e) => format!("(error reading transcript: {e})"),
-    }
 }
 
 fn parse_jsonl_messages(path: &Path) -> Vec<Message> {

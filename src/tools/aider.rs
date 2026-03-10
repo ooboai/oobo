@@ -177,12 +177,6 @@ fn days_from_epoch(y: i32, m: u32, d: u32) -> Option<i64> {
     Some(civil)
 }
 
-#[allow(dead_code)]
-pub fn all_sessions() -> Result<Vec<Session>, String> {
-    let project_root = crate::tools::cursor::get_project_root();
-    sessions_for_project(&project_root)
-}
-
 pub mod transcript {
     use super::*;
 
@@ -296,7 +290,6 @@ pub mod analytics {
     }
 
     struct AiderEvent {
-        #[allow(dead_code)]
         time_secs: i64,
         model: Option<String>,
         prompt_tokens: u64,

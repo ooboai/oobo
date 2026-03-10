@@ -195,16 +195,14 @@ fn parse_daily_activity(
         if let Some((epoch_str, author)) = line.split_once('|') {
             if let Ok(epoch) = epoch_str.parse::<i64>() {
                 let date = epoch_to_date(epoch);
-                current_date = Some(date);
                 current_author = Some(author.to_string());
 
-                let entry = daily_map
-                    .entry(current_date.clone().unwrap())
-                    .or_insert_with(|| DailyActivity {
-                        project_id: project_id.to_string(),
-                        date: current_date.clone().unwrap(),
-                        ..Default::default()
-                    });
+                let entry = daily_map.entry(date).or_insert_with_key(|d| DailyActivity {
+                    project_id: project_id.to_string(),
+                    date: d.clone(),
+                    ..Default::default()
+                });
+                current_date = Some(entry.date.clone());
                 entry.commits += 1;
                 if !entry.authors.contains(&author.to_string()) {
                     entry.authors.push(author.to_string());

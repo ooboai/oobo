@@ -54,6 +54,9 @@ fn fetch_latest_version() -> Result<String, String> {
 
 fn install_latest(tag: &str) -> Result<(), String> {
     let target = current_target();
+    if target == "unknown" {
+        return Err("prebuilt binaries are not available for this platform".to_string());
+    }
     let asset_name = format!("oobo-{target}.tar.gz");
     let url = format!("https://github.com/{REPO}/releases/download/{tag}/{asset_name}");
 
@@ -129,16 +132,11 @@ fn current_target() -> &'static str {
     {
         "aarch64-unknown-linux-gnu"
     }
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    {
-        "x86_64-pc-windows-msvc"
-    }
     #[cfg(not(any(
         all(target_os = "macos", target_arch = "aarch64"),
         all(target_os = "macos", target_arch = "x86_64"),
         all(target_os = "linux", target_arch = "x86_64"),
         all(target_os = "linux", target_arch = "aarch64"),
-        all(target_os = "windows", target_arch = "x86_64"),
     )))]
     {
         "unknown"

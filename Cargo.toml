@@ -10,6 +10,7 @@ homepage = "https://oobo.ai"
 readme = "README.md"
 keywords = ["git", "ai", "developer-tools", "attribution", "cli"]
 categories = ["command-line-utilities", "development-tools"]
+documentation = "https://docs.rs/oobo"
 
 [lib]
 name = "oobo"
@@ -34,9 +35,9 @@ console = "0.15"
 ratatui = "0.30"
 crossterm = "0.28"
 tiktoken-rs = "0.6"
-libc = "0.2.182"
-thiserror = "2.0.18"
-regex = "1.12.3"
+libc = "0.2"
+thiserror = "2"
+regex = "1"
 
 [dev-dependencies]
 tempfile = "3"

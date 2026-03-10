@@ -483,7 +483,7 @@ fn test_oobo_anchors_command() {
         .unwrap();
 
     let output = Command::new(oobo_binary())
-        .args(["anchors", "--json"])
+        .args(["anchors", "--agent"])
         .current_dir(tmp.path())
         .output()
         .unwrap();
@@ -491,7 +491,7 @@ fn test_oobo_anchors_command() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("[]") || stdout.is_empty() || output.status.success(),
-        "oobo anchors --json should succeed or return empty on fresh repo"
+        "oobo anchors --agent should succeed or return empty on fresh repo"
     );
 }
 
@@ -563,16 +563,16 @@ fn test_e2e_commit_creates_anchor() {
     );
 
     let log_output = Command::new(oobo_binary())
-        .args(["anchors", "--json"])
+        .args(["anchors", "--agent"])
         .current_dir(tmp.path())
         .output()
         .unwrap();
 
     let stdout = String::from_utf8_lossy(&log_output.stdout);
-    assert!(log_output.status.success(), "oobo anchors --json failed");
+    assert!(log_output.status.success(), "oobo anchors --agent failed");
 
     let entries: Vec<serde_json::Value> =
-        serde_json::from_str(&stdout).expect("oobo anchors --json should return valid JSON");
+        serde_json::from_str(&stdout).expect("oobo anchors --agent should return valid JSON");
 
     assert_eq!(entries.len(), 1, "should have exactly 1 commit");
     assert_eq!(entries[0]["message"], "initial commit");

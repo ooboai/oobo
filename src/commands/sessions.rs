@@ -3,34 +3,24 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::session;
 
-pub fn run(cfg: &Config, action: SessionAction) -> Result<(), String> {
+pub fn run(cfg: &Config, action: SessionAction, agent: bool) -> Result<(), String> {
     match action {
-        SessionAction::List {
-            all,
-            json,
-            tool,
-            limit,
-        } => {
-            if json {
+        SessionAction::List { all, tool, limit } => {
+            if agent {
                 list_json(cfg, all, tool.as_deref(), limit)
             } else {
                 list_tui(cfg, all)
             }
         }
-        SessionAction::Show { id, json } => {
-            if json {
+        SessionAction::Show { id } => {
+            if agent {
                 show_json(&id)
             } else {
                 let s = session::find_session_any(&id)?;
                 crate::tui::sessions::run_show(s)
             }
         }
-        SessionAction::Search {
-            query,
-            all,
-            json,
-            limit,
-        } => search(&query, cfg, all, json, limit),
+        SessionAction::Search { query, all, limit } => search(&query, cfg, all, agent, limit),
         SessionAction::Export { id, format, out } => export(&id, &format, out.as_deref()),
     }
 }
@@ -124,7 +114,7 @@ fn list_json(
     Ok(())
 }
 
-fn search(query: &str, cfg: &Config, all: bool, json: bool, limit: usize) -> Result<(), String> {
+fn search(query: &str, cfg: &Config, all: bool, agent: bool, limit: usize) -> Result<(), String> {
     let sessions = if all {
         session::all_sessions(cfg)
     } else {
@@ -177,7 +167,7 @@ fn search(query: &str, cfg: &Config, all: bool, json: bool, limit: usize) -> Res
 
     matches.truncate(limit);
 
-    if json {
+    if agent {
         let items: Vec<serde_json::Value> = matches
             .iter()
             .map(|(s, st, matched_on)| {

@@ -1,7 +1,7 @@
 use crate::db::Db;
 use crate::tui;
 
-pub fn run(json: bool, out: Option<String>) -> Result<(), String> {
+pub fn run(agent: bool, out: Option<String>) -> Result<(), String> {
     let db = Db::open()?;
 
     let global = db.aggregate_stats_global()?;
@@ -61,7 +61,7 @@ pub fn run(json: bool, out: Option<String>) -> Result<(), String> {
             .collect(),
     };
 
-    if json {
+    if agent {
         print_json(&card);
     } else {
         print_terminal(&card);
@@ -71,7 +71,7 @@ pub fn run(json: bool, out: Option<String>) -> Result<(), String> {
     let path = out.unwrap_or_else(|| "oobo-card.md".to_string());
     std::fs::write(&path, &md).map_err(|e| format!("cannot write {path}: {e}"))?;
 
-    if !json {
+    if !agent {
         eprintln!("\n  saved to {path}");
     }
 

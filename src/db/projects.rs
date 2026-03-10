@@ -128,7 +128,7 @@ impl Db {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn update_project_tools(&self, id: &str, tools: &[String]) -> Result<(), String> {
         let tools_json = serde_json::to_string(tools).unwrap_or_else(|_| "[]".to_string());
         self.conn

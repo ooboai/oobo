@@ -299,6 +299,7 @@ fn extract_files_touched(conn: &rusqlite::Connection, session_id: &str) -> Vec<S
 
 // Legacy schema (pre v1.2)
 
+/// Legacy token/cost data carried for test assertions; production callers discard it.
 #[allow(dead_code)]
 struct SessionMeta {
     message_count: u32,

@@ -100,9 +100,6 @@ pub enum Command {
         /// Number of commits to show
         #[arg(short = 'n', long, default_value = "10")]
         limit: usize,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
     },
 
     /// Share a session (redacted) -- save locally or upload
@@ -189,9 +186,6 @@ pub enum Command {
         /// Filter by tool (cursor, claude, windsurf, etc.)
         #[arg(long)]
         tool: Option<String>,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
         /// Show stats since this date or duration (e.g. 7d, 30d, 2026-02-01)
         #[arg(long)]
         since: Option<String>,
@@ -206,9 +200,6 @@ pub enum Command {
                        oobo card --agent          JSON output"
     )]
     Card {
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
         /// Save markdown to a custom file path (default: oobo-card.md)
         #[arg(long)]
         out: Option<String>,
@@ -306,9 +297,6 @@ pub enum Command {
         /// Auto-fix issues that can be repaired
         #[arg(long)]
         fix: bool,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
     },
 
     /// Check for updates or self-update
@@ -334,18 +322,11 @@ pub enum Command {
 #[derive(Subcommand, Debug)]
 pub enum ProjectAction {
     /// List all tracked projects
-    List {
-        /// Output as JSON (non-interactive, agent-friendly)
-        #[arg(long)]
-        json: bool,
-    },
+    List,
     /// Show details for a specific project
     Show {
         /// Project name, slug, or path
         name: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Remove a project from tracking
     Forget {
@@ -361,9 +342,6 @@ pub enum SessionAction {
         /// Show sessions from all projects
         #[arg(long)]
         all: bool,
-        /// Output as JSON (non-interactive, agent-friendly)
-        #[arg(long)]
-        json: bool,
         /// Filter by tool (cursor, claude, gemini, etc.)
         #[arg(long)]
         tool: Option<String>,
@@ -375,9 +353,6 @@ pub enum SessionAction {
     Show {
         /// Session ID (prefix match supported)
         id: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Search sessions by keyword (matches name, first message, and transcript)
     Search {
@@ -386,9 +361,6 @@ pub enum SessionAction {
         /// Search across all projects
         #[arg(long)]
         all: bool,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
         /// Max results (default: 20)
         #[arg(long, short = 'n', default_value = "20")]
         limit: usize,
@@ -543,41 +515,14 @@ pub fn route(cfg: Config) -> Result<i32, String> {
         }
         Some(Command::Sessions { action, all }) => {
             let resolved = match action {
-                Some(SessionAction::List {
-                    all: a,
-                    json,
-                    tool,
-                    limit,
-                }) => SessionAction::List {
-                    all: a,
-                    json: json || agent_mode,
-                    tool,
-                    limit,
-                },
-                Some(SessionAction::Show { id, json }) => SessionAction::Show {
-                    id,
-                    json: json || agent_mode,
-                },
-                Some(SessionAction::Search {
-                    query,
-                    all: a,
-                    json,
-                    limit,
-                }) => SessionAction::Search {
-                    query,
-                    all: a,
-                    json: json || agent_mode,
-                    limit,
-                },
-                Some(other) => other,
+                Some(a) => a,
                 None => SessionAction::List {
                     all,
-                    json: agent_mode,
                     tool: None,
                     limit: None,
                 },
             };
-            crate::commands::sessions::run(&cfg, resolved)?;
+            crate::commands::sessions::run(&cfg, resolved, agent_mode)?;
             Ok(0)
         }
         Some(Command::Alias { action }) => {
@@ -594,26 +539,18 @@ pub fn route(cfg: Config) -> Result<i32, String> {
         }
         Some(Command::Projects { action }) => {
             let resolved = match action {
-                Some(ProjectAction::List { json }) => ProjectAction::List {
-                    json: json || agent_mode,
-                },
-                Some(ProjectAction::Show { name, json }) => ProjectAction::Show {
-                    name,
-                    json: json || agent_mode,
-                },
-                Some(other) => other,
-                None => ProjectAction::List { json: agent_mode },
+                Some(a) => a,
+                None => ProjectAction::List,
             };
-            crate::commands::projects::run(resolved)?;
+            crate::commands::projects::run(resolved, agent_mode)?;
             Ok(0)
         }
         Some(Command::Stats {
             project,
             tool,
-            json,
             since,
         }) => {
-            crate::commands::stats::run(project, tool, json || agent_mode, since)?;
+            crate::commands::stats::run(project, tool, agent_mode, since)?;
             Ok(0)
         }
         Some(Command::Scan { project, quiet }) => {
@@ -649,12 +586,12 @@ pub fn route(cfg: Config) -> Result<i32, String> {
             crate::commands::share::run(&cfg, &session_id, out, agent_mode)?;
             Ok(0)
         }
-        Some(Command::Anchors { limit, json }) => {
-            crate::commands::anchors::run(&cfg, limit, json || agent_mode)?;
+        Some(Command::Anchors { limit }) => {
+            crate::commands::anchors::run(&cfg, limit, agent_mode)?;
             Ok(0)
         }
-        Some(Command::Inspect { fix, json }) => {
-            crate::commands::check::run(fix, json || agent_mode)?;
+        Some(Command::Inspect { fix }) => {
+            crate::commands::check::run(fix, agent_mode)?;
             Ok(0)
         }
         Some(Command::Sync) => {
@@ -673,8 +610,8 @@ pub fn route(cfg: Config) -> Result<i32, String> {
             crate::commands::ignore::run_unignore(&cfg)?;
             Ok(0)
         }
-        Some(Command::Card { json, out }) => {
-            crate::commands::card::run(json || agent_mode, out)?;
+        Some(Command::Card { out }) => {
+            crate::commands::card::run(agent_mode, out)?;
             Ok(0)
         }
         Some(Command::Version) => {

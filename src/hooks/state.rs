@@ -61,7 +61,17 @@ fn sessions_dir(project_root: &str) -> PathBuf {
 }
 
 fn session_path(project_root: &str, session_id: &str) -> PathBuf {
-    sessions_dir(project_root).join(format!("{session_id}.json"))
+    let sanitized = sanitize_session_id(session_id);
+    sessions_dir(project_root).join(format!("{sanitized}.json"))
+}
+
+/// Reject anything that isn't a plausible session ID (UUID-like: alphanumeric + hyphens).
+fn sanitize_session_id(id: &str) -> &str {
+    if !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+        id
+    } else {
+        "invalid"
+    }
 }
 
 /// Resolve the worktree root for the current directory.
@@ -306,5 +316,28 @@ mod tests {
         assert!(ids.contains(&"s1"));
         assert!(ids.contains(&"s3"));
         assert!(!ids.contains(&"s2"));
+    }
+
+    #[test]
+    fn test_sanitize_session_id_allows_valid() {
+        assert_eq!(
+            sanitize_session_id("normal-session-id"),
+            "normal-session-id"
+        );
+        assert_eq!(sanitize_session_id("abc-123-def"), "abc-123-def");
+        assert_eq!(
+            sanitize_session_id("2c97dced-3950-482e-b101-9eb7d1b18cf5"),
+            "2c97dced-3950-482e-b101-9eb7d1b18cf5"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_session_id_blocks_traversal() {
+        assert_eq!(sanitize_session_id("../../../etc/passwd"), "invalid");
+        assert_eq!(sanitize_session_id("../../secret"), "invalid");
+        assert_eq!(sanitize_session_id("foo/bar"), "invalid");
+        assert_eq!(sanitize_session_id("../"), "invalid");
+        assert_eq!(sanitize_session_id(".."), "invalid");
+        assert_eq!(sanitize_session_id(""), "invalid");
     }
 }

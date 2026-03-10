@@ -1,7 +1,4 @@
-use std::path::PathBuf;
-
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)]
 pub enum OoboError {
     #[error("database: {0}")]
     Db(#[from] rusqlite::Error),
@@ -14,18 +11,6 @@ pub enum OoboError {
 
     #[error("config: {0}")]
     Config(String),
-
-    #[error("git: {0}")]
-    Git(String),
-
-    #[error("tool ({tool}): {message}")]
-    Tool { tool: String, message: String },
-
-    #[error("not found: {0}")]
-    NotFound(String),
-
-    #[error("path: {0}")]
-    Path(PathBuf),
 
     #[error("{0}")]
     Other(String),

@@ -33,7 +33,7 @@ This policy applies to:
 
 - The oobo CLI binary
 - Official oobo GitHub repositories
-- The install script at oobo.ai/install.sh
+- The install script at `https://oobo.ai/install.sh`
 
 ### Out of scope
 
@@ -49,7 +49,7 @@ This policy applies to:
 - **Secret redaction** — session content is scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before any sharing or sync
 - **Config protection** — files containing API keys are automatically set to `0600` permissions on Unix
 
-For details on exactly what oobo reads from each tool, see [DATA-SOURCES.md](DATA-SOURCES.md).
+Each tool integration reads only local session metadata (timestamps, model names, token counts) from well-known paths. oobo never accesses credentials, browsing history, or file contents outside of AI tool storage directories.
 
 ## Safe Harbor
 

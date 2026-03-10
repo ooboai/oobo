@@ -67,11 +67,6 @@ pub struct ToolConfig {
     pub api_key: String,
 }
 
-#[allow(dead_code)]
-pub type CursorConfig = ToolConfig;
-#[allow(dead_code)]
-pub type ClaudeConfig = ToolConfig;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelemetryConfig {
     #[serde(default = "default_true")]
@@ -246,10 +241,12 @@ impl Config {
             || !self.codex.api_key.is_empty()
             || !self.gemini.api_key.is_empty()
             || !self.opencode.api_key.is_empty()
+            || !self.aider.api_key.is_empty()
+            || !self.trae.api_key.is_empty()
     }
 
     /// True if the server is configured with a non-default API key.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn is_configured(&self) -> bool {
         !self.server.api_key.is_empty()
     }
@@ -301,35 +298,6 @@ impl Config {
                 .unwrap_or_else(|_| p.clone());
             c == canonical
         })
-    }
-
-    /// Add a repo path to the ignored list and save (legacy global config).
-    #[allow(dead_code)]
-    pub fn ignore_repo(&mut self, project_root: &str) -> Result<(), String> {
-        let canonical = std::fs::canonicalize(project_root)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| project_root.to_string());
-        if !self.is_ignored(&canonical) {
-            self.ignored_repos.push(canonical);
-            self.save()
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Remove a repo path from the ignored list and save (legacy global config).
-    #[allow(dead_code)]
-    pub fn unignore_repo(&mut self, project_root: &str) -> Result<(), String> {
-        let canonical = std::fs::canonicalize(project_root)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| project_root.to_string());
-        self.ignored_repos.retain(|p| {
-            let c = std::fs::canonicalize(p)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| p.clone());
-            c != canonical
-        });
-        self.save()
     }
 }
 
@@ -393,11 +361,11 @@ mod tests {
                 real_git_path: "/usr/bin/git".into(),
                 alias_enabled: true,
             },
-            cursor: CursorConfig {
+            cursor: ToolConfig {
                 enabled: false,
                 api_key: String::new(),
             },
-            claude: ClaudeConfig {
+            claude: ToolConfig {
                 enabled: true,
                 api_key: String::new(),
             },
@@ -524,6 +492,18 @@ mod tests {
         let mut cfg = Config::default();
         assert!(!cfg.has_any_key());
         cfg.opencode.api_key = "sk-test".to_string();
+        assert!(cfg.has_any_key());
+    }
+
+    #[test]
+    fn test_has_any_key_includes_aider_and_trae() {
+        let mut cfg = Config::default();
+        assert!(!cfg.has_any_key());
+        cfg.aider.api_key = "sk-aider".to_string();
+        assert!(cfg.has_any_key());
+
+        let mut cfg = Config::default();
+        cfg.trae.api_key = "sk-trae".to_string();
         assert!(cfg.has_any_key());
     }
 }

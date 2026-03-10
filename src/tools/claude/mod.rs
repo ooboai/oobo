@@ -91,15 +91,6 @@ pub fn all_sessions() -> Result<Vec<Session>, String> {
     Ok(sessions)
 }
 
-/// Find a Claude session by ID prefix.
-#[allow(dead_code)]
-pub fn find_session(id_prefix: &str) -> Result<Session, String> {
-    let all = all_sessions()?;
-    all.into_iter()
-        .find(|s| s.session_id.starts_with(id_prefix))
-        .ok_or_else(|| format!("Claude session not found: {id_prefix}"))
-}
-
 /// Read the project path from the first JSONL entry's `cwd` field.
 fn project_path_from_dir(dir: &Path) -> Option<String> {
     let entries = fs::read_dir(dir).ok()?;

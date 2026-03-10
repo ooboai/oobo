@@ -224,8 +224,8 @@ fn resolve_clone_dir(args: &[&str]) -> Option<String> {
 fn maybe_print_agent_hint(args: &[&str]) {
     let cmd = args.first().copied().unwrap_or("");
     let hint = match cmd {
-        "log" => Some("oobo anchors --json"),
-        "shortlog" => Some("oobo anchors --json"),
+        "log" => Some("oobo anchors --agent"),
+        "shortlog" => Some("oobo anchors --agent"),
         _ => None,
     };
     if let Some(enriched_cmd) = hint {

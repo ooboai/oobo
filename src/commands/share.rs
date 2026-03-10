@@ -31,7 +31,7 @@ pub fn run(
     cfg: &Config,
     session_id: &str,
     output: Option<String>,
-    json: bool,
+    agent: bool,
 ) -> Result<(), String> {
     let session = session::find_session_any(session_id)?;
 
@@ -90,7 +90,7 @@ pub fn run(
 
     if let Some(ref path) = output {
         std::fs::write(path, &json_str).map_err(|e| format!("write {path}: {e}"))?;
-        if !json {
+        if !agent {
             eprintln!(
                 "shared session {} → {}",
                 &session.session_id[..session.session_id.len().min(8)],
@@ -100,11 +100,11 @@ pub fn run(
     }
 
     if !cfg.server.api_key.is_empty() && output.is_none() {
-        return upload_share(cfg, &json_str, json);
+        return upload_share(cfg, &json_str, agent);
     }
 
     if output.is_none() {
-        if json {
+        if agent {
             println!("{json_str}");
         } else {
             eprintln!(
@@ -116,7 +116,7 @@ pub fn run(
         }
     }
 
-    if let (true, Some(out_path)) = (json, &output) {
+    if let (true, Some(out_path)) = (agent, &output) {
         let resp = serde_json::json!({
             "status": "saved",
             "session_id": session.session_id,
@@ -136,7 +136,7 @@ fn stats_model(db: &Option<crate::db::Db>, session_id: &str, source: &str) -> Op
         .and_then(|s| s.model)
 }
 
-fn upload_share(cfg: &Config, json_body: &str, json_output: bool) -> Result<(), String> {
+fn upload_share(cfg: &Config, json_body: &str, agent: bool) -> Result<(), String> {
     let url = format!("{}/api/v1/shares", cfg.server.url.trim_end_matches('/'));
 
     let client = reqwest::blocking::Client::builder()
@@ -160,7 +160,7 @@ fn upload_share(cfg: &Config, json_body: &str, json_output: bool) -> Result<(), 
         return Err(format!("server returned HTTP {status}: {body}"));
     }
 
-    if json_output {
+    if agent {
         println!("{body}");
     } else if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
         if let Some(share_url) = parsed.get("url").and_then(|u| u.as_str()) {

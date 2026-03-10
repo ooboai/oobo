@@ -7,6 +7,7 @@ pub struct Session {
     pub created_at: Option<i64>,
     pub updated_at: Option<i64>,
     pub project_path: String,
+    /// Retained for future workspace-aware features.
     #[allow(dead_code)]
     pub workspace_dir: String,
     pub source: String,

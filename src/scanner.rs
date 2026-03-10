@@ -165,40 +165,6 @@ pub fn scan_project(db: &Db, cfg: &Config, project_path: &str) -> Result<ScanRes
     Ok(result)
 }
 
-/// Quick scan: only re-scan projects that haven't been scanned recently.
-#[allow(dead_code)]
-pub fn quick_scan(db: &Db, cfg: &Config, max_age_secs: i64) -> Result<ScanResult, String> {
-    let now = chrono::Utc::now().timestamp();
-    let projects = db.list_projects()?;
-
-    let mut total = ScanResult::default();
-
-    for project in &projects {
-        if now - project.last_scanned_at < max_age_secs {
-            continue;
-        }
-        let sub = scan_project(db, cfg, &project.path)?;
-        total.projects_found += sub.projects_found;
-        total.sessions_found += sub.sessions_found;
-    }
-
-    let existing_paths: HashSet<String> = projects.iter().map(|p| p.path.clone()).collect();
-    let all_sessions = collect_all_sessions(cfg);
-    let new_paths: HashSet<String> = all_sessions
-        .iter()
-        .map(|s| s.project_path.clone())
-        .filter(|p| !p.is_empty() && !existing_paths.contains(p))
-        .collect();
-
-    for path in &new_paths {
-        let sub = scan_project(db, cfg, path)?;
-        total.projects_found += sub.projects_found;
-        total.sessions_found += sub.sessions_found;
-    }
-
-    Ok(total)
-}
-
 #[derive(Debug, Default)]
 pub struct ScanResult {
     pub projects_found: usize,

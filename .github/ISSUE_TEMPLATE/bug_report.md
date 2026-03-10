@@ -26,7 +26,7 @@ A clear and concise description of what you expected to happen.
 **Additional context**
 Add any other context, logs, or screenshots about the problem here.
 
-**`oobo check` output**
+**`oobo inspect` output**
 ```
-<paste output of `oobo check` here>
+<paste output of `oobo inspect` here>
 ```

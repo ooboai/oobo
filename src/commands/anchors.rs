@@ -5,12 +5,12 @@ use crate::db::Db;
 ///
 /// `oobo anchors` shows recent commits annotated with linked sessions,
 /// agent/human attribution, and token counts where available.
-pub fn run(cfg: &Config, limit: usize, json: bool) -> Result<(), String> {
+pub fn run(cfg: &Config, limit: usize, agent: bool) -> Result<(), String> {
     let db = Db::open()?;
 
     let commits = recent_commits_with_anchors(cfg, &db, limit)?;
 
-    if json {
+    if agent {
         let j = serde_json::to_string_pretty(&commits).map_err(|e| format!("json: {e}"))?;
         println!("{j}");
         return Ok(());

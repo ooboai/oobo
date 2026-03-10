@@ -36,12 +36,9 @@ fn sessions_from_cascade() -> Vec<CascadeSession> {
                         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                         .map(|d| d.as_millis() as i64);
 
-                    let size = path.metadata().ok().map(|m| m.len()).unwrap_or(0);
-
                     sessions.push(CascadeSession {
                         session_id: stem.to_string(),
                         updated_at: mtime,
-                        file_size: size,
                     });
                 }
             }
@@ -50,11 +47,9 @@ fn sessions_from_cascade() -> Vec<CascadeSession> {
     sessions
 }
 
-#[allow(dead_code)]
 struct CascadeSession {
     session_id: String,
     updated_at: Option<i64>,
-    file_size: u64,
 }
 
 /// Try to resolve a session's workspace/project from Windsurf workspace storage.

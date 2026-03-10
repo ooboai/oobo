@@ -107,7 +107,7 @@ impl ToolRegistry {
     }
 
     /// All (name, display_name) pairs — single source of truth for tool lists.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn tool_names(&self) -> Vec<(&'static str, &'static str)> {
         self.tools
             .iter()

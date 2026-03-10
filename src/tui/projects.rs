@@ -10,15 +10,12 @@ use crate::db::stats::StatsRow;
 use crate::db::Db;
 use crate::session;
 
-#[allow(dead_code)]
 pub struct ProjectDisplay {
     pub name: String,
     pub path: String,
-    pub slug: String,
     pub tools: String,
     pub session_count: i64,
     pub tokens: i64,
-    pub duration_secs: i64,
     pub sessions: Vec<SessionDisplay>,
     pub input_tokens: i64,
     pub output_tokens: i64,

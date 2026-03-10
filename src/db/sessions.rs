@@ -80,7 +80,7 @@ impl Db {
         collect_rows(rows)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn list_sessions_by_source(&self, source: &str) -> Result<Vec<SessionRow>, String> {
         let mut stmt = self
             .conn
@@ -171,7 +171,7 @@ impl Db {
         collect_rows(rows)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn delete_sessions_by_project(&self, project_id: &str) -> Result<(), String> {
         self.conn
             .execute(

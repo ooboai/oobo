@@ -41,7 +41,7 @@ impl Db {
         Ok(db)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn open_in_memory() -> Result<Self, String> {
         let conn =
             Connection::open_in_memory().map_err(|e| format!("cannot open in-memory db: {e}"))?;

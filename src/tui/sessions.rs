@@ -12,9 +12,9 @@ use crate::db::Db;
 use crate::session;
 use crate::tools::cursor::Session;
 
-#[allow(dead_code)]
 struct SessionRow {
     session: Session,
+    #[allow(dead_code)]
     msg_count: u32,
     stats: Option<StatsRow>,
 }

@@ -64,7 +64,7 @@ detect_platform() {
             fi
             ;;
         MINGW*|MSYS*|CYGWIN*)
-            os="pc-windows-msvc"
+            error "Windows is not yet supported. Build from source: https://github.com/ooboai/oobo#build-from-source"
             ;;
         *)
             error "Unsupported operating system: $os"
@@ -194,6 +194,10 @@ main() {
     trap 'rm -rf "$tmpdir"' EXIT
 
     download "$url" "${tmpdir}/${archive_name}"
+
+    if [[ ! -s "${tmpdir}/${archive_name}" ]]; then
+        error "Download failed or produced an empty file. Check the URL: ${url}"
+    fi
 
     info "Extracting..."
     tar -xzf "${tmpdir}/${archive_name}" -C "$tmpdir"

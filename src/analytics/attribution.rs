@@ -490,7 +490,8 @@ mod tests {
     #[test]
     fn test_normalize_epoch_boundary() {
         assert_eq!(normalize_epoch(1_000_000_000_001), 1_000_000_000);
-        assert_eq!(normalize_epoch(1_000_000_000_000), 1_000_000_000_000);
+        // 1e12 is now correctly classified as milliseconds
+        assert_eq!(normalize_epoch(1_000_000_000_000), 1_000_000_000);
         assert_eq!(normalize_epoch(0), 0);
     }
 

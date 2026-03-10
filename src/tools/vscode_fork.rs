@@ -1,18 +1,7 @@
-#![allow(dead_code)]
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::tools::cursor::Session;
-
-/// Configuration for a VS Code fork (Cursor, Windsurf, Trae, etc.).
-pub struct ForkConfig {
-    pub app_name: &'static str,
-    #[allow(dead_code)]
-    pub dot_dir: &'static str,
-    pub composer_keys: &'static [&'static str],
-    pub source: &'static str,
-}
 
 /// Platform-specific application support directory.
 pub fn support_dir(app_name: &str) -> Option<PathBuf> {
@@ -36,14 +25,6 @@ pub fn support_dir(app_name: &str) -> Option<PathBuf> {
 
 fn workspace_storage_dir(app_name: &str) -> Option<PathBuf> {
     support_dir(app_name).map(|d| d.join("User/workspaceStorage"))
-}
-
-fn projects_dir(dot_dir: &str) -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(format!(".{dot_dir}/projects")))
-}
-
-fn path_to_slug(path: &str) -> String {
-    path.trim_start_matches('/').replace('/', "-")
 }
 
 // ── Workspace scanning ──────────────────────────────────────────────────────
@@ -125,6 +106,7 @@ fn normalize_path(p: &str) -> String {
 // ── Composer extraction ─────────────────────────────────────────────────────
 
 /// Extract sessions from state.vscdb, trying each composer key in order.
+#[allow(dead_code)]
 pub fn extract_sessions(
     ws_dir: &Path,
     project_path: &str,
@@ -206,108 +188,9 @@ fn try_extract_with_key(
     sessions
 }
 
-// ── Transcript helpers ──────────────────────────────────────────────────────
-
-/// Find a transcript file in the fork's projects directory.
-pub fn find_transcript_path(
-    dot_dir: &str,
-    project_path: &str,
-    session_id: &str,
-) -> Option<PathBuf> {
-    let projects = projects_dir(dot_dir)?;
-    let slug = path_to_slug(project_path);
-    let transcripts_dir = projects.join(slug).join("agent-transcripts");
-
-    let subdir = transcripts_dir.join(session_id);
-    if subdir.is_dir() {
-        let jsonl = subdir.join(format!("{session_id}.jsonl"));
-        if jsonl.exists() {
-            return Some(jsonl);
-        }
-    }
-
-    let txt = transcripts_dir.join(format!("{session_id}.txt"));
-    if txt.exists() {
-        return Some(txt);
-    }
-
-    if transcripts_dir.is_dir() {
-        if let Ok(entries) = fs::read_dir(&transcripts_dir) {
-            let prefix = &session_id[..session_id.len().min(8)];
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name_str = name.to_string_lossy();
-                if entry.path().is_dir() && name_str.starts_with(prefix) {
-                    let jsonl = entry.path().join(format!("{name_str}.jsonl"));
-                    if jsonl.exists() {
-                        return Some(jsonl);
-                    }
-                } else if entry.path().is_file() {
-                    let stem = Path::new(&*name_str)
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("");
-                    if stem.starts_with(prefix) {
-                        return Some(entry.path());
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
-
-pub fn count_messages(dot_dir: &str, project_path: &str, session_id: &str) -> u32 {
-    match find_transcript_path(dot_dir, project_path, session_id) {
-        Some(p) => crate::tools::cursor::transcript::count_messages_in_file(&p),
-        None => 0,
-    }
-}
-
-// ── High-level session functions ────────────────────────────────────────────
-
-pub fn sessions_for_project(
-    config: &ForkConfig,
-    project_root: &str,
-) -> Result<Vec<Session>, String> {
-    let ws_dirs = find_workspace_dirs_for_project(config.app_name, project_root)?;
-    let mut sessions = Vec::new();
-    for (ws_dir, folder_path) in &ws_dirs {
-        sessions.extend(extract_sessions(
-            ws_dir,
-            folder_path,
-            config.composer_keys,
-            config.source,
-        ));
-    }
-    sessions.sort_by_key(|s| std::cmp::Reverse(s.sort_key()));
-    Ok(sessions)
-}
-
-pub fn all_sessions(config: &ForkConfig) -> Result<Vec<Session>, String> {
-    let ws_dirs = find_all_workspace_dirs(config.app_name)?;
-    let mut sessions = Vec::new();
-    for (ws_dir, folder_path) in &ws_dirs {
-        sessions.extend(extract_sessions(
-            ws_dir,
-            folder_path,
-            config.composer_keys,
-            config.source,
-        ));
-    }
-    sessions.sort_by_key(|s| std::cmp::Reverse(s.sort_key()));
-    Ok(sessions)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_path_to_slug() {
-        assert_eq!(path_to_slug("/Users/dev/project"), "Users-dev-project");
-    }
 
     #[test]
     fn test_extract_sessions_missing_db() {
