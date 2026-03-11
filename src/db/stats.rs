@@ -214,6 +214,7 @@ impl Db {
              JOIN sessions s ON s.id = ss.session_id AND s.source = ss.source
              WHERE s.created_at IS NOT NULL
              GROUP BY day
+             HAVING day IS NOT NULL
              ORDER BY day DESC
              LIMIT ?1",
             )
@@ -374,6 +375,7 @@ impl Db {
              JOIN sessions s ON s.id = ss.session_id AND s.source = ss.source
              WHERE s.created_at IS NOT NULL
              GROUP BY day, ss.source
+             HAVING day IS NOT NULL
              ORDER BY day DESC
              LIMIT ?1",
             )
