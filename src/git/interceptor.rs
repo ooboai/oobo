@@ -134,6 +134,9 @@ fn enrich_commit(
     let ai_file_set: std::collections::HashSet<&str> =
         ai_files_touched.iter().map(|(p, _)| p.as_str()).collect();
 
+    // Build lookup: file_path → (agent_blob_hash, agent_name)
+    let snapshot_lookup = build_snapshot_lookup(&active_sessions, &ai_files_touched);
+
     let mut file_changes = Vec::new();
     let mut ai_added: u32 = 0;
     let mut ai_deleted: u32 = 0;
@@ -143,50 +146,38 @@ fn enrich_commit(
     let is_agent_commit = author_type == AuthorType::Agent;
 
     for (path, added, deleted) in &per_file {
-        let (attribution, agent) = if ai_file_set.contains(path.as_str()) {
-            let agent_name = ai_files_touched
-                .iter()
-                .find(|(p, _)| p == path)
-                .map(|(_, a)| a.clone());
-            if is_agent_commit {
-                // Fully automated commit — AI owns the file.
-                (Some(FileAttribution::Ai), agent_name)
+        let (file_ai_add, file_ai_del, file_human_add, file_human_del, attribution, agent) =
+            if let Some((agent_blob, agent_name)) = snapshot_lookup.get(path.as_str()) {
+                // We have an exact snapshot of what the AI wrote.
+                compute_precise_attribution(
+                    cfg,
+                    path,
+                    agent_blob,
+                    *added,
+                    *deleted,
+                    agent_name.clone(),
+                )
+            } else if ai_file_set.contains(path.as_str()) {
+                // AI edited the file (from bubble data) but no snapshot available.
+                let agent_name = ai_files_touched
+                    .iter()
+                    .find(|(p, _)| p == path)
+                    .map(|(_, a)| a.clone());
+                if is_agent_commit {
+                    (*added, *deleted, 0, 0, Some(FileAttribution::Ai), agent_name)
+                } else {
+                    (*added, *deleted, 0, 0, Some(FileAttribution::Mixed), agent_name)
+                }
+            } else if is_agent_commit && !has_ai_sessions {
+                (*added, *deleted, 0, 0, Some(FileAttribution::Ai), None)
             } else {
-                // Assisted commit — human was also active, so the file
-                // could have both AI and human edits.
-                (Some(FileAttribution::Mixed), agent_name)
-            }
-        } else if is_agent_commit && !has_ai_sessions {
-            // Agent commit (env var / committer pattern) but no session data
-            // to know which files — attribute all to AI as best guess.
-            (Some(FileAttribution::Ai), None)
-        } else {
-            // No evidence this file was AI-edited — attribute to human.
-            (Some(FileAttribution::Human), None)
-        };
+                (0, 0, *added, *deleted, Some(FileAttribution::Human), None)
+            };
 
-        match attribution {
-            Some(FileAttribution::Ai) => {
-                ai_added += added;
-                ai_deleted += deleted;
-            }
-            Some(FileAttribution::Human) => {
-                human_added += added;
-                human_deleted += deleted;
-            }
-            Some(FileAttribution::Mixed) => {
-                let ai_add = added / 2;
-                let ai_del = deleted / 2;
-                ai_added += ai_add;
-                ai_deleted += ai_del;
-                human_added += added - ai_add;
-                human_deleted += deleted - ai_del;
-            }
-            None => {
-                human_added += added;
-                human_deleted += deleted;
-            }
-        }
+        ai_added += file_ai_add;
+        ai_deleted += file_ai_del;
+        human_added += file_human_add;
+        human_deleted += file_human_del;
 
         file_changes.push(FileChange {
             path: path.clone(),
@@ -280,6 +271,124 @@ fn enrich_commit(
     }
 
     Ok(())
+}
+
+/// Build a lookup from file path → (agent_blob_hash, agent_name) from session snapshots.
+fn build_snapshot_lookup<'a>(
+    sessions: &'a [hooks::state::ActiveSession],
+    ai_files_touched: &'a [(String, String)],
+) -> std::collections::HashMap<&'a str, (String, Option<String>)> {
+    let mut lookup: std::collections::HashMap<&str, (String, Option<String>)> =
+        std::collections::HashMap::new();
+
+    for session in sessions {
+        if let Some(ref snapshots) = session.file_snapshots {
+            for (file, blob_hash) in snapshots {
+                let agent_name = ai_files_touched
+                    .iter()
+                    .find(|(p, _)| p == file)
+                    .map(|(_, a)| a.clone());
+                // Latest session wins (overwrite) — most recent snapshot is most accurate.
+                lookup.insert(file.as_str(), (blob_hash.clone(), agent_name));
+            }
+        }
+    }
+
+    lookup
+}
+
+/// Compute exact AI vs human line counts for a file using blob diffs.
+///
+/// Diffs: parent → agent_blob (AI's work) and agent_blob → committed (human's work).
+/// If agent_blob == committed blob, it's pure AI. If agent_blob == parent blob,
+/// the AI's changes were reverted → pure human.
+fn compute_precise_attribution(
+    cfg: &Config,
+    file_path: &str,
+    agent_blob: &str,
+    total_added: u32,
+    total_deleted: u32,
+    agent_name: Option<String>,
+) -> (u32, u32, u32, u32, Option<FileAttribution>, Option<String>) {
+    // Get the committed blob hash for this file
+    let committed_blob = proxy::run_git_capture(cfg, &["rev-parse", &format!("HEAD:{file_path}")])
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    // If agent blob matches committed blob → pure AI (human didn't change it)
+    if !committed_blob.is_empty() && agent_blob == committed_blob {
+        return (
+            total_added,
+            total_deleted,
+            0,
+            0,
+            Some(FileAttribution::Ai),
+            agent_name,
+        );
+    }
+
+    // Get the parent commit's blob hash
+    let parent_blob = proxy::run_git_capture(
+        cfg,
+        &["rev-parse", &format!("HEAD~1:{file_path}")],
+    )
+    .unwrap_or_default()
+    .trim()
+    .to_string();
+
+    // If agent blob matches parent blob → AI changed nothing (or was reverted) → pure human
+    if !parent_blob.is_empty() && agent_blob == parent_blob {
+        return (
+            0,
+            0,
+            total_added,
+            total_deleted,
+            Some(FileAttribution::Human),
+            None,
+        );
+    }
+
+    // Diff parent → agent_blob to get AI's exact line counts
+    let ai_stats = diff_blobs_numstat(cfg, &parent_blob, agent_blob);
+
+    let (ai_add, ai_del) = ai_stats.unwrap_or((total_added, total_deleted));
+
+    // Clamp: AI can't have more lines than the total commit diff for this file
+    let ai_add = ai_add.min(total_added);
+    let ai_del = ai_del.min(total_deleted);
+    let human_add = total_added.saturating_sub(ai_add);
+    let human_del = total_deleted.saturating_sub(ai_del);
+
+    let attribution = if human_add == 0 && human_del == 0 {
+        Some(FileAttribution::Ai)
+    } else if ai_add == 0 && ai_del == 0 {
+        Some(FileAttribution::Human)
+    } else {
+        Some(FileAttribution::Mixed)
+    };
+
+    (ai_add, ai_del, human_add, human_del, attribution, agent_name)
+}
+
+/// Diff two blob objects and return (added, deleted) line counts.
+fn diff_blobs_numstat(cfg: &Config, blob_a: &str, blob_b: &str) -> Option<(u32, u32)> {
+    if blob_a.is_empty() || blob_b.is_empty() {
+        return None;
+    }
+
+    let output = proxy::run_git_capture(cfg, &["diff", "--numstat", blob_a, blob_b]).ok()?;
+
+    // Output format: "added\tdeleted\t" (no filename for blob diffs)
+    let line = output.lines().next()?;
+    let parts: Vec<&str> = line.split('\t').collect();
+    if parts.len() >= 2 {
+        let added: u32 = parts[0].parse().unwrap_or(0);
+        let deleted: u32 = parts[1].parse().unwrap_or(0);
+        Some((added, deleted))
+    } else {
+        None
+    }
 }
 
 /// Get the parent commit's author timestamp (Unix epoch seconds).

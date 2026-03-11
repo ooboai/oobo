@@ -85,12 +85,31 @@ pub fn handle_event(
                     .get("transcript_path")
                     .and_then(|v| v.as_str());
                 state::touch_session(&project_root, sid, transcript_path)?;
+
+                // Snapshot files edited by this session so we can compute
+                // exact AI vs human attribution at commit time.
+                if !project_root.is_empty() && is_cursor_agent(agent) {
+                    let files =
+                        crate::tools::cursor::composer_data::files_edited_in_session(
+                            sid, &project_root, 0,
+                        );
+                    if !files.is_empty() {
+                        let _ = state::snapshot_session_files(&project_root, sid, &files);
+                    }
+                }
             }
         }
         _ => {}
     }
 
     Ok(())
+}
+
+fn is_cursor_agent(agent: &str) -> bool {
+    matches!(
+        agent,
+        "cursor" | "agent" | "composer" | "ask" | "edit" | "normal" | "chat"
+    )
 }
 
 #[cfg(test)]

@@ -23,6 +23,12 @@ pub struct ActiveSession {
     pub worktree: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
+    /// Git blob hashes of files after the agent's last edit.
+    /// Keys are repo-relative paths, values are blob SHA-1 hashes.
+    /// Captured on `stop` hook so we can diff against committed state
+    /// for exact AI vs human line attribution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_snapshots: Option<std::collections::HashMap<String, String>>,
     pub started_at: i64,
     pub updated_at: i64,
 }
@@ -121,6 +127,7 @@ pub fn write_session(
         model: model.map(|s| s.to_string()),
         worktree,
         transcript_path: None,
+        file_snapshots: None,
         started_at: now,
         updated_at: now,
     };
@@ -217,6 +224,66 @@ fn read_all_sessions(project_root: &str) -> Vec<ActiveSession> {
     sessions
 }
 
+/// Snapshot files edited by this session into git's object store.
+/// For each file, runs `git hash-object -w <file>` and stores the blob hash
+/// in the session's `file_snapshots` map. This captures the exact file state
+/// after the agent's edit, before any human modifications.
+pub fn snapshot_session_files(
+    project_root: &str,
+    session_id: &str,
+    files: &[String],
+) -> Result<()> {
+    if files.is_empty() {
+        return Ok(());
+    }
+
+    let path = session_path(project_root, session_id);
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&path)?;
+    let mut state: ActiveSession = serde_json::from_str(&content)?;
+
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+    let mut snapshots = state.file_snapshots.unwrap_or_default();
+
+    for file in files {
+        let abs_path = Path::new(project_root).join(file);
+        if !abs_path.exists() {
+            continue;
+        }
+        let output = Command::new(&git)
+            .args(["hash-object", "-w"])
+            .arg(&abs_path)
+            .current_dir(project_root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+
+        if let Ok(o) = output {
+            if o.status.success() {
+                let hash = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !hash.is_empty() {
+                    snapshots.insert(file.clone(), hash);
+                }
+            }
+        }
+    }
+
+    state.file_snapshots = if snapshots.is_empty() {
+        None
+    } else {
+        Some(snapshots)
+    };
+
+    let json = serde_json::to_string_pretty(&state)?;
+    fs::write(&path, json)?;
+
+    Ok(())
+}
+
 /// Clean up stale session files (older than the given threshold in seconds).
 pub fn cleanup_stale(project_root: &str, max_age_secs: i64) {
     let now = chrono::Utc::now().timestamp();
@@ -297,6 +364,7 @@ mod tests {
             model: None,
             worktree: Some(this_wt.clone()),
             transcript_path: None,
+            file_snapshots: None,
             started_at: now,
             updated_at: now,
         };
@@ -306,6 +374,7 @@ mod tests {
             model: None,
             worktree: Some("/other/worktree".into()),
             transcript_path: None,
+            file_snapshots: None,
             started_at: now,
             updated_at: now,
         };
@@ -315,6 +384,7 @@ mod tests {
             model: None,
             worktree: None,
             transcript_path: None,
+            file_snapshots: None,
             started_at: now,
             updated_at: now,
         };
