@@ -21,6 +21,8 @@ pub struct ActiveSession {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<String>,
     pub started_at: i64,
     pub updated_at: i64,
 }
@@ -118,6 +120,7 @@ pub fn write_session(
         agent: agent.to_string(),
         model: model.map(|s| s.to_string()),
         worktree,
+        transcript_path: None,
         started_at: now,
         updated_at: now,
     };
@@ -130,7 +133,12 @@ pub fn write_session(
 }
 
 /// Update the timestamp on an existing session (turn ended, session continues).
-pub fn touch_session(project_root: &str, session_id: &str) -> Result<()> {
+/// Also stores `transcript_path` if provided by the hook event.
+pub fn touch_session(
+    project_root: &str,
+    session_id: &str,
+    transcript_path: Option<&str>,
+) -> Result<()> {
     let path = session_path(project_root, session_id);
     if !path.exists() {
         return Ok(());
@@ -140,6 +148,11 @@ pub fn touch_session(project_root: &str, session_id: &str) -> Result<()> {
     let mut state: ActiveSession = serde_json::from_str(&content)?;
 
     state.updated_at = chrono::Utc::now().timestamp();
+    if let Some(tp) = transcript_path {
+        if !tp.is_empty() {
+            state.transcript_path = Some(tp.to_string());
+        }
+    }
 
     let json = serde_json::to_string_pretty(&state)?;
     fs::write(&path, json)?;
@@ -256,7 +269,7 @@ mod tests {
         assert_eq!(sessions[0].model.as_deref(), Some("claude-opus-4"));
         assert!(sessions[0].worktree.is_some());
 
-        touch_session(root_str, "sess-1").unwrap();
+        touch_session(root_str, "sess-1", None).unwrap();
         let sessions = active_sessions(root_str);
         assert!(sessions[0].updated_at >= sessions[0].started_at);
 
@@ -282,6 +295,7 @@ mod tests {
             agent: "cursor".into(),
             model: None,
             worktree: Some(this_wt.clone()),
+            transcript_path: None,
             started_at: 1000,
             updated_at: 1000,
         };
@@ -290,6 +304,7 @@ mod tests {
             agent: "claude".into(),
             model: None,
             worktree: Some("/other/worktree".into()),
+            transcript_path: None,
             started_at: 1000,
             updated_at: 1000,
         };
@@ -298,6 +313,7 @@ mod tests {
             agent: "gemini".into(),
             model: None,
             worktree: None,
+            transcript_path: None,
             started_at: 1000,
             updated_at: 1000,
         };

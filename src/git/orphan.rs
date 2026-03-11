@@ -13,7 +13,7 @@ const BRANCH: &str = "oobo/anchors/v1";
 /// c8/e12fa9b3d4.../
 ///   metadata.json       # Anchor-level metadata
 ///   1/metadata.json     # Per-session metadata
-///   1/transcript.txt    # (only when FullTransparency, redacted)
+///   1/transcript.json   # (only when FullTransparency, redacted)
 /// ```
 ///
 /// Uses low-level git commands to update the orphan branch without
@@ -48,7 +48,7 @@ pub fn write_anchor(
                 transcripts.iter().find(|(sid, _)| sid == &link.session_id)
             {
                 let redacted = crate::redact::redact(transcript_text);
-                entries.push((format!("{base_path}/{}/transcript.txt", i + 1), redacted));
+                entries.push((format!("{base_path}/{}/transcript.json", i + 1), redacted));
             }
         }
     }
@@ -512,28 +512,28 @@ mod tests {
             committed_at: 1700000000,
             message: "feat: add widget support".into(),
             files_changed: vec!["src/widget.rs".into(), "src/lib.rs".into()],
-            lines_added: 42,
-            lines_deleted: 5,
+            added: 42,
+            deleted: 5,
             file_changes: vec![
                 crate::core::anchor::FileChange {
                     path: "src/widget.rs".into(),
-                    lines_added: 40,
-                    lines_deleted: 0,
+                    added: 40,
+                    deleted: 0,
                     attribution: Some(crate::core::anchor::FileAttribution::Ai),
                     agent: Some("cursor".into()),
                 },
                 crate::core::anchor::FileChange {
                     path: "src/lib.rs".into(),
-                    lines_added: 2,
-                    lines_deleted: 5,
+                    added: 2,
+                    deleted: 5,
                     attribution: Some(crate::core::anchor::FileAttribution::Human),
                     agent: None,
                 },
             ],
-            ai_lines_added: 40,
-            ai_lines_deleted: 0,
-            human_lines_added: 2,
-            human_lines_deleted: 5,
+            ai_added: 40,
+            ai_deleted: 0,
+            human_added: 2,
+            human_deleted: 5,
             ai_percentage: Some(85.1),
             session_ids: vec!["sess-abc".into()],
             summary: Some("Added widget module".into()),
@@ -598,8 +598,8 @@ mod tests {
         assert_eq!(restored.branch, "main");
         assert_eq!(restored.author, "Test User <test@test.com>");
         assert_eq!(restored.author_type, AuthorType::Assisted);
-        assert_eq!(restored.lines_added, 42);
-        assert_eq!(restored.lines_deleted, 5);
+        assert_eq!(restored.added, 42);
+        assert_eq!(restored.deleted, 5);
         assert_eq!(restored.files_changed.len(), 2);
         assert_eq!(restored.session_ids, vec!["sess-abc"]);
         assert_eq!(restored.summary.as_deref(), Some("Added widget module"));

@@ -10,12 +10,14 @@ pub struct HookEvent {
     pub event: String,
     #[serde(default)]
     pub session_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "conversation_id")]
     pub cwd: Option<String>,
     #[serde(default)]
     pub agent: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub workspace_roots: Vec<String>,
     /// Captures unknown fields from hook payloads for forward compatibility.
     #[serde(flatten)]
     #[allow(dead_code)]
@@ -33,33 +35,49 @@ pub fn handle_event(event_name: &str, payload: &str) -> crate::error::Result<()>
         event.event = event_name.to_string();
     }
 
-    let cwd = event.cwd.clone().unwrap_or_else(|| {
-        std::env::current_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default()
-    });
+    let cwd = event
+        .workspace_roots
+        .first()
+        .cloned()
+        .or(event.cwd.clone())
+        .unwrap_or_else(|| {
+            std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default()
+        });
 
     let project_root = crate::git::proxy::project_root_from(&cwd);
 
+    let agent = event
+        .agent
+        .as_deref()
+        .or(event.extra.get("composer_mode").and_then(|v| v.as_str()))
+        .unwrap_or("cursor");
+
+    let session_id_field = event
+        .session_id
+        .as_deref()
+        .or(event.extra.get("conversation_id").and_then(|v| v.as_str()));
+
     match event_name {
         "session-start" => {
-            let session_id = event
-                .session_id
-                .as_deref()
-                .ok_or(crate::error::OoboError::Config(
-                    "session-start requires session_id".into(),
-                ))?;
-            let agent = event.agent.as_deref().unwrap_or("unknown");
+            let session_id = session_id_field.ok_or(crate::error::OoboError::Config(
+                "session-start requires session_id".into(),
+            ))?;
             state::write_session(&project_root, session_id, agent, event.model.as_deref())?;
         }
         "session-end" => {
-            if let Some(ref sid) = event.session_id {
+            if let Some(sid) = session_id_field {
                 state::remove_session(&project_root, sid);
             }
         }
         "stop" => {
-            if let Some(ref sid) = event.session_id {
-                state::touch_session(&project_root, sid)?;
+            if let Some(sid) = session_id_field {
+                let transcript_path = event
+                    .extra
+                    .get("transcript_path")
+                    .and_then(|v| v.as_str());
+                state::touch_session(&project_root, sid, transcript_path)?;
             }
         }
         _ => {}

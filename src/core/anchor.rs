@@ -73,8 +73,10 @@ pub enum FileAttribution {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChange {
     pub path: String,
-    pub lines_added: u32,
-    pub lines_deleted: u32,
+    #[serde(alias = "lines_added")]
+    pub added: u32,
+    #[serde(alias = "lines_deleted")]
+    pub deleted: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attribution: Option<FileAttribution>,
     /// Which agent touched this file (if attribution is ai or mixed).
@@ -100,25 +102,23 @@ pub struct Anchor {
     pub message: String,
 
     pub files_changed: Vec<String>,
-    pub lines_added: u32,
-    pub lines_deleted: u32,
+    #[serde(alias = "lines_added")]
+    pub added: u32,
+    #[serde(alias = "lines_deleted")]
+    pub deleted: u32,
 
     /// Per-file breakdown with line counts and AI/human attribution.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_changes: Vec<FileChange>,
 
-    /// Aggregate: lines added by AI across all files.
-    #[serde(default)]
-    pub ai_lines_added: u32,
-    /// Aggregate: lines deleted by AI across all files.
-    #[serde(default)]
-    pub ai_lines_deleted: u32,
-    /// Aggregate: lines added by human across all files.
-    #[serde(default)]
-    pub human_lines_added: u32,
-    /// Aggregate: lines deleted by human across all files.
-    #[serde(default)]
-    pub human_lines_deleted: u32,
+    #[serde(default, alias = "ai_lines_added")]
+    pub ai_added: u32,
+    #[serde(default, alias = "ai_lines_deleted")]
+    pub ai_deleted: u32,
+    #[serde(default, alias = "human_lines_added")]
+    pub human_added: u32,
+    #[serde(default, alias = "human_lines_deleted")]
+    pub human_deleted: u32,
     /// AI contribution percentage (0.0–100.0).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai_percentage: Option<f64>,
@@ -197,19 +197,19 @@ mod tests {
             committed_at: 1700000000,
             message: "test commit".into(),
             files_changed: vec!["src/main.rs".into()],
-            lines_added: 10,
-            lines_deleted: 3,
+            added: 10,
+            deleted: 3,
             file_changes: vec![FileChange {
                 path: "src/main.rs".into(),
-                lines_added: 10,
-                lines_deleted: 3,
+                added: 10,
+                deleted: 3,
                 attribution: Some(FileAttribution::Ai),
                 agent: Some("cursor".into()),
             }],
-            ai_lines_added: 10,
-            ai_lines_deleted: 3,
-            human_lines_added: 0,
-            human_lines_deleted: 0,
+            ai_added: 10,
+            ai_deleted: 3,
+            human_added: 0,
+            human_deleted: 0,
             ai_percentage: Some(100.0),
             session_ids: vec!["sess-1".into()],
             summary: Some("Test summary".into()),
@@ -228,10 +228,10 @@ mod tests {
         assert_eq!(anchor.committed_at, restored.committed_at);
         assert_eq!(anchor.message, restored.message);
         assert_eq!(anchor.files_changed, restored.files_changed);
-        assert_eq!(anchor.lines_added, restored.lines_added);
-        assert_eq!(anchor.lines_deleted, restored.lines_deleted);
+        assert_eq!(anchor.added, restored.added);
+        assert_eq!(anchor.deleted, restored.deleted);
         assert_eq!(anchor.file_changes.len(), restored.file_changes.len());
-        assert_eq!(anchor.ai_lines_added, restored.ai_lines_added);
+        assert_eq!(anchor.ai_added, restored.ai_added);
         assert_eq!(anchor.ai_percentage, restored.ai_percentage);
         assert_eq!(anchor.session_ids, restored.session_ids);
         assert_eq!(anchor.summary, restored.summary);
@@ -281,7 +281,7 @@ mod tests {
         let anchor: Anchor = serde_json::from_str(json).unwrap();
         assert!(anchor.contributors.is_empty());
         assert!(anchor.file_changes.is_empty());
-        assert_eq!(anchor.ai_lines_added, 0);
+        assert_eq!(anchor.ai_added, 0);
         assert_eq!(anchor.ai_percentage, None);
     }
 

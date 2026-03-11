@@ -132,10 +132,12 @@ fn enrich_commit(
         ai_files_touched.iter().map(|(p, _)| p.as_str()).collect();
 
     let mut file_changes = Vec::new();
-    let mut ai_lines_added: u32 = 0;
-    let mut ai_lines_deleted: u32 = 0;
-    let mut human_lines_added: u32 = 0;
-    let mut human_lines_deleted: u32 = 0;
+    let mut ai_added: u32 = 0;
+    let mut ai_deleted: u32 = 0;
+    let mut human_added: u32 = 0;
+    let mut human_deleted: u32 = 0;
+
+    let is_agent_commit = author_type == AuthorType::Agent;
 
     for (path, added, deleted) in &per_file {
         let (attribution, agent) = if ai_file_set.contains(path.as_str()) {
@@ -144,40 +146,44 @@ fn enrich_commit(
                 .find(|(p, _)| p == path)
                 .map(|(_, a)| a.clone());
             (Some(FileAttribution::Ai), agent_name)
+        } else if is_agent_commit && has_ai_sessions {
+            let agent_name = active_sessions.first().map(|s| s.agent.clone());
+            (Some(FileAttribution::Ai), agent_name)
         } else if has_ai_sessions {
             (Some(FileAttribution::Mixed), None)
+        } else if is_agent_commit {
+            (Some(FileAttribution::Ai), None)
         } else {
             (Some(FileAttribution::Human), None)
         };
 
         match attribution {
             Some(FileAttribution::Ai) => {
-                ai_lines_added += added;
-                ai_lines_deleted += deleted;
+                ai_added += added;
+                ai_deleted += deleted;
             }
             Some(FileAttribution::Human) => {
-                human_lines_added += added;
-                human_lines_deleted += deleted;
+                human_added += added;
+                human_deleted += deleted;
             }
             Some(FileAttribution::Mixed) => {
-                // Conservative: split 50/50 for mixed files
                 let ai_add = added / 2;
                 let ai_del = deleted / 2;
-                ai_lines_added += ai_add;
-                ai_lines_deleted += ai_del;
-                human_lines_added += added - ai_add;
-                human_lines_deleted += deleted - ai_del;
+                ai_added += ai_add;
+                ai_deleted += ai_del;
+                human_added += added - ai_add;
+                human_deleted += deleted - ai_del;
             }
             None => {
-                human_lines_added += added;
-                human_lines_deleted += deleted;
+                human_added += added;
+                human_deleted += deleted;
             }
         }
 
         file_changes.push(FileChange {
             path: path.clone(),
-            lines_added: *added,
-            lines_deleted: *deleted,
+            added: *added,
+            deleted: *deleted,
             attribution,
             agent,
         });
@@ -185,7 +191,7 @@ fn enrich_commit(
 
     let total_lines = git_context.insertions + git_context.deletions;
     let ai_percentage = if total_lines > 0 {
-        Some(((ai_lines_added + ai_lines_deleted) as f64 / total_lines as f64) * 100.0)
+        Some(((ai_added + ai_deleted) as f64 / total_lines as f64) * 100.0)
     } else {
         None
     };
@@ -215,13 +221,13 @@ fn enrich_commit(
         committed_at: chrono::Utc::now().timestamp(),
         message: git_context.commit_message.clone(),
         files_changed,
-        lines_added: git_context.insertions,
-        lines_deleted: git_context.deletions,
+        added: git_context.insertions,
+        deleted: git_context.deletions,
         file_changes,
-        ai_lines_added,
-        ai_lines_deleted,
-        human_lines_added,
-        human_lines_deleted,
+        ai_added,
+        ai_deleted,
+        human_added,
+        human_deleted,
         ai_percentage,
         session_ids,
         summary: None,
@@ -548,22 +554,38 @@ pub fn collect_all_tool_context(
     tools
 }
 
-/// Collect transcript text for active sessions (for full-transparency mode).
+/// Collect raw transcript content for active sessions (for full-transparency mode).
+/// Reads the original JSONL/text file so tool calls and structure are preserved.
+/// Prefers the `transcript_path` stored in the session state file (set by the
+/// `stop` hook), falling back to the tool registry's `find_transcript`.
 fn collect_session_transcripts(
     sessions: &[crate::hooks::state::ActiveSession],
     project_root: &str,
 ) -> Vec<(String, String)> {
     let mut transcripts = Vec::new();
-    let registry = crate::tools::registry();
+
     for session in sessions {
+        let raw = session
+            .transcript_path
+            .as_deref()
+            .and_then(|tp| std::fs::read_to_string(tp).ok())
+            .filter(|c| !c.is_empty());
+
+        if let Some(content) = raw {
+            transcripts.push((session.session_id.clone(), content));
+            continue;
+        }
+
+        let registry = crate::tools::registry();
         for tool in registry.all() {
             if tool.name() == session.agent
                 || (session.agent == "cursor" && tool.name() == "composer")
             {
                 if let Some(path) = tool.find_transcript(project_root, &session.session_id) {
-                    let text = tool.read_transcript(&path, 500);
-                    if !text.is_empty() {
-                        transcripts.push((session.session_id.clone(), text));
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if !content.is_empty() {
+                            transcripts.push((session.session_id.clone(), content));
+                        }
                     }
                 }
                 break;

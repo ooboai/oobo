@@ -33,6 +33,10 @@ pub fn check_first_use(cfg: &Config, project_root: &str) {
         return;
     }
 
+    if let Err(e) = crate::hooks::install::install_project_hooks(project_root) {
+        eprintln!("  \x1b[33m!\x1b[0m Could not install git hooks: {e}");
+    }
+
     if orphan::branch_exists(project_root) {
         crate::commands::sync::auto_hydrate(project_root);
         return;

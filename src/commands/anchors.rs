@@ -60,25 +60,25 @@ pub fn run(cfg: &Config, limit: usize, agent: bool) -> Result<(), String> {
             println!("  \x1b[90mauthor: {}\x1b[0m", entry.author);
         }
 
-        if entry.lines_added > 0 || entry.lines_deleted > 0 {
+        if entry.added > 0 || entry.deleted > 0 {
             let ai_pct = entry
                 .ai_percentage
                 .map(|p| format!("  \x1b[35m{:.0}% AI\x1b[0m", p))
                 .unwrap_or_default();
             println!(
                 "  \x1b[32m+{}\x1b[0m / \x1b[31m-{}\x1b[0m  ({} files){}",
-                entry.lines_added,
-                entry.lines_deleted,
+                entry.added,
+                entry.deleted,
                 entry.files_changed.len(),
                 ai_pct,
             );
-            if entry.ai_lines_added > 0 || entry.human_lines_added > 0 {
+            if entry.ai_added > 0 || entry.human_added > 0 {
                 println!(
                     "  \x1b[90mai: +{}/-{}  human: +{}/-{}\x1b[0m",
-                    entry.ai_lines_added,
-                    entry.ai_lines_deleted,
-                    entry.human_lines_added,
-                    entry.human_lines_deleted,
+                    entry.ai_added,
+                    entry.ai_deleted,
+                    entry.human_added,
+                    entry.human_deleted,
                 );
             }
         }
@@ -123,18 +123,18 @@ struct LogEntry {
     branch: String,
     committed_at: i64,
     files_changed: Vec<String>,
-    lines_added: u32,
-    lines_deleted: u32,
+    added: u32,
+    deleted: u32,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     file_changes: Vec<crate::core::anchor::FileChange>,
     #[serde(default)]
-    ai_lines_added: u32,
+    ai_added: u32,
     #[serde(default)]
-    ai_lines_deleted: u32,
+    ai_deleted: u32,
     #[serde(default)]
-    human_lines_added: u32,
+    human_added: u32,
     #[serde(default)]
-    human_lines_deleted: u32,
+    human_deleted: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     ai_percentage: Option<f64>,
     sessions: Vec<SessionEntry>,
@@ -192,13 +192,13 @@ fn recent_commits_with_anchors(
             branch: String::new(),
             committed_at: 0,
             files_changed: Vec::new(),
-            lines_added: 0,
-            lines_deleted: 0,
+            added: 0,
+            deleted: 0,
             file_changes: Vec::new(),
-            ai_lines_added: 0,
-            ai_lines_deleted: 0,
-            human_lines_added: 0,
-            human_lines_deleted: 0,
+            ai_added: 0,
+            ai_deleted: 0,
+            human_added: 0,
+            human_deleted: 0,
             ai_percentage: None,
             sessions: Vec::new(),
             summary: None,
@@ -211,13 +211,13 @@ fn recent_commits_with_anchors(
             entry.branch = anchor.branch;
             entry.committed_at = anchor.committed_at;
             entry.files_changed = anchor.files_changed;
-            entry.lines_added = anchor.lines_added;
-            entry.lines_deleted = anchor.lines_deleted;
+            entry.added = anchor.added;
+            entry.deleted = anchor.deleted;
             entry.file_changes = anchor.file_changes;
-            entry.ai_lines_added = anchor.ai_lines_added;
-            entry.ai_lines_deleted = anchor.ai_lines_deleted;
-            entry.human_lines_added = anchor.human_lines_added;
-            entry.human_lines_deleted = anchor.human_lines_deleted;
+            entry.ai_added = anchor.ai_added;
+            entry.ai_deleted = anchor.ai_deleted;
+            entry.human_added = anchor.human_added;
+            entry.human_deleted = anchor.human_deleted;
             entry.ai_percentage = anchor.ai_percentage;
             entry.summary = anchor.summary;
             entry.intent = anchor.intent;
@@ -309,19 +309,19 @@ mod tests {
             branch: "main".into(),
             committed_at: 1700000000,
             files_changed: vec!["auth.rs".into()],
-            lines_added: 50,
-            lines_deleted: 5,
+            added: 50,
+            deleted: 5,
             file_changes: vec![crate::core::anchor::FileChange {
                 path: "auth.rs".into(),
-                lines_added: 50,
-                lines_deleted: 5,
+                added: 50,
+                deleted: 5,
                 attribution: Some(crate::core::anchor::FileAttribution::Ai),
                 agent: Some("cursor".into()),
             }],
-            ai_lines_added: 50,
-            ai_lines_deleted: 5,
-            human_lines_added: 0,
-            human_lines_deleted: 0,
+            ai_added: 50,
+            ai_deleted: 5,
+            human_added: 0,
+            human_deleted: 0,
             ai_percentage: Some(100.0),
             sessions: vec![],
             summary: Some("Added login".into()),
@@ -331,7 +331,7 @@ mod tests {
         assert!(json.contains("abc123def"));
         assert!(json.contains("feat: add login"));
         assert!(json.contains("ai_percentage"));
-        assert!(json.contains("ai_lines_added"));
+        assert!(json.contains("ai_added"));
         assert!(json.contains("file_changes"));
     }
 

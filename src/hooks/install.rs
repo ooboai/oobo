@@ -28,20 +28,21 @@ pub fn install_all_agent_hooks() -> Vec<String> {
 fn install_cursor_hooks() -> Option<String> {
     let path = dirs::home_dir()?.join(".cursor/hooks.json");
     let oobo_hooks = serde_json::json!({
-        "agent": {
-            "sessionStart": {
-                "command": "oobo hooks agent session-start"
-            },
-            "sessionEnd": {
-                "command": "oobo hooks agent session-end"
-            },
-            "stop": {
-                "command": "oobo hooks agent stop"
-            }
+        "version": 1,
+        "hooks": {
+            "sessionStart": [
+                { "command": "oobo hooks agent session-start" }
+            ],
+            "sessionEnd": [
+                { "command": "oobo hooks agent session-end" }
+            ],
+            "stop": [
+                { "command": "oobo hooks agent stop" }
+            ]
         }
     });
 
-    merge_json_file(&path, &oobo_hooks, &["agent"])?;
+    merge_cursor_hooks_file(&path, &oobo_hooks)?;
     Some(format!("Cursor hooks → {}", path.display()))
 }
 
@@ -135,6 +136,60 @@ fn install_opencode_hooks() -> Option<String> {
 }
 
 // Helpers
+
+/// Merge oobo hooks into Cursor's hooks.json.
+/// Cursor uses `{ "version": 1, "hooks": { "<event>": [{ "command": "..." }] } }`.
+/// Each event maps to an array of handler objects. We append oobo handlers
+/// without duplicating or clobbering existing ones.
+/// Also migrates the legacy `{ "agent": { ... } }` format if found.
+fn merge_cursor_hooks_file(path: &Path, oobo_config: &serde_json::Value) -> Option<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok()?;
+    }
+
+    let mut existing: serde_json::Value = if path.exists() {
+        let content = fs::read_to_string(path).ok()?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let obj = existing.as_object_mut()?;
+
+    // Remove legacy "agent" key (old broken format)
+    obj.remove("agent");
+
+    obj.insert("version".to_string(), serde_json::json!(1));
+
+    let oobo_hooks = oobo_config.get("hooks")?.as_object()?;
+
+    if !obj.contains_key("hooks") {
+        obj.insert("hooks".to_string(), serde_json::json!({}));
+    }
+    let hooks_obj = obj.get_mut("hooks")?.as_object_mut()?;
+
+    for (event, handlers) in oobo_hooks {
+        let oobo_arr = handlers.as_array()?;
+        if let Some(existing_arr) = hooks_obj.get_mut(event).and_then(|v| v.as_array_mut()) {
+            for handler in oobo_arr {
+                let cmd = handler.get("command").and_then(|c| c.as_str()).unwrap_or("");
+                let already = existing_arr.iter().any(|h| {
+                    h.get("command").and_then(|c| c.as_str()).unwrap_or("") == cmd
+                });
+                if !already {
+                    existing_arr.push(handler.clone());
+                }
+            }
+        } else {
+            hooks_obj.insert(event.clone(), handlers.clone());
+        }
+    }
+
+    let json = serde_json::to_string_pretty(&existing).ok()?;
+    fs::write(path, json).ok()?;
+
+    Some(())
+}
 
 /// Merge oobo's JSON keys into an existing JSON file without clobbering.
 /// Creates the file and parent dirs if they don't exist.

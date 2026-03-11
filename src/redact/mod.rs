@@ -112,6 +112,8 @@ struct GitleaksFinding {
 mod tests {
     use super::*;
 
+    // ── basic pattern tests ──
+
     #[test]
     fn test_redact_basic_api_key() {
         let fake = format!("{}1234567890abcdefghij", "sk_live_");
@@ -197,5 +199,163 @@ mod tests {
     #[test]
     fn test_redact_placeholder_is_deterministic() {
         assert_eq!(REDACT_PLACEHOLDER, "[REDACTED]");
+    }
+
+    // ── JSONL transcript redaction tests ──
+
+    #[test]
+    fn test_redact_jsonl_transcript_with_api_key() {
+        let sk = format!("{}abcdef1234567890abcdef", "sk_live_");
+        let transcript = format!(
+            r#"{{"role":"user","message":{{"content":"Set the API key to api_key = '{sk}'"}}}}"#
+        );
+        let redacted = redact(&transcript);
+        assert!(!redacted.contains(&sk), "API key should be redacted from JSONL");
+        assert!(redacted.contains(REDACT_PLACEHOLDER));
+        assert!(redacted.contains("role"), "JSON structure should be preserved");
+    }
+
+    #[test]
+    fn test_redact_jsonl_transcript_with_aws_creds() {
+        let ak = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let transcript = format!(
+            r#"{{"role":"assistant","message":{{"content":"Found credentials: {ak} in your config"}}}}"#
+        );
+        let redacted = redact(&transcript);
+        assert!(!redacted.contains(&ak), "AWS key should be redacted from JSONL");
+    }
+
+    #[test]
+    fn test_redact_multiline_jsonl_transcript() {
+        let secret = format!("{}abcdefghij1234567890", "sk_test_");
+        let transcript = format!(
+            "{}\n{}\n{}",
+            r#"{{"role":"user","message":{{"content":"Please update the config"}}}}"#,
+            format!(
+                r#"{{"role":"assistant","message":{{"content":"I'll set token = '{secret}' in .env"}}}}"#
+            ),
+            r#"{"role":"user","message":{"content":"thanks that looks good"}}"#,
+        );
+        let redacted = redact(&transcript);
+        assert!(!redacted.contains(&secret), "secret should be redacted across multi-line JSONL");
+        let line_count = redacted.lines().count();
+        assert_eq!(line_count, 3, "line count should be preserved");
+    }
+
+    #[test]
+    fn test_redact_jsonl_transcript_no_secrets() {
+        let transcript = concat!(
+            r#"{"role":"user","message":{"content":"refactor the parser module"}}"#,
+            "\n",
+            r#"{"role":"assistant","message":{"content":"I'll split it into lexer and parser"}}"#,
+        );
+        let redacted = redact(transcript);
+        assert_eq!(redacted, transcript, "clean transcript should pass through unchanged");
+    }
+
+    #[test]
+    fn test_redact_jsonl_with_tool_calls() {
+        let secret = format!("{}abcdefghij1234567890", "sk_live_");
+        let transcript = format!(
+            "{}\n{}\n{}",
+            r#"{{"role":"user","message":{{"content":"deploy to prod"}}}}"#,
+            format!(
+                r#"{{"role":"assistant","message":{{"content":"Running deploy..."}},
+                "tool_calls":[{{"name":"Shell","arguments":{{"command":"export API_KEY={secret} && deploy"}}}}]}}"#
+            ),
+            r#"{"role":"assistant","message":{"content":"Deploy complete."}}"#,
+        );
+        let redacted = redact(&transcript);
+        assert!(!redacted.contains(&secret), "secret in tool call args should be redacted");
+    }
+
+    #[test]
+    fn test_redact_jsonl_with_password_in_env() {
+        let transcript = r#"{"role":"assistant","message":{"content":"I'll update .env:\npassword = 'MyDatabasePassword1234567890'\nDB_HOST=localhost"}}"#;
+        let redacted = redact(transcript);
+        assert!(
+            !redacted.contains("MyDatabasePassword1234567890"),
+            "password in env content should be redacted"
+        );
+    }
+
+    #[test]
+    fn test_redact_jsonl_with_bearer_in_curl() {
+        let transcript = r#"{"role":"assistant","message":{"content":"curl -H 'Authorization Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk' https://api.example.com"}}"#;
+        let redacted = redact(transcript);
+        assert!(
+            !redacted.contains("eyJhbGciOiJIUzI1NiJ9"),
+            "bearer token in curl command should be redacted"
+        );
+    }
+
+    #[test]
+    fn test_redact_preserves_valid_json_structure() {
+        let sk = format!("{}abcdefghij1234567890", "sk_test_");
+        let line = format!(
+            r#"{{"role":"user","message":{{"content":"secret = '{sk}'"}}}}"#
+        );
+        let redacted = redact(&line);
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&redacted).is_ok(),
+            "redacted JSONL line should still be valid JSON: {redacted}"
+        );
+    }
+
+    // ── gitleaks integration test (skipped if gitleaks not installed) ──
+
+    #[test]
+    fn test_gitleaks_redacts_secrets_in_transcript() {
+        if !gitleaks_available() {
+            eprintln!("gitleaks not installed, skipping integration test");
+            return;
+        }
+
+        let sk = format!("{}abcdefghij1234567890", "sk_live_");
+        let transcript = format!(
+            r#"{{"role":"user","message":{{"content":"Set api_key = '{sk}'"}}}}"#
+        );
+        let result = redact_with_gitleaks(&transcript);
+        assert!(result.is_some(), "gitleaks should succeed");
+        let redacted = result.unwrap();
+        assert!(
+            !redacted.contains(&sk),
+            "gitleaks should redact the secret from transcript content"
+        );
+    }
+
+    #[test]
+    fn test_gitleaks_clean_transcript_passes_through() {
+        if !gitleaks_available() {
+            eprintln!("gitleaks not installed, skipping integration test");
+            return;
+        }
+
+        let transcript = r#"{"role":"user","message":{"content":"refactor the parser"}}"#;
+        let result = redact_with_gitleaks(transcript);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), transcript, "clean content should pass through unchanged");
+    }
+
+    #[test]
+    fn test_gitleaks_multiline_transcript() {
+        if !gitleaks_available() {
+            eprintln!("gitleaks not installed, skipping integration test");
+            return;
+        }
+
+        let aws_key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let transcript = format!(
+            "{}\n{}\n{}",
+            r#"{{"role":"user","message":{{"content":"check my aws config"}}}}"#,
+            format!(
+                r#"{{"role":"assistant","message":{{"content":"Found key: {aws_key}"}}}}"#
+            ),
+            r#"{"role":"user","message":{"content":"please rotate that"}}"#,
+        );
+        let result = redact_with_gitleaks(&transcript);
+        assert!(result.is_some(), "gitleaks should succeed on multi-line JSONL");
+        let redacted = result.unwrap();
+        assert!(!redacted.contains(&aws_key), "gitleaks should redact AWS key");
     }
 }

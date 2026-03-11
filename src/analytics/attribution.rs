@@ -150,10 +150,10 @@ fn attribution_from_anchor(
 
     let anchor: crate::core::anchor::Anchor = serde_json::from_str(&anchor_json).ok()?;
 
-    let ai_added = anchor.ai_lines_added as i64;
-    let ai_deleted = anchor.ai_lines_deleted as i64;
-    let human_added = anchor.human_lines_added as i64;
-    let human_deleted = anchor.human_lines_deleted as i64;
+    let ai_added = anchor.ai_added as i64;
+    let ai_deleted = anchor.ai_deleted as i64;
+    let human_added = anchor.human_added as i64;
+    let human_deleted = anchor.human_deleted as i64;
 
     // Only use anchor data if it has file-level attribution (ai + human > 0 or file_changes present)
     if anchor.file_changes.is_empty() && ai_added == 0 && human_added == 0 {
@@ -182,8 +182,8 @@ fn attribution_from_anchor(
         project_id: Some(project_id.to_string()),
         commit_message: Some(anchor.message),
         commit_date: Some(commit.date_str.clone()),
-        lines_added: anchor.lines_added as i64,
-        lines_deleted: anchor.lines_deleted as i64,
+        lines_added: anchor.added as i64,
+        lines_deleted: anchor.deleted as i64,
         ai_lines_added: ai_added,
         ai_lines_deleted: ai_deleted,
         tab_lines_added: 0,
