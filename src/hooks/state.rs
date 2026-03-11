@@ -171,10 +171,14 @@ pub fn active_sessions(project_root: &str) -> Vec<ActiveSession> {
     read_all_sessions(project_root)
 }
 
+/// Max session age before auto-cleanup (6 hours).
+const STALE_SESSION_SECS: i64 = 6 * 3600;
+
 /// List active sessions filtered to only those belonging to the given worktree.
 /// Sessions without a worktree field (pre-upgrade) are included in all worktrees
-/// for backward compatibility.
+/// for backward compatibility. Stale sessions (>6h) are evicted automatically.
 pub fn active_sessions_for_worktree(project_root: &str) -> Vec<ActiveSession> {
+    cleanup_stale(project_root, STALE_SESSION_SECS);
     let current_wt = resolve_worktree(project_root);
     let all = read_all_sessions(project_root);
 
@@ -289,6 +293,7 @@ mod tests {
         fs::create_dir_all(&sessions_dir).unwrap();
 
         let this_wt = resolve_worktree(root_str).unwrap();
+        let now = chrono::Utc::now().timestamp();
 
         let matching = ActiveSession {
             session_id: "s1".into(),
@@ -296,8 +301,8 @@ mod tests {
             model: None,
             worktree: Some(this_wt.clone()),
             transcript_path: None,
-            started_at: 1000,
-            updated_at: 1000,
+            started_at: now,
+            updated_at: now,
         };
         let other_wt = ActiveSession {
             session_id: "s2".into(),
@@ -305,8 +310,8 @@ mod tests {
             model: None,
             worktree: Some("/other/worktree".into()),
             transcript_path: None,
-            started_at: 1000,
-            updated_at: 1000,
+            started_at: now,
+            updated_at: now,
         };
         let no_wt = ActiveSession {
             session_id: "s3".into(),
@@ -314,8 +319,8 @@ mod tests {
             model: None,
             worktree: None,
             transcript_path: None,
-            started_at: 1000,
-            updated_at: 1000,
+            started_at: now,
+            updated_at: now,
         };
 
         for s in [&matching, &other_wt, &no_wt] {

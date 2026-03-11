@@ -315,10 +315,7 @@ fn collect_ai_files_touched(
 
     for session in active_sessions {
         for tool in registry.all() {
-            let is_match = tool.name() == session.agent
-                || (session.agent == "cursor" && tool.name() == "cursor");
-
-            if !is_match {
+            if !is_agent_tool_match(&session.agent, tool.name()) {
                 continue;
             }
 
@@ -347,6 +344,18 @@ fn collect_ai_files_touched(
     }
 
     result
+}
+
+/// Match a session's agent name to a tool's canonical name.
+/// Handles Cursor's various mode names ("agent", "composer", etc.) which
+/// are now normalized at hook time, plus legacy session files with old names.
+fn is_agent_tool_match(session_agent: &str, tool_name: &str) -> bool {
+    if session_agent == tool_name {
+        return true;
+    }
+    let cursor_aliases = ["cursor", "agent", "composer", "ask", "edit", "normal", "chat"];
+    let cursor_tools = ["composer", "cursor"];
+    cursor_aliases.contains(&session_agent) && cursor_tools.contains(&tool_name)
 }
 
 /// Normalize a file path to be relative to the project root.
@@ -578,9 +587,7 @@ fn collect_session_transcripts(
 
         let registry = crate::tools::registry();
         for tool in registry.all() {
-            if tool.name() == session.agent
-                || (session.agent == "cursor" && tool.name() == "composer")
-            {
+            if is_agent_tool_match(&session.agent, tool.name()) {
                 if let Some(path) = tool.find_transcript(project_root, &session.session_id) {
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         if !content.is_empty() {

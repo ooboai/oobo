@@ -141,12 +141,13 @@ mod tests {
         let sessions_dir = root.join(".git/oobo-sessions");
         fs::create_dir_all(&sessions_dir).unwrap();
 
+        let now = chrono::Utc::now().timestamp();
         let session_json = serde_json::json!({
             "session_id": "sess-1",
             "agent": "cursor",
             "worktree": root.to_str().unwrap(),
-            "started_at": 1000,
-            "updated_at": 1000,
+            "started_at": now,
+            "updated_at": now,
         });
         fs::write(
             sessions_dir.join("test.json"),

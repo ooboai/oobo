@@ -48,11 +48,13 @@ pub fn handle_event(event_name: &str, payload: &str) -> crate::error::Result<()>
 
     let project_root = crate::git::proxy::project_root_from(&cwd);
 
-    let agent = event
+    let raw_agent = event
         .agent
         .as_deref()
         .or(event.extra.get("composer_mode").and_then(|v| v.as_str()))
         .unwrap_or("cursor");
+
+    let agent = normalize_agent_name(raw_agent);
 
     let session_id_field = event
         .session_id
@@ -84,6 +86,15 @@ pub fn handle_event(event_name: &str, payload: &str) -> crate::error::Result<()>
     }
 
     Ok(())
+}
+
+/// Normalize agent names from hook payloads to canonical tool names.
+/// Cursor sends "agent" or "composer" as the mode name — map to "cursor".
+fn normalize_agent_name(raw: &str) -> &str {
+    match raw {
+        "agent" | "composer" | "ask" | "edit" | "normal" | "chat" => "cursor",
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -118,6 +129,18 @@ mod tests {
             event.extra.get("unknown_field").and_then(|v| v.as_i64()),
             Some(42)
         );
+    }
+
+    #[test]
+    fn test_normalize_agent_name() {
+        assert_eq!(normalize_agent_name("agent"), "cursor");
+        assert_eq!(normalize_agent_name("composer"), "cursor");
+        assert_eq!(normalize_agent_name("ask"), "cursor");
+        assert_eq!(normalize_agent_name("edit"), "cursor");
+        assert_eq!(normalize_agent_name("cursor"), "cursor");
+        assert_eq!(normalize_agent_name("claude"), "claude");
+        assert_eq!(normalize_agent_name("gemini"), "gemini");
+        assert_eq!(normalize_agent_name("aider"), "aider");
     }
 
     #[test]
