@@ -33,11 +33,17 @@ fn install_cursor_hooks() -> Option<String> {
             "sessionStart": [
                 { "command": "oobo hooks agent session-start --tool cursor" }
             ],
-            "sessionEnd": [
-                { "command": "oobo hooks agent session-end --tool cursor" }
+            "beforeSubmitPrompt": [
+                { "command": "oobo hooks agent before-submit-prompt --tool cursor" }
             ],
             "stop": [
                 { "command": "oobo hooks agent stop --tool cursor" }
+            ],
+            "subagentStop": [
+                { "command": "oobo hooks agent subagent-stop --tool cursor" }
+            ],
+            "sessionEnd": [
+                { "command": "oobo hooks agent session-end --tool cursor" }
             ]
         }
     });

@@ -78,6 +78,15 @@ pub fn handle_event(
                 state::remove_session(&project_root, sid);
             }
         }
+        "before-submit-prompt" => {
+            if let Some(sid) = session_id_field {
+                // Capture pre-agent state: any dirty files right now are
+                // human edits (the agent hasn't started its turn yet).
+                if !project_root.is_empty() {
+                    let _ = state::snapshot_pre_agent_state(&project_root, sid);
+                }
+            }
+        }
         "stop" => {
             if let Some(sid) = session_id_field {
                 let transcript_path = event
@@ -86,8 +95,7 @@ pub fn handle_event(
                     .and_then(|v| v.as_str());
                 state::touch_session(&project_root, sid, transcript_path)?;
 
-                // Snapshot files edited by this session so we can compute
-                // exact AI vs human attribution at commit time.
+                // Snapshot post-agent state: files the agent edited.
                 if !project_root.is_empty() && is_cursor_agent(agent) {
                     let files =
                         crate::tools::cursor::composer_data::files_edited_in_session(
@@ -95,6 +103,28 @@ pub fn handle_event(
                         );
                     if !files.is_empty() {
                         let _ = state::snapshot_session_files(&project_root, sid, &files);
+                    }
+                }
+            }
+        }
+        "subagent-stop" => {
+            if let Some(sid) = session_id_field {
+                state::touch_session(&project_root, sid, None)?;
+
+                // subagentStop payload may contain modified_files directly.
+                if !project_root.is_empty() {
+                    if let Some(files_val) = event.extra.get("modified_files") {
+                        if let Some(files_arr) = files_val.as_array() {
+                            let files: Vec<String> = files_arr
+                                .iter()
+                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .collect();
+                            if !files.is_empty() {
+                                let _ = state::snapshot_session_files(
+                                    &project_root, sid, &files,
+                                );
+                            }
+                        }
                     }
                 }
             }

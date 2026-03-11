@@ -23,10 +23,15 @@ pub struct ActiveSession {
     pub worktree: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
-    /// Git blob hashes of files after the agent's last edit.
-    /// Keys are repo-relative paths, values are blob SHA-1 hashes.
-    /// Captured on `stop` hook so we can diff against committed state
-    /// for exact AI vs human line attribution.
+    /// Git blob hashes of files BEFORE the agent's edit (pre-agent state).
+    /// Captured on `before-submit-prompt` hook — at this moment any worktree
+    /// changes are human edits, the agent hasn't started yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_agent_snapshots: Option<std::collections::HashMap<String, String>>,
+    /// Git blob hashes of files AFTER the agent's last edit (post-agent state).
+    /// Captured on `stop` hook when the agent's turn completes.
+    /// Diff pre_agent → post_agent = AI's work.
+    /// Diff post_agent → committed = human's work.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_snapshots: Option<std::collections::HashMap<String, String>>,
     pub started_at: i64,
@@ -127,6 +132,7 @@ pub fn write_session(
         model: model.map(|s| s.to_string()),
         worktree,
         transcript_path: None,
+        pre_agent_snapshots: None,
         file_snapshots: None,
         started_at: now,
         updated_at: now,
@@ -222,6 +228,87 @@ fn read_all_sessions(project_root: &str) -> Vec<ActiveSession> {
     }
 
     sessions
+}
+
+/// Capture the pre-agent file state: snapshot currently dirty files in the
+/// worktree. Called on `before-submit-prompt` — any worktree changes at this
+/// moment are human edits (the agent hasn't started yet).
+pub fn snapshot_pre_agent_state(
+    project_root: &str,
+    session_id: &str,
+) -> Result<()> {
+    let path = session_path(project_root, session_id);
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&path)?;
+    let mut state: ActiveSession = serde_json::from_str(&content)?;
+
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+
+    // Get all modified/new files in the worktree
+    let output = Command::new(&git)
+        .args(["diff", "--name-only", "HEAD"])
+        .current_dir(project_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output();
+
+    let dirty_files: Vec<String> = output
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(|l| l.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if dirty_files.is_empty() {
+        // No dirty files → HEAD IS the pre-agent state. No snapshot needed;
+        // at commit time we'll use HEAD~1 as the baseline.
+        return Ok(());
+    }
+
+    let mut snapshots = std::collections::HashMap::new();
+
+    for file in &dirty_files {
+        let abs_path = std::path::Path::new(project_root).join(file);
+        if !abs_path.exists() {
+            continue;
+        }
+        let output = Command::new(&git)
+            .args(["hash-object", "-w"])
+            .arg(&abs_path)
+            .current_dir(project_root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+
+        if let Ok(o) = output {
+            if o.status.success() {
+                let hash = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !hash.is_empty() {
+                    snapshots.insert(file.clone(), hash);
+                }
+            }
+        }
+    }
+
+    state.pre_agent_snapshots = if snapshots.is_empty() {
+        None
+    } else {
+        Some(snapshots)
+    };
+
+    let json = serde_json::to_string_pretty(&state)?;
+    fs::write(&path, json)?;
+
+    Ok(())
 }
 
 /// Snapshot files edited by this session into git's object store.
@@ -364,6 +451,7 @@ mod tests {
             model: None,
             worktree: Some(this_wt.clone()),
             transcript_path: None,
+            pre_agent_snapshots: None,
             file_snapshots: None,
             started_at: now,
             updated_at: now,
@@ -374,6 +462,7 @@ mod tests {
             model: None,
             worktree: Some("/other/worktree".into()),
             transcript_path: None,
+            pre_agent_snapshots: None,
             file_snapshots: None,
             started_at: now,
             updated_at: now,
@@ -384,6 +473,7 @@ mod tests {
             model: None,
             worktree: None,
             transcript_path: None,
+            pre_agent_snapshots: None,
             file_snapshots: None,
             started_at: now,
             updated_at: now,

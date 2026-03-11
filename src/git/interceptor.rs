@@ -145,8 +145,8 @@ fn enrich_commit(
     let ai_file_set: std::collections::HashSet<&str> =
         ai_files_touched.iter().map(|(p, _)| p.as_str()).collect();
 
-    // Build lookup: file_path → (agent_blob_hash, agent_name)
-    let snapshot_lookup = build_snapshot_lookup(&active_sessions, &ai_files_touched);
+    let (snapshot_lookup, pre_agent_lookup) =
+        build_snapshot_lookups(&active_sessions, &ai_files_touched);
 
     let mut file_changes = Vec::new();
     let mut ai_added: u32 = 0;
@@ -157,13 +157,14 @@ fn enrich_commit(
     let is_agent_commit = author_type == AuthorType::Agent;
 
     for (path, added, deleted) in &per_file {
+        let pre_blob = pre_agent_lookup.get(path.as_str()).cloned();
         let (file_ai_add, file_ai_del, file_human_add, file_human_del, attribution, agent) =
             if let Some((agent_blob, agent_name)) = snapshot_lookup.get(path.as_str()) {
-                // We have an exact snapshot of what the AI wrote.
                 compute_precise_attribution(
                     cfg,
                     path,
                     agent_blob,
+                    pre_blob.as_deref(),
                     *added,
                     *deleted,
                     agent_name.clone(),
@@ -287,12 +288,18 @@ fn enrich_commit(
     Ok(())
 }
 
-/// Build a lookup from file path → (agent_blob_hash, agent_name) from session snapshots.
-fn build_snapshot_lookup<'a>(
+/// Build lookups from file path → blob hash for both pre-agent and post-agent snapshots.
+/// Returns (post_agent_lookup, pre_agent_lookup).
+fn build_snapshot_lookups<'a>(
     sessions: &'a [hooks::state::ActiveSession],
     ai_files_touched: &'a [(String, String)],
-) -> std::collections::HashMap<&'a str, (String, Option<String>)> {
-    let mut lookup: std::collections::HashMap<&str, (String, Option<String>)> =
+) -> (
+    std::collections::HashMap<&'a str, (String, Option<String>)>,
+    std::collections::HashMap<&'a str, String>,
+) {
+    let mut post_agent: std::collections::HashMap<&str, (String, Option<String>)> =
+        std::collections::HashMap::new();
+    let mut pre_agent: std::collections::HashMap<&str, String> =
         std::collections::HashMap::new();
 
     for session in sessions {
@@ -302,35 +309,45 @@ fn build_snapshot_lookup<'a>(
                     .iter()
                     .find(|(p, _)| p == file)
                     .map(|(_, a)| a.clone());
-                // Latest session wins (overwrite) — most recent snapshot is most accurate.
-                lookup.insert(file.as_str(), (blob_hash.clone(), agent_name));
+                post_agent.insert(file.as_str(), (blob_hash.clone(), agent_name));
+            }
+        }
+        if let Some(ref snapshots) = session.pre_agent_snapshots {
+            for (file, blob_hash) in snapshots {
+                pre_agent.insert(file.as_str(), blob_hash.clone());
             }
         }
     }
 
-    lookup
+    (post_agent, pre_agent)
 }
 
 /// Compute exact AI vs human line counts for a file using blob diffs.
 ///
-/// Diffs: parent → agent_blob (AI's work) and agent_blob → committed (human's work).
-/// If agent_blob == committed blob, it's pure AI. If agent_blob == parent blob,
-/// the AI's changes were reverted → pure human.
+/// Uses three reference points:
+/// - `pre_agent_blob`: file state before the agent started (from `before-submit-prompt`)
+/// - `agent_blob`: file state after the agent finished (from `stop`)
+/// - committed blob: what was actually committed (`HEAD:{file}`)
+///
+/// AI contribution = diff(pre_agent → agent_blob)
+/// Human contribution = diff(agent_blob → committed)
+///
+/// Falls back to parent commit blob if pre_agent_blob isn't available.
 fn compute_precise_attribution(
     cfg: &Config,
     file_path: &str,
     agent_blob: &str,
+    pre_agent_blob: Option<&str>,
     total_added: u32,
     total_deleted: u32,
     agent_name: Option<String>,
 ) -> (u32, u32, u32, u32, Option<FileAttribution>, Option<String>) {
-    // Get the committed blob hash for this file
     let committed_blob = proxy::run_git_capture(cfg, &["rev-parse", &format!("HEAD:{file_path}")])
         .unwrap_or_default()
         .trim()
         .to_string();
 
-    // If agent blob matches committed blob → pure AI (human didn't change it)
+    // If agent blob matches committed blob → pure AI (human didn't change it after the agent)
     if !committed_blob.is_empty() && agent_blob == committed_blob {
         return (
             total_added,
@@ -342,17 +359,18 @@ fn compute_precise_attribution(
         );
     }
 
-    // Get the parent commit's blob hash
-    let parent_blob = proxy::run_git_capture(
-        cfg,
-        &["rev-parse", &format!("HEAD~1:{file_path}")],
-    )
-    .unwrap_or_default()
-    .trim()
-    .to_string();
+    // Use pre-agent snapshot if available, otherwise fall back to parent commit blob
+    let baseline_blob = if let Some(pre) = pre_agent_blob {
+        pre.to_string()
+    } else {
+        proxy::run_git_capture(cfg, &["rev-parse", &format!("HEAD~1:{file_path}")])
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
 
-    // If agent blob matches parent blob → AI changed nothing (or was reverted) → pure human
-    if !parent_blob.is_empty() && agent_blob == parent_blob {
+    // If agent blob matches baseline → AI changed nothing → pure human
+    if !baseline_blob.is_empty() && agent_blob == baseline_blob {
         return (
             0,
             0,
@@ -363,16 +381,19 @@ fn compute_precise_attribution(
         );
     }
 
-    // Diff parent → agent_blob to get AI's exact line counts
-    let ai_stats = diff_blobs_numstat(cfg, &parent_blob, agent_blob);
+    // AI contribution: baseline → agent_blob
+    let ai_stats = diff_blobs_numstat(cfg, &baseline_blob, agent_blob);
+    // Human contribution: agent_blob → committed
+    let human_stats = diff_blobs_numstat(cfg, agent_blob, &committed_blob);
 
     let (ai_add, ai_del) = ai_stats.unwrap_or((total_added, total_deleted));
+    let (human_add, human_del) = human_stats.unwrap_or((0, 0));
 
-    // Clamp: AI can't have more lines than the total commit diff for this file
+    // Clamp to total
     let ai_add = ai_add.min(total_added);
     let ai_del = ai_del.min(total_deleted);
-    let human_add = total_added.saturating_sub(ai_add);
-    let human_del = total_deleted.saturating_sub(ai_del);
+    let human_add = human_add.min(total_added.saturating_sub(ai_add));
+    let human_del = human_del.min(total_deleted.saturating_sub(ai_del));
 
     let attribution = if human_add == 0 && human_del == 0 {
         Some(FileAttribution::Ai)
