@@ -75,10 +75,7 @@ pub fn run(cfg: &Config, limit: usize, agent: bool) -> Result<(), String> {
             if entry.ai_added > 0 || entry.human_added > 0 {
                 println!(
                     "  \x1b[90mai: +{}/-{}  human: +{}/-{}\x1b[0m",
-                    entry.ai_added,
-                    entry.ai_deleted,
-                    entry.human_added,
-                    entry.human_deleted,
+                    entry.ai_added, entry.ai_deleted, entry.human_added, entry.human_deleted,
                 );
             }
         }

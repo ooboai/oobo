@@ -89,18 +89,16 @@ pub fn handle_event(
         }
         "stop" => {
             if let Some(sid) = session_id_field {
-                let transcript_path = event
-                    .extra
-                    .get("transcript_path")
-                    .and_then(|v| v.as_str());
+                let transcript_path = event.extra.get("transcript_path").and_then(|v| v.as_str());
                 state::touch_session(&project_root, sid, transcript_path)?;
 
                 // Snapshot post-agent state: files the agent edited.
                 if !project_root.is_empty() && is_cursor_agent(agent) {
-                    let files =
-                        crate::tools::cursor::composer_data::files_edited_in_session(
-                            sid, &project_root, 0,
-                        );
+                    let files = crate::tools::cursor::composer_data::files_edited_in_session(
+                        sid,
+                        &project_root,
+                        0,
+                    );
                     if !files.is_empty() {
                         let _ = state::snapshot_session_files(&project_root, sid, &files);
                     }
@@ -120,9 +118,7 @@ pub fn handle_event(
                                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
                                 .collect();
                             if !files.is_empty() {
-                                let _ = state::snapshot_session_files(
-                                    &project_root, sid, &files,
-                                );
+                                let _ = state::snapshot_session_files(&project_root, sid, &files);
                             }
                         }
                     }

@@ -233,10 +233,7 @@ fn read_all_sessions(project_root: &str) -> Vec<ActiveSession> {
 /// Capture the pre-agent file state: snapshot currently dirty files in the
 /// worktree. Called on `before-submit-prompt` — any worktree changes at this
 /// moment are human edits (the agent hasn't started yet).
-pub fn snapshot_pre_agent_state(
-    project_root: &str,
-    session_id: &str,
-) -> Result<()> {
+pub fn snapshot_pre_agent_state(project_root: &str, session_id: &str) -> Result<()> {
     let path = session_path(project_root, session_id);
     if !path.exists() {
         return Ok(());

@@ -476,9 +476,30 @@ pub enum HookAction {
 }
 
 const OOBO_SUBCOMMANDS: &[&str] = &[
-    "setup", "sessions", "alias", "dash", "ship", "projects", "stats", "scan", "index", "update",
-    "sources", "auth", "agent", "version", "hooks", "anchors", "a", "share", "inspect", "sync",
-    "ignore", "unignore", "transparency", "card",
+    "setup",
+    "sessions",
+    "alias",
+    "dash",
+    "ship",
+    "projects",
+    "stats",
+    "scan",
+    "index",
+    "update",
+    "sources",
+    "auth",
+    "agent",
+    "version",
+    "hooks",
+    "anchors",
+    "a",
+    "share",
+    "inspect",
+    "sync",
+    "ignore",
+    "unignore",
+    "transparency",
+    "card",
 ];
 
 fn is_oobo_subcommand(args: &[String]) -> bool {

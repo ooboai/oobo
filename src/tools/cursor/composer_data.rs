@@ -531,9 +531,8 @@ pub fn files_edited_in_session(
                 }
 
                 if let Ok(params) = serde_json::from_str::<serde_json::Value>(&params_str) {
-                    if let Some(raw_path) = params
-                        .get("relativeWorkspacePath")
-                        .and_then(|v| v.as_str())
+                    if let Some(raw_path) =
+                        params.get("relativeWorkspacePath").and_then(|v| v.as_str())
                     {
                         let rel = normalize_to_repo_relative(raw_path, project_root);
                         if seen.insert(rel.clone()) {
@@ -693,10 +692,7 @@ fn bubble_to_transcript_entry(data: &serde_json::Value) -> Option<serde_json::Va
 
     if let Some(tc) = data.get("tokenCount").and_then(|v| v.as_object()) {
         let inp = tc.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let outp = tc
-            .get("outputTokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
+        let outp = tc.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
         if inp > 0 || outp > 0 {
             entry.insert(
                 "tokens".into(),
@@ -747,10 +743,7 @@ fn summarize_tool_params(tool_name: &str, params: &serde_json::Value) -> serde_j
                 }
                 let val_str = v.to_string();
                 if val_str.len() > 500 {
-                    summary.insert(
-                        k.clone(),
-                        format!("({} chars)", val_str.len()).into(),
-                    );
+                    summary.insert(k.clone(), format!("({} chars)", val_str.len()).into());
                 } else {
                     summary.insert(k.clone(), v.clone());
                 }
@@ -920,7 +913,9 @@ mod tests {
         assert_eq!(entry["tool_call"]["name"], "edit_file_v2");
         assert_eq!(entry["tool_call"]["status"], "completed");
         assert_eq!(entry["tool_call"]["params"]["path"], "/src/main.rs");
-        assert!(entry["tool_call"]["params"].get("streamingContent").is_none());
+        assert!(entry["tool_call"]["params"]
+            .get("streamingContent")
+            .is_none());
     }
 
     #[test]
@@ -937,7 +932,10 @@ mod tests {
         });
         let entry = bubble_to_transcript_entry(&data).unwrap();
         assert_eq!(entry["tool_call"]["name"], "run_terminal_command_v2");
-        assert_eq!(entry["tool_call"]["params"]["command"], "oobo commit -m 'test'");
+        assert_eq!(
+            entry["tool_call"]["params"]["command"],
+            "oobo commit -m 'test'"
+        );
     }
 
     #[test]

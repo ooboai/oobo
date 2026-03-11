@@ -210,9 +210,15 @@ mod tests {
             r#"{{"role":"user","message":{{"content":"Set the API key to api_key = '{sk}'"}}}}"#
         );
         let redacted = redact(&transcript);
-        assert!(!redacted.contains(&sk), "API key should be redacted from JSONL");
+        assert!(
+            !redacted.contains(&sk),
+            "API key should be redacted from JSONL"
+        );
         assert!(redacted.contains(REDACT_PLACEHOLDER));
-        assert!(redacted.contains("role"), "JSON structure should be preserved");
+        assert!(
+            redacted.contains("role"),
+            "JSON structure should be preserved"
+        );
     }
 
     #[test]
@@ -222,7 +228,10 @@ mod tests {
             r#"{{"role":"assistant","message":{{"content":"Found credentials: {ak} in your config"}}}}"#
         );
         let redacted = redact(&transcript);
-        assert!(!redacted.contains(&ak), "AWS key should be redacted from JSONL");
+        assert!(
+            !redacted.contains(&ak),
+            "AWS key should be redacted from JSONL"
+        );
     }
 
     #[test]
@@ -231,13 +240,16 @@ mod tests {
         let transcript = format!(
             "{}\n{}\n{}",
             r#"{{"role":"user","message":{{"content":"Please update the config"}}}}"#,
-            format!(
+            format_args!(
                 r#"{{"role":"assistant","message":{{"content":"I'll set token = '{secret}' in .env"}}}}"#
             ),
             r#"{"role":"user","message":{"content":"thanks that looks good"}}"#,
         );
         let redacted = redact(&transcript);
-        assert!(!redacted.contains(&secret), "secret should be redacted across multi-line JSONL");
+        assert!(
+            !redacted.contains(&secret),
+            "secret should be redacted across multi-line JSONL"
+        );
         let line_count = redacted.lines().count();
         assert_eq!(line_count, 3, "line count should be preserved");
     }
@@ -250,7 +262,10 @@ mod tests {
             r#"{"role":"assistant","message":{"content":"I'll split it into lexer and parser"}}"#,
         );
         let redacted = redact(transcript);
-        assert_eq!(redacted, transcript, "clean transcript should pass through unchanged");
+        assert_eq!(
+            redacted, transcript,
+            "clean transcript should pass through unchanged"
+        );
     }
 
     #[test]
@@ -259,14 +274,17 @@ mod tests {
         let transcript = format!(
             "{}\n{}\n{}",
             r#"{{"role":"user","message":{{"content":"deploy to prod"}}}}"#,
-            format!(
+            format_args!(
                 r#"{{"role":"assistant","message":{{"content":"Running deploy..."}},
                 "tool_calls":[{{"name":"Shell","arguments":{{"command":"export API_KEY={secret} && deploy"}}}}]}}"#
             ),
             r#"{"role":"assistant","message":{"content":"Deploy complete."}}"#,
         );
         let redacted = redact(&transcript);
-        assert!(!redacted.contains(&secret), "secret in tool call args should be redacted");
+        assert!(
+            !redacted.contains(&secret),
+            "secret in tool call args should be redacted"
+        );
     }
 
     #[test]
@@ -292,9 +310,7 @@ mod tests {
     #[test]
     fn test_redact_preserves_valid_json_structure() {
         let sk = format!("{}abcdefghij1234567890", "sk_test_");
-        let line = format!(
-            r#"{{"role":"user","message":{{"content":"secret = '{sk}'"}}}}"#
-        );
+        let line = format!(r#"{{"role":"user","message":{{"content":"secret = '{sk}'"}}}}"#);
         let redacted = redact(&line);
         assert!(
             serde_json::from_str::<serde_json::Value>(&redacted).is_ok(),
@@ -312,9 +328,8 @@ mod tests {
         }
 
         let sk = format!("{}abcdefghij1234567890", "sk_live_");
-        let transcript = format!(
-            r#"{{"role":"user","message":{{"content":"Set api_key = '{sk}'"}}}}"#
-        );
+        let transcript =
+            format!(r#"{{"role":"user","message":{{"content":"Set api_key = '{sk}'"}}}}"#);
         let result = redact_with_gitleaks(&transcript);
         assert!(result.is_some(), "gitleaks should succeed");
         let redacted = result.unwrap();
@@ -334,7 +349,11 @@ mod tests {
         let transcript = r#"{"role":"user","message":{"content":"refactor the parser"}}"#;
         let result = redact_with_gitleaks(transcript);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), transcript, "clean content should pass through unchanged");
+        assert_eq!(
+            result.unwrap(),
+            transcript,
+            "clean content should pass through unchanged"
+        );
     }
 
     #[test]
@@ -348,14 +367,20 @@ mod tests {
         let transcript = format!(
             "{}\n{}\n{}",
             r#"{{"role":"user","message":{{"content":"check my aws config"}}}}"#,
-            format!(
+            format_args!(
                 r#"{{"role":"assistant","message":{{"content":"Found key: {aws_key}"}}}}"#
             ),
             r#"{"role":"user","message":{"content":"please rotate that"}}"#,
         );
         let result = redact_with_gitleaks(&transcript);
-        assert!(result.is_some(), "gitleaks should succeed on multi-line JSONL");
+        assert!(
+            result.is_some(),
+            "gitleaks should succeed on multi-line JSONL"
+        );
         let redacted = result.unwrap();
-        assert!(!redacted.contains(&aws_key), "gitleaks should redact AWS key");
+        assert!(
+            !redacted.contains(&aws_key),
+            "gitleaks should redact AWS key"
+        );
     }
 }

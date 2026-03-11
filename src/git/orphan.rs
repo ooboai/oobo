@@ -665,12 +665,10 @@ mod tests {
     #[test]
     fn test_strip_absolute_paths_project_root() {
         let root = "/Users/teddy/dev/projects/trender";
-        let input = r#"{"tool_call":{"params":{"path":"/Users/teddy/dev/projects/trender/backdate.sh"}}}"#;
+        let input =
+            r#"{"tool_call":{"params":{"path":"/Users/teddy/dev/projects/trender/backdate.sh"}}}"#;
         let result = strip_absolute_paths(input, root);
-        assert_eq!(
-            result,
-            r#"{"tool_call":{"params":{"path":"backdate.sh"}}}"#
-        );
+        assert_eq!(result, r#"{"tool_call":{"params":{"path":"backdate.sh"}}}"#);
     }
 
     #[test]

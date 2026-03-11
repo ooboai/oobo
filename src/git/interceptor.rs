@@ -92,10 +92,15 @@ fn enrich_commit(
     let parent_commit_epoch = parent_commit_timestamp(cfg);
 
     let all_sessions = hooks::state::active_sessions_for_worktree(project_root);
-    let active_sessions =
-        filter_relevant_sessions(&all_sessions, project_root, &files_changed, parent_commit_epoch);
+    let active_sessions = filter_relevant_sessions(
+        &all_sessions,
+        project_root,
+        &files_changed,
+        parent_commit_epoch,
+    );
 
-    let ai_files_touched = collect_ai_files_touched(cfg, project_root, &active_sessions, parent_commit_epoch);
+    let ai_files_touched =
+        collect_ai_files_touched(cfg, project_root, &active_sessions, parent_commit_epoch);
 
     // Recalculate author_type: if detect said "assisted" but no sessions
     // are actually relevant to this commit (no file overlap), downgrade to human.
@@ -176,12 +181,26 @@ fn enrich_commit(
                     .find(|(p, _)| p == path)
                     .map(|(_, a)| a.clone());
                 if is_agent_commit {
-                    (*added, *deleted, 0, 0, Some(FileAttribution::Ai), agent_name)
+                    (
+                        *added,
+                        *deleted,
+                        0,
+                        0,
+                        Some(FileAttribution::Ai),
+                        agent_name,
+                    )
                 } else {
                     // No snapshot — honest 50/50 split as best estimate.
                     let ai_a = *added / 2;
                     let ai_d = *deleted / 2;
-                    (ai_a, ai_d, added - ai_a, deleted - ai_d, Some(FileAttribution::Mixed), agent_name)
+                    (
+                        ai_a,
+                        ai_d,
+                        added - ai_a,
+                        deleted - ai_d,
+                        Some(FileAttribution::Mixed),
+                        agent_name,
+                    )
                 }
             } else if is_agent_commit && !has_ai_sessions {
                 (*added, *deleted, 0, 0, Some(FileAttribution::Ai), None)
@@ -288,19 +307,17 @@ fn enrich_commit(
     Ok(())
 }
 
+type PostAgentLookup<'a> = std::collections::HashMap<&'a str, (String, Option<String>)>;
+type PreAgentLookup<'a> = std::collections::HashMap<&'a str, String>;
+
 /// Build lookups from file path → blob hash for both pre-agent and post-agent snapshots.
-/// Returns (post_agent_lookup, pre_agent_lookup).
 fn build_snapshot_lookups<'a>(
     sessions: &'a [hooks::state::ActiveSession],
     ai_files_touched: &'a [(String, String)],
-) -> (
-    std::collections::HashMap<&'a str, (String, Option<String>)>,
-    std::collections::HashMap<&'a str, String>,
-) {
+) -> (PostAgentLookup<'a>, PreAgentLookup<'a>) {
     let mut post_agent: std::collections::HashMap<&str, (String, Option<String>)> =
         std::collections::HashMap::new();
-    let mut pre_agent: std::collections::HashMap<&str, String> =
-        std::collections::HashMap::new();
+    let mut pre_agent: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
 
     for session in sessions {
         if let Some(ref snapshots) = session.file_snapshots {
@@ -403,7 +420,14 @@ fn compute_precise_attribution(
         Some(FileAttribution::Mixed)
     };
 
-    (ai_add, ai_del, human_add, human_del, attribution, agent_name)
+    (
+        ai_add,
+        ai_del,
+        human_add,
+        human_del,
+        attribution,
+        agent_name,
+    )
 }
 
 /// Diff two blob objects and return (added, deleted) line counts.
@@ -627,7 +651,9 @@ fn is_agent_tool_match(session_agent: &str, tool_name: &str) -> bool {
     if session_agent == tool_name {
         return true;
     }
-    let cursor_aliases = ["cursor", "agent", "composer", "ask", "edit", "normal", "chat"];
+    let cursor_aliases = [
+        "cursor", "agent", "composer", "ask", "edit", "normal", "chat",
+    ];
     let cursor_tools = ["composer", "cursor"];
     cursor_aliases.contains(&session_agent) && cursor_tools.contains(&tool_name)
 }

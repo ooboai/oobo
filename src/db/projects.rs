@@ -559,10 +559,7 @@ mod tests {
         db.ensure_project("Users-test-project", "/Users/test/project")
             .unwrap();
 
-        let found = db
-            .get_project_by_id("Users-test-project")
-            .unwrap()
-            .unwrap();
+        let found = db.get_project_by_id("Users-test-project").unwrap().unwrap();
         assert_eq!(found.tools, vec!["cursor", "claude"]);
         assert_eq!(
             found.git_remote.as_deref(),
