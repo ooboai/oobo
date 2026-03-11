@@ -81,7 +81,7 @@ fn enrich_commit(
     }
 
     let author_info = detect::detect(project_root);
-    let author_type = match &author_info {
+    let initial_author_type = match &author_info {
         detect::CommitAuthor::Agent { .. } => AuthorType::Agent,
         detect::CommitAuthor::Assisted { .. } => AuthorType::Assisted,
         detect::CommitAuthor::Human => AuthorType::Human,
@@ -96,6 +96,17 @@ fn enrich_commit(
         filter_relevant_sessions(&all_sessions, project_root, &files_changed, parent_commit_epoch);
 
     let ai_files_touched = collect_ai_files_touched(cfg, project_root, &active_sessions, parent_commit_epoch);
+
+    // Recalculate author_type: if detect said "assisted" but no sessions
+    // are actually relevant to this commit (no file overlap), downgrade to human.
+    let author_type = if initial_author_type == AuthorType::Assisted
+        && active_sessions.is_empty()
+        && ai_files_touched.is_empty()
+    {
+        AuthorType::Human
+    } else {
+        initial_author_type
+    };
 
     let session_links: Vec<SessionLink> = active_sessions
         .iter()
@@ -166,7 +177,10 @@ fn enrich_commit(
                 if is_agent_commit {
                     (*added, *deleted, 0, 0, Some(FileAttribution::Ai), agent_name)
                 } else {
-                    (*added, *deleted, 0, 0, Some(FileAttribution::Mixed), agent_name)
+                    // No snapshot — honest 50/50 split as best estimate.
+                    let ai_a = *added / 2;
+                    let ai_d = *deleted / 2;
+                    (ai_a, ai_d, added - ai_a, deleted - ai_d, Some(FileAttribution::Mixed), agent_name)
                 }
             } else if is_agent_commit && !has_ai_sessions {
                 (*added, *deleted, 0, 0, Some(FileAttribution::Ai), None)
