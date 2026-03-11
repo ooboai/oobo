@@ -89,12 +89,13 @@ fn enrich_commit(
     };
     let per_file = collect_per_file_stats(cfg);
     let files_changed: Vec<String> = per_file.iter().map(|(p, _, _)| p.clone()).collect();
+    let parent_commit_epoch = parent_commit_timestamp(cfg);
 
     let all_sessions = hooks::state::active_sessions_for_worktree(project_root);
     let active_sessions =
-        filter_relevant_sessions(&all_sessions, project_root, &files_changed);
+        filter_relevant_sessions(&all_sessions, project_root, &files_changed, parent_commit_epoch);
 
-    let ai_files_touched = collect_ai_files_touched(cfg, project_root, &active_sessions);
+    let ai_files_touched = collect_ai_files_touched(cfg, project_root, &active_sessions, parent_commit_epoch);
 
     let session_links: Vec<SessionLink> = active_sessions
         .iter()
@@ -143,19 +144,19 @@ fn enrich_commit(
 
     for (path, added, deleted) in &per_file {
         let (attribution, agent) = if ai_file_set.contains(path.as_str()) {
+            // Session explicitly edited this file (via edit_file_v2 or tool stats)
             let agent_name = ai_files_touched
                 .iter()
                 .find(|(p, _)| p == path)
                 .map(|(_, a)| a.clone());
             (Some(FileAttribution::Ai), agent_name)
-        } else if is_agent_commit && has_ai_sessions {
-            let agent_name = active_sessions.first().map(|s| s.agent.clone());
-            (Some(FileAttribution::Ai), agent_name)
-        } else if has_ai_sessions {
-            (Some(FileAttribution::Mixed), None)
-        } else if is_agent_commit {
+        } else if is_agent_commit && !has_ai_sessions {
+            // Agent commit (env var / committer pattern) but no session data
+            // to know which files — attribute all to AI as best guess.
             (Some(FileAttribution::Ai), None)
         } else {
+            // No evidence this file was AI-edited — attribute to human.
+            // Even in assisted commits, files not touched by AI are human work.
             (Some(FileAttribution::Human), None)
         };
 
@@ -276,6 +277,17 @@ fn enrich_commit(
     Ok(())
 }
 
+/// Get the parent commit's author timestamp (Unix epoch seconds).
+/// Returns 0 if there's no parent (initial commit).
+fn parent_commit_timestamp(cfg: &Config) -> i64 {
+    let output = proxy::run_git_capture(cfg, &["log", "-1", "--format=%at", "HEAD~1"]);
+    output
+        .unwrap_or_default()
+        .trim()
+        .parse::<i64>()
+        .unwrap_or(0)
+}
+
 /// Collect per-file line stats from the most recent commit via `git diff-tree --numstat`.
 fn collect_per_file_stats(cfg: &Config) -> Vec<(String, u32, u32)> {
     let output = proxy::run_git_capture(
@@ -310,6 +322,7 @@ fn collect_ai_files_touched(
     cfg: &Config,
     project_root: &str,
     active_sessions: &[hooks::state::ActiveSession],
+    since_epoch: i64,
 ) -> Vec<(String, String)> {
     if active_sessions.is_empty() {
         return Vec::new();
@@ -323,6 +336,7 @@ fn collect_ai_files_touched(
             let files = crate::tools::cursor::composer_data::files_edited_in_session(
                 &session.session_id,
                 project_root,
+                since_epoch,
             );
             for file in files {
                 if seen.insert(file.clone()) {
@@ -376,16 +390,15 @@ fn collect_ai_files_touched(
 ///
 /// When multiple sessions touch the same file, all are included (they both
 /// contributed).
+/// `since_epoch`: only count edits after this timestamp (parent commit time).
 fn filter_relevant_sessions(
     sessions: &[crate::hooks::state::ActiveSession],
     project_root: &str,
     committed_files: &[String],
+    since_epoch: i64,
 ) -> Vec<crate::hooks::state::ActiveSession> {
     if sessions.is_empty() {
         return Vec::new();
-    }
-    if sessions.len() == 1 {
-        return sessions.to_vec();
     }
 
     let committed_set: std::collections::HashSet<&str> =
@@ -399,6 +412,7 @@ fn filter_relevant_sessions(
             let edited = crate::tools::cursor::composer_data::files_edited_in_session(
                 &session.session_id,
                 project_root,
+                since_epoch,
             );
             let has_overlap = edited.iter().any(|f| committed_set.contains(f.as_str()));
             if has_overlap {
@@ -408,7 +422,7 @@ fn filter_relevant_sessions(
             // it was working on something else.
             // If it edited zero files (e.g. DB unavailable), fall through
             // to recency.
-            if edited.is_empty() {
+            if edited.is_empty() && !has_overlap {
                 unresolved.push(session);
             }
         } else {
@@ -417,8 +431,6 @@ fn filter_relevant_sessions(
     }
 
     if !matched_by_files.is_empty() {
-        // We found concrete file-based matches. For unresolved sessions
-        // (non-Cursor or no DB), include them only if very recent.
         let now = chrono::Utc::now().timestamp();
         for s in &unresolved {
             if now - s.updated_at < 120 {
@@ -429,6 +441,7 @@ fn filter_relevant_sessions(
     }
 
     // No file-based matches — fall back to recency heuristic.
+    // This handles: single session, non-Cursor tools, DB unavailable.
     filter_by_recency(sessions)
 }
 

@@ -48,7 +48,8 @@ pub fn write_anchor(
                 transcripts.iter().find(|(sid, _)| sid == &link.session_id)
             {
                 let redacted = crate::redact::redact(transcript_text);
-                entries.push((format!("{base_path}/{}/transcript.json", i + 1), redacted));
+                let sanitized = strip_absolute_paths(&redacted, project_root);
+                entries.push((format!("{base_path}/{}/transcript.json", i + 1), sanitized));
             }
         }
     }
@@ -56,6 +57,30 @@ pub fn write_anchor(
     write_to_branch(project_root, &entries)?;
 
     Ok(())
+}
+
+/// Replace absolute paths containing the project root with repo-relative paths.
+/// Also strips the user's home directory from any remaining absolute paths.
+fn strip_absolute_paths(text: &str, project_root: &str) -> String {
+    let mut result = text.to_string();
+
+    // Strip project root (with and without trailing slash)
+    let root_slash = if project_root.ends_with('/') {
+        project_root.to_string()
+    } else {
+        format!("{project_root}/")
+    };
+    result = result.replace(&root_slash, "");
+    result = result.replace(project_root, "");
+
+    // Strip home directory from any other absolute paths
+    if let Some(home) = dirs::home_dir() {
+        let home_str = home.to_string_lossy();
+        let home_slash = format!("{home_str}/");
+        result = result.replace(&home_slash, "~/");
+    }
+
+    result
 }
 
 pub fn read_anchor(project_root: &str, commit_hash: &str) -> Option<Anchor> {
@@ -635,5 +660,42 @@ mod tests {
         }
 
         assert!(!branch_exists(repo));
+    }
+
+    #[test]
+    fn test_strip_absolute_paths_project_root() {
+        let root = "/Users/teddy/dev/projects/trender";
+        let input = r#"{"tool_call":{"params":{"path":"/Users/teddy/dev/projects/trender/backdate.sh"}}}"#;
+        let result = strip_absolute_paths(input, root);
+        assert_eq!(
+            result,
+            r#"{"tool_call":{"params":{"path":"backdate.sh"}}}"#
+        );
+    }
+
+    #[test]
+    fn test_strip_absolute_paths_nested() {
+        let root = "/Users/teddy/dev/projects/myapp";
+        let input = r#"{"path":"/Users/teddy/dev/projects/myapp/src/lib.rs"}"#;
+        let result = strip_absolute_paths(input, root);
+        assert_eq!(result, r#"{"path":"src/lib.rs"}"#);
+    }
+
+    #[test]
+    fn test_strip_absolute_paths_home_fallback() {
+        let root = "/Users/teddy/dev/projects/myapp";
+        let home = dirs::home_dir().unwrap();
+        let home_str = home.to_string_lossy();
+        let input = format!(r#"{{"path":"{home_str}/.config/something"}}"#);
+        let result = strip_absolute_paths(&input, root);
+        assert_eq!(result, r#"{"path":"~/.config/something"}"#);
+    }
+
+    #[test]
+    fn test_strip_absolute_paths_no_change_for_relative() {
+        let root = "/Users/teddy/dev/projects/myapp";
+        let input = r#"{"path":"src/main.rs"}"#;
+        let result = strip_absolute_paths(input, root);
+        assert_eq!(result, r#"{"path":"src/main.rs"}"#);
     }
 }

@@ -474,7 +474,14 @@ impl DailyCodeStats {
 
 /// Extract file paths edited by a Cursor session from its bubbleId: DB entries.
 /// Returns repo-relative paths (e.g. `src/main.rs`) by stripping `project_root`.
-pub fn files_edited_in_session(session_id: &str, project_root: &str) -> Vec<String> {
+///
+/// `since_epoch` filters to only edits after that Unix timestamp (seconds).
+/// Pass 0 to include all edits.
+pub fn files_edited_in_session(
+    session_id: &str,
+    project_root: &str,
+    since_epoch: i64,
+) -> Vec<String> {
     let db_path = match global_state_vscdb_path() {
         Some(p) if p.exists() => p,
         _ => return Vec::new(),
@@ -492,7 +499,8 @@ pub fn files_edited_in_session(session_id: &str, project_root: &str) -> Vec<Stri
 
     let mut stmt = match conn.prepare(
         "SELECT json_extract(value, '$.toolFormerData.name'),
-                json_extract(value, '$.toolFormerData.params')
+                json_extract(value, '$.toolFormerData.params'),
+                json_extract(value, '$.createdAt')
          FROM cursorDiskKV WHERE key = ?1",
     ) {
         Ok(s) => s,
@@ -504,14 +512,24 @@ pub fn files_edited_in_session(session_id: &str, project_root: &str) -> Vec<Stri
 
     for bubble_id in &bubble_ids {
         let key = format!("bubbleId:{session_id}:{bubble_id}");
-        let row: Option<(Option<String>, Option<String>)> = stmt
+        let row: Option<(Option<String>, Option<String>, Option<String>)> = stmt
             .query_row(rusqlite::params![&key], |row| {
-                Ok((row.get(0).ok(), row.get(1).ok()))
+                Ok((row.get(0).ok(), row.get(1).ok(), row.get(2).ok()))
             })
             .ok();
 
-        if let Some((Some(tool_name), Some(params_str))) = row {
+        if let Some((Some(tool_name), Some(params_str), created_at)) = row {
             if tool_name == "edit_file_v2" {
+                if since_epoch > 0 {
+                    if let Some(ts_str) = &created_at {
+                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts_str) {
+                            if dt.timestamp() <= since_epoch {
+                                continue;
+                            }
+                        }
+                    }
+                }
+
                 if let Ok(params) = serde_json::from_str::<serde_json::Value>(&params_str) {
                     if let Some(raw_path) = params
                         .get("relativeWorkspacePath")
