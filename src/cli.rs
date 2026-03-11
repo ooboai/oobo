@@ -29,6 +29,7 @@ use crate::git;
   sync         Import anchors from existing repos
   ignore       Stop tracking this repo
   unignore     Re-enable tracking
+  transparency Per-repo transcript transparency
 
 \x1b[1;4mGlobal:\x1b[0m
   setup        First-time configuration wizard
@@ -147,6 +148,24 @@ pub enum Command {
     /// Re-enable tracking for a previously ignored repo
     #[command(display_order = 7)]
     Unignore,
+
+    /// Control per-repo transcript transparency [on, off, reset]
+    #[command(
+        display_order = 8,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo transparency          Show current setting\n  \
+                       oobo transparency on        Sync redacted transcripts for this repo\n  \
+                       oobo transparency off       Keep transcripts local for this repo\n  \
+                       oobo transparency reset     Clear override, use global default\n  \
+                       oobo transparency --list    Show all per-repo overrides"
+    )]
+    Transparency {
+        /// on, off, or reset (omit to show current setting)
+        mode: Option<String>,
+        /// Show all repos with per-repo transparency overrides
+        #[arg(long)]
+        list: bool,
+    },
 
     // ── Global commands (work from anywhere) ─────────────────────────────
     /// First-time configuration wizard
@@ -456,7 +475,7 @@ pub enum HookAction {
 const OOBO_SUBCOMMANDS: &[&str] = &[
     "setup", "sessions", "alias", "dash", "ship", "projects", "stats", "scan", "index", "update",
     "sources", "auth", "agent", "version", "hooks", "anchors", "a", "share", "inspect", "sync",
-    "ignore", "unignore", "card",
+    "ignore", "unignore", "transparency", "card",
 ];
 
 fn is_oobo_subcommand(args: &[String]) -> bool {
@@ -608,6 +627,14 @@ pub fn route(cfg: Config) -> Result<i32, String> {
         }
         Some(Command::Unignore) => {
             crate::commands::ignore::run_unignore(&cfg)?;
+            Ok(0)
+        }
+        Some(Command::Transparency { mode, list }) => {
+            if list {
+                crate::commands::transparency::run_list(&cfg);
+            } else {
+                crate::commands::transparency::run(&cfg, mode.as_deref())?;
+            }
             Ok(0)
         }
         Some(Command::Card { out }) => {

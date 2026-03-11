@@ -14,4 +14,5 @@ pub mod ship;
 pub mod sources;
 pub mod stats;
 pub mod sync;
+pub mod transparency;
 pub mod update;
