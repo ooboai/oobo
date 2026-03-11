@@ -472,6 +472,77 @@ impl DailyCodeStats {
     }
 }
 
+/// Extract file paths edited by a Cursor session from its bubbleId: DB entries.
+/// Returns repo-relative paths (e.g. `src/main.rs`) by stripping `project_root`.
+pub fn files_edited_in_session(session_id: &str, project_root: &str) -> Vec<String> {
+    let db_path = match global_state_vscdb_path() {
+        Some(p) if p.exists() => p,
+        _ => return Vec::new(),
+    };
+
+    let conn = match crate::utils::open_db_readonly(&db_path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let bubble_ids = match read_bubble_order(&conn, session_id) {
+        Some(ids) => ids,
+        None => return Vec::new(),
+    };
+
+    let mut stmt = match conn.prepare(
+        "SELECT json_extract(value, '$.toolFormerData.name'),
+                json_extract(value, '$.toolFormerData.params')
+         FROM cursorDiskKV WHERE key = ?1",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut files = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for bubble_id in &bubble_ids {
+        let key = format!("bubbleId:{session_id}:{bubble_id}");
+        let row: Option<(Option<String>, Option<String>)> = stmt
+            .query_row(rusqlite::params![&key], |row| {
+                Ok((row.get(0).ok(), row.get(1).ok()))
+            })
+            .ok();
+
+        if let Some((Some(tool_name), Some(params_str))) = row {
+            if tool_name == "edit_file_v2" {
+                if let Ok(params) = serde_json::from_str::<serde_json::Value>(&params_str) {
+                    if let Some(raw_path) = params
+                        .get("relativeWorkspacePath")
+                        .and_then(|v| v.as_str())
+                    {
+                        let rel = normalize_to_repo_relative(raw_path, project_root);
+                        if seen.insert(rel.clone()) {
+                            files.push(rel);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    files
+}
+
+/// Normalize a tool-reported path to a repo-relative path.
+/// Handles: absolute paths under project root, workspace-relative paths
+/// with leading `/`, and already-relative paths.
+fn normalize_to_repo_relative(file_path: &str, project_root: &str) -> String {
+    let p = std::path::Path::new(file_path);
+    if let Ok(rel) = p.strip_prefix(project_root) {
+        return rel.to_string_lossy().to_string();
+    }
+    // Strip leading `/` — Cursor's relativeWorkspacePath sometimes includes
+    // it. If it's truly from another project, it won't match committed files.
+    file_path.strip_prefix('/').unwrap_or(file_path).to_string()
+}
+
 /// Build a rich JSONL transcript from Cursor's bubbleId: database entries.
 /// Includes thinking blocks, tool calls (with params), timestamps, and tokens
 /// — the full agent reasoning and actions timeline, not just chat text.
@@ -873,5 +944,44 @@ mod tests {
         assert_eq!(summary["path"], "/src/main.rs");
         assert!(summary.get("streamingContent").is_none());
         assert!(summary.get("noCodeblock").is_none());
+    }
+
+    #[test]
+    fn test_normalize_to_repo_relative_absolute() {
+        let root = "/Users/teddy/dev/projects/trender";
+        let abs = "/Users/teddy/dev/projects/trender/backdate.sh";
+        assert_eq!(normalize_to_repo_relative(abs, root), "backdate.sh");
+    }
+
+    #[test]
+    fn test_normalize_to_repo_relative_nested() {
+        let root = "/Users/teddy/dev/projects/trender";
+        let abs = "/Users/teddy/dev/projects/trender/src/main.rs";
+        assert_eq!(normalize_to_repo_relative(abs, root), "src/main.rs");
+    }
+
+    #[test]
+    fn test_normalize_to_repo_relative_leading_slash() {
+        let root = "/Users/teddy/dev/projects/trender";
+        let rel = "/src/main.rs";
+        assert_eq!(normalize_to_repo_relative(rel, root), "src/main.rs");
+    }
+
+    #[test]
+    fn test_normalize_to_repo_relative_already_relative() {
+        let root = "/Users/teddy/dev/projects/trender";
+        let rel = "src/main.rs";
+        assert_eq!(normalize_to_repo_relative(rel, root), "src/main.rs");
+    }
+
+    #[test]
+    fn test_normalize_to_repo_relative_different_root() {
+        let root = "/Users/teddy/dev/projects/trender";
+        let abs = "/Users/teddy/dev/projects/other/file.rs";
+        // Stripped leading `/` — won't match committed files anyway.
+        assert_eq!(
+            normalize_to_repo_relative(abs, root),
+            "Users/teddy/dev/projects/other/file.rs"
+        );
     }
 }

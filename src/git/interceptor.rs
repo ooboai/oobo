@@ -87,8 +87,12 @@ fn enrich_commit(
         detect::CommitAuthor::Human => AuthorType::Human,
         detect::CommitAuthor::Automated => AuthorType::Automated,
     };
+    let per_file = collect_per_file_stats(cfg);
+    let files_changed: Vec<String> = per_file.iter().map(|(p, _, _)| p.clone()).collect();
+
     let all_sessions = hooks::state::active_sessions_for_worktree(project_root);
-    let active_sessions = filter_relevant_sessions(&all_sessions);
+    let active_sessions =
+        filter_relevant_sessions(&all_sessions, project_root, &files_changed);
 
     let ai_files_touched = collect_ai_files_touched(cfg, project_root, &active_sessions);
 
@@ -124,9 +128,6 @@ fn enrich_commit(
     let session_ids: Vec<String> = session_links.iter().map(|s| s.session_id.clone()).collect();
 
     let transparency = resolve_transparency(cfg, project_root);
-
-    let per_file = collect_per_file_stats(cfg);
-    let files_changed: Vec<String> = per_file.iter().map(|(p, _, _)| p.clone()).collect();
 
     let has_ai_sessions = !active_sessions.is_empty();
     let ai_file_set: std::collections::HashSet<&str> =
@@ -301,6 +302,10 @@ fn collect_per_file_stats(cfg: &Config) -> Vec<(String, u32, u32)> {
 
 /// Collect files touched by AI tools during active sessions.
 /// Returns (file_path, agent_name) pairs.
+///
+/// For Cursor sessions, reads `edit_file_v2` tool calls from the bubble DB
+/// which gives us exact file paths. Falls back to the tool registry for
+/// non-Cursor tools.
 fn collect_ai_files_touched(
     cfg: &Config,
     project_root: &str,
@@ -310,11 +315,24 @@ fn collect_ai_files_touched(
         return Vec::new();
     }
 
-    let registry = crate::tools::registry();
     let mut result: Vec<(String, String)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
     for session in active_sessions {
+        if is_cursor_session(&session.agent) {
+            let files = crate::tools::cursor::composer_data::files_edited_in_session(
+                &session.session_id,
+                project_root,
+            );
+            for file in files {
+                if seen.insert(file.clone()) {
+                    result.push((file, session.agent.clone()));
+                }
+            }
+            continue;
+        }
+
+        let registry = crate::tools::registry();
         for tool in registry.all() {
             if !is_agent_tool_match(&session.agent, tool.name()) {
                 continue;
@@ -324,7 +342,6 @@ fn collect_ai_files_touched(
                 break;
             }
 
-            // Try to get files_touched from the tool's native stats
             if let Ok(sessions) = tool.sessions_for_project(project_root) {
                 if let Some(tool_session) =
                     sessions.iter().find(|s| s.session_id == session.session_id)
@@ -349,17 +366,76 @@ fn collect_ai_files_touched(
 
 /// Filter active sessions to only those relevant to the current commit.
 ///
-/// When multiple sessions are active (e.g., 5 Cursor tabs), we don't want to
-/// link them all. Heuristic: the session whose `stop` hook fired most recently
-/// is the one actively driving the commit. Sessions not updated in the last
-/// 30 minutes are unlikely contributors.
+/// Primary signal: **file overlap** — if a session edited files that appear in
+/// the commit, it's linked. This is much more reliable than timestamps because
+/// we know exactly which files each Cursor session touched via `edit_file_v2`
+/// bubbles.
+///
+/// Fallback (non-Cursor tools or when DB is unavailable): recency-based
+/// heuristic — most recently updated session within a reasonable window.
+///
+/// When multiple sessions touch the same file, all are included (they both
+/// contributed).
 fn filter_relevant_sessions(
     sessions: &[crate::hooks::state::ActiveSession],
+    project_root: &str,
+    committed_files: &[String],
 ) -> Vec<crate::hooks::state::ActiveSession> {
-    if sessions.len() <= 1 {
+    if sessions.is_empty() {
+        return Vec::new();
+    }
+    if sessions.len() == 1 {
         return sessions.to_vec();
     }
 
+    let committed_set: std::collections::HashSet<&str> =
+        committed_files.iter().map(|s| s.as_str()).collect();
+
+    let mut matched_by_files: Vec<crate::hooks::state::ActiveSession> = Vec::new();
+    let mut unresolved: Vec<&crate::hooks::state::ActiveSession> = Vec::new();
+
+    for session in sessions {
+        if is_cursor_session(&session.agent) {
+            let edited = crate::tools::cursor::composer_data::files_edited_in_session(
+                &session.session_id,
+                project_root,
+            );
+            let has_overlap = edited.iter().any(|f| committed_set.contains(f.as_str()));
+            if has_overlap {
+                matched_by_files.push(session.clone());
+            }
+            // If a Cursor session edited files but none overlap, skip it —
+            // it was working on something else.
+            // If it edited zero files (e.g. DB unavailable), fall through
+            // to recency.
+            if edited.is_empty() {
+                unresolved.push(session);
+            }
+        } else {
+            unresolved.push(session);
+        }
+    }
+
+    if !matched_by_files.is_empty() {
+        // We found concrete file-based matches. For unresolved sessions
+        // (non-Cursor or no DB), include them only if very recent.
+        let now = chrono::Utc::now().timestamp();
+        for s in &unresolved {
+            if now - s.updated_at < 120 {
+                matched_by_files.push((*s).clone());
+            }
+        }
+        return matched_by_files;
+    }
+
+    // No file-based matches — fall back to recency heuristic.
+    filter_by_recency(sessions)
+}
+
+/// Recency-based fallback when file overlap data is unavailable.
+fn filter_by_recency(
+    sessions: &[crate::hooks::state::ActiveSession],
+) -> Vec<crate::hooks::state::ActiveSession> {
     let now = chrono::Utc::now().timestamp();
 
     let mut sorted: Vec<&crate::hooks::state::ActiveSession> = sessions.iter().collect();
@@ -367,9 +443,6 @@ fn filter_relevant_sessions(
 
     let most_recent = sorted[0].updated_at;
 
-    // If the most recent session was updated in the last 2 minutes,
-    // it's almost certainly the one making the commit. Only include
-    // sessions updated within a tight window of each other (10s).
     if now - most_recent < 120 {
         return sorted
             .into_iter()
@@ -378,7 +451,6 @@ fn filter_relevant_sessions(
             .collect();
     }
 
-    // Otherwise include sessions active in the last 30 minutes.
     sorted
         .into_iter()
         .filter(|s| now - s.updated_at < 1800)
