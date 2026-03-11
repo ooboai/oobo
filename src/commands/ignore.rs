@@ -80,23 +80,7 @@ pub fn run_list(cfg: &Config) {
 }
 
 fn ensure_project_exists(db: &crate::db::Db, project_id: &str, path: &str) {
-    let name = std::path::Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .to_string();
-
-    let now = chrono::Utc::now().timestamp();
-    if let Err(e) = db.upsert_project(&crate::db::projects::ProjectRow {
-        id: project_id.to_string(),
-        path: path.to_string(),
-        name,
-        git_remote: None,
-        discovered_at: now,
-        last_seen_at: now,
-        last_scanned_at: 0,
-        tools: vec![],
-    }) {
+    if let Err(e) = db.ensure_project(project_id, path) {
         eprintln!("oobo: warning: could not register project: {e}");
     }
 }

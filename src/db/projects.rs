@@ -26,6 +26,26 @@ pub struct ProjectRow {
 }
 
 impl Db {
+    /// Lightweight insert that creates the project row only if it doesn't
+    /// already exist.  Uses `INSERT OR IGNORE` so existing data is never
+    /// overwritten — safe to call on every git operation.
+    pub fn ensure_project(&self, id: &str, path: &str) -> Result<(), String> {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let now = chrono::Utc::now().timestamp();
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO projects (id, path, name, discovered_at, last_seen_at, last_scanned_at, tools)
+                 VALUES (?1, ?2, ?3, ?4, ?4, 0, '[]')",
+                params![id, path, name, now],
+            )
+            .map_err(|e| format!("cannot ensure project: {e}"))?;
+        Ok(())
+    }
+
     pub fn upsert_project(&self, project: &ProjectRow) -> Result<(), String> {
         let tools_json = serde_json::to_string(&project.tools).unwrap_or_else(|_| "[]".to_string());
 
@@ -517,5 +537,54 @@ mod tests {
         assert_eq!(list[0].id, "new-proj");
         assert_eq!(list[1].id, "mid-proj");
         assert_eq!(list[2].id, "old-proj");
+    }
+
+    #[test]
+    fn test_ensure_project_creates_if_missing() {
+        let db = test_db();
+        db.ensure_project("Users-new-repo", "/Users/new/repo")
+            .unwrap();
+
+        let found = db.get_project_by_id("Users-new-repo").unwrap().unwrap();
+        assert_eq!(found.path, "/Users/new/repo");
+        assert_eq!(found.name, "repo");
+        assert!(found.tools.is_empty());
+    }
+
+    #[test]
+    fn test_ensure_project_does_not_overwrite_existing() {
+        let db = test_db();
+        db.upsert_project(&sample_project()).unwrap();
+
+        db.ensure_project("Users-test-project", "/Users/test/project")
+            .unwrap();
+
+        let found = db
+            .get_project_by_id("Users-test-project")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.tools, vec!["cursor", "claude"]);
+        assert_eq!(
+            found.git_remote.as_deref(),
+            Some("git@github.com:test/project.git")
+        );
+    }
+
+    #[test]
+    fn test_ensure_project_allows_event_insert() {
+        let db = test_db();
+        db.ensure_project("Users-fresh-repo", "/Users/fresh/repo")
+            .unwrap();
+
+        use crate::db::events::EventRow;
+        db.insert_event(&EventRow {
+            id: None,
+            event: "git.push".into(),
+            project_id: Some("Users-fresh-repo".into()),
+            timestamp: 1234,
+            data: None,
+            synced: false,
+        })
+        .unwrap();
     }
 }

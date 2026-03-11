@@ -364,7 +364,9 @@ fn log_event_locally(project_root: &str, op: &str, payload: &EventPayload) {
     let project_id = if project_root.is_empty() {
         None
     } else {
-        Some(crate::paths::slug_from_path(project_root))
+        let slug = crate::paths::slug_from_path(project_root);
+        let _ = db.ensure_project(&slug, project_root);
+        Some(slug)
     };
 
     let data = serde_json::to_string(payload).ok();
