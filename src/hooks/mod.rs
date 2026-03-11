@@ -26,9 +26,14 @@ pub struct HookEvent {
 
 /// Handle a lifecycle event from an agent tool.
 ///
-/// Called by `oobo hooks agent <event>` which receives JSON on stdin.
+/// Called by `oobo hooks agent <event> [--tool <name>]` which receives JSON on stdin.
+/// The `--tool` flag provides explicit tool identity (preferred over payload guessing).
 /// This is internal plumbing — never typed by the user.
-pub fn handle_event(event_name: &str, payload: &str) -> crate::error::Result<()> {
+pub fn handle_event(
+    event_name: &str,
+    payload: &str,
+    tool_flag: Option<&str>,
+) -> crate::error::Result<()> {
     let mut event: HookEvent = serde_json::from_str(payload)?;
 
     if event.event.is_empty() {
@@ -48,13 +53,13 @@ pub fn handle_event(event_name: &str, payload: &str) -> crate::error::Result<()>
 
     let project_root = crate::git::proxy::project_root_from(&cwd);
 
-    let raw_agent = event
-        .agent
-        .as_deref()
-        .or(event.extra.get("composer_mode").and_then(|v| v.as_str()))
-        .unwrap_or("cursor");
-
-    let agent = normalize_agent_name(raw_agent);
+    let agent = tool_flag.unwrap_or_else(|| {
+        event
+            .agent
+            .as_deref()
+            .or(event.extra.get("composer_mode").and_then(|v| v.as_str()))
+            .unwrap_or("unknown")
+    });
 
     let session_id_field = event
         .session_id
@@ -86,15 +91,6 @@ pub fn handle_event(event_name: &str, payload: &str) -> crate::error::Result<()>
     }
 
     Ok(())
-}
-
-/// Normalize agent names from hook payloads to canonical tool names.
-/// Cursor sends "agent" or "composer" as the mode name — map to "cursor".
-fn normalize_agent_name(raw: &str) -> &str {
-    match raw {
-        "agent" | "composer" | "ask" | "edit" | "normal" | "chat" => "cursor",
-        other => other,
-    }
 }
 
 #[cfg(test)]
@@ -132,32 +128,27 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_agent_name() {
-        assert_eq!(normalize_agent_name("agent"), "cursor");
-        assert_eq!(normalize_agent_name("composer"), "cursor");
-        assert_eq!(normalize_agent_name("ask"), "cursor");
-        assert_eq!(normalize_agent_name("edit"), "cursor");
-        assert_eq!(normalize_agent_name("cursor"), "cursor");
-        assert_eq!(normalize_agent_name("claude"), "claude");
-        assert_eq!(normalize_agent_name("gemini"), "gemini");
-        assert_eq!(normalize_agent_name("aider"), "aider");
-    }
-
-    #[test]
     fn test_handle_event_session_start() {
-        let result = handle_event("session-start", "{}");
+        let result = handle_event("session-start", "{}", None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_handle_event_invalid_json() {
-        let result = handle_event("test", "not json");
+        let result = handle_event("test", "not json", None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_handle_event_session_end_no_id() {
-        let result = handle_event("session-end", "{}");
+        let result = handle_event("session-end", "{}", None);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_tool_flag_overrides_payload_agent() {
+        let json = r#"{"session_id": "s1", "agent": "agent"}"#;
+        let event: HookEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.agent.as_deref(), Some("agent"));
     }
 }

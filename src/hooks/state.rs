@@ -171,14 +171,10 @@ pub fn active_sessions(project_root: &str) -> Vec<ActiveSession> {
     read_all_sessions(project_root)
 }
 
-/// Max session age before auto-cleanup (6 hours).
-const STALE_SESSION_SECS: i64 = 6 * 3600;
-
 /// List active sessions filtered to only those belonging to the given worktree.
 /// Sessions without a worktree field (pre-upgrade) are included in all worktrees
-/// for backward compatibility. Stale sessions (>6h) are evicted automatically.
+/// for backward compatibility.
 pub fn active_sessions_for_worktree(project_root: &str) -> Vec<ActiveSession> {
-    cleanup_stale(project_root, STALE_SESSION_SECS);
     let current_wt = resolve_worktree(project_root);
     let all = read_all_sessions(project_root);
 

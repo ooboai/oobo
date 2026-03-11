@@ -457,6 +457,9 @@ pub enum HookAction {
     Agent {
         /// Event name: session-start, session-end, stop
         event: String,
+        /// Which tool fired this hook (cursor, claude, gemini, etc.)
+        #[arg(long)]
+        tool: Option<String>,
     },
     /// Post-commit hook handler
     PostCommit {
@@ -647,7 +650,7 @@ pub fn route(cfg: Config) -> Result<i32, String> {
         }
         Some(Command::Hooks { action }) => {
             match action {
-                HookAction::Agent { event } => {
+                HookAction::Agent { event, tool } => {
                     let mut payload = String::new();
                     if let Err(e) =
                         std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload)
@@ -657,7 +660,8 @@ pub fn route(cfg: Config) -> Result<i32, String> {
                     if payload.trim().is_empty() {
                         payload = "{}".to_string();
                     }
-                    crate::hooks::handle_event(&event, &payload).map_err(|e| e.to_string())?;
+                    crate::hooks::handle_event(&event, &payload, tool.as_deref())
+                        .map_err(|e| e.to_string())?;
                 }
                 HookAction::PostCommit { .. } => {
                     if let Some(root) = git::proxy::project_root(&cfg) {

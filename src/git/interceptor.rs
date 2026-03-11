@@ -87,7 +87,8 @@ fn enrich_commit(
         detect::CommitAuthor::Human => AuthorType::Human,
         detect::CommitAuthor::Automated => AuthorType::Automated,
     };
-    let active_sessions = hooks::state::active_sessions_for_worktree(project_root);
+    let all_sessions = hooks::state::active_sessions_for_worktree(project_root);
+    let active_sessions = filter_relevant_sessions(&all_sessions);
 
     let ai_files_touched = collect_ai_files_touched(cfg, project_root, &active_sessions);
 
@@ -346,6 +347,45 @@ fn collect_ai_files_touched(
     result
 }
 
+/// Filter active sessions to only those relevant to the current commit.
+///
+/// When multiple sessions are active (e.g., 5 Cursor tabs), we don't want to
+/// link them all. Heuristic: the session whose `stop` hook fired most recently
+/// is the one actively driving the commit. Sessions not updated in the last
+/// 30 minutes are unlikely contributors.
+fn filter_relevant_sessions(
+    sessions: &[crate::hooks::state::ActiveSession],
+) -> Vec<crate::hooks::state::ActiveSession> {
+    if sessions.len() <= 1 {
+        return sessions.to_vec();
+    }
+
+    let now = chrono::Utc::now().timestamp();
+
+    let mut sorted: Vec<&crate::hooks::state::ActiveSession> = sessions.iter().collect();
+    sorted.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+    let most_recent = sorted[0].updated_at;
+
+    // If the most recent session was updated in the last 2 minutes,
+    // it's almost certainly the one making the commit. Only include
+    // sessions updated within a tight window of each other (10s).
+    if now - most_recent < 120 {
+        return sorted
+            .into_iter()
+            .filter(|s| most_recent - s.updated_at < 10)
+            .cloned()
+            .collect();
+    }
+
+    // Otherwise include sessions active in the last 30 minutes.
+    sorted
+        .into_iter()
+        .filter(|s| now - s.updated_at < 1800)
+        .cloned()
+        .collect()
+}
+
 /// Match a session's agent name to a tool's canonical name.
 /// Handles Cursor's various mode names ("agent", "composer", etc.) which
 /// are now normalized at hook time, plus legacy session files with old names.
@@ -563,10 +603,12 @@ pub fn collect_all_tool_context(
     tools
 }
 
-/// Collect raw transcript content for active sessions (for full-transparency mode).
-/// Reads the original JSONL/text file so tool calls and structure are preserved.
-/// Prefers the `transcript_path` stored in the session state file (set by the
-/// `stop` hook), falling back to the tool registry's `find_transcript`.
+/// Collect rich transcript content for active sessions (for full-transparency mode).
+///
+/// Priority order per session:
+/// 1. Cursor's bubbleId: DB — includes thinking, tool calls, timestamps, tokens
+/// 2. transcript_path from the stop hook payload
+/// 3. Tool registry's find_transcript (JSONL/text file)
 fn collect_session_transcripts(
     sessions: &[crate::hooks::state::ActiveSession],
     project_root: &str,
@@ -574,6 +616,15 @@ fn collect_session_transcripts(
     let mut transcripts = Vec::new();
 
     for session in sessions {
+        if is_cursor_session(&session.agent) {
+            if let Some(rich) =
+                crate::tools::cursor::composer_data::build_rich_transcript(&session.session_id)
+            {
+                transcripts.push((session.session_id.clone(), rich));
+                continue;
+            }
+        }
+
         let raw = session
             .transcript_path
             .as_deref()
@@ -600,6 +651,13 @@ fn collect_session_transcripts(
         }
     }
     transcripts
+}
+
+fn is_cursor_session(agent: &str) -> bool {
+    matches!(
+        agent,
+        "cursor" | "agent" | "composer" | "ask" | "edit" | "normal" | "chat"
+    )
 }
 
 /// Resolve the effective transparency mode for a project. Per-project settings

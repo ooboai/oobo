@@ -472,6 +472,206 @@ impl DailyCodeStats {
     }
 }
 
+/// Build a rich JSONL transcript from Cursor's bubbleId: database entries.
+/// Includes thinking blocks, tool calls (with params), timestamps, and tokens
+/// — the full agent reasoning and actions timeline, not just chat text.
+pub fn build_rich_transcript(session_id: &str) -> Option<String> {
+    let db_path = global_state_vscdb_path()?;
+    if !db_path.exists() {
+        return None;
+    }
+
+    let conn = crate::utils::open_db_readonly(&db_path).ok()?;
+
+    let bubble_order = read_bubble_order(&conn, session_id)?;
+    if bubble_order.is_empty() {
+        return None;
+    }
+
+    let mut lines = Vec::new();
+    let mut stmt = conn
+        .prepare("SELECT value FROM cursorDiskKV WHERE key = ?1")
+        .ok()?;
+
+    for bubble_id in &bubble_order {
+        let key = format!("bubbleId:{session_id}:{bubble_id}");
+        let raw: String = match stmt.query_row(rusqlite::params![&key], |row| row.get(0)) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        let data: serde_json::Value = match serde_json::from_str(&raw) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if let Some(entry) = bubble_to_transcript_entry(&data) {
+            if let Ok(json) = serde_json::to_string(&entry) {
+                lines.push(json);
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        return None;
+    }
+
+    Some(lines.join("\n"))
+}
+
+fn read_bubble_order(conn: &rusqlite::Connection, session_id: &str) -> Option<Vec<String>> {
+    let key = format!("composerData:{session_id}");
+    let raw: String = conn
+        .query_row(
+            "SELECT value FROM cursorDiskKV WHERE key = ?1",
+            [&key],
+            |row| row.get(0),
+        )
+        .ok()?;
+
+    let data: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let headers = data
+        .get("fullConversationHeadersOnly")
+        .and_then(|v| v.as_array())?;
+
+    let ids: Vec<String> = headers
+        .iter()
+        .filter_map(|h| h.get("bubbleId").and_then(|v| v.as_str()).map(String::from))
+        .collect();
+
+    if ids.is_empty() {
+        None
+    } else {
+        Some(ids)
+    }
+}
+
+fn bubble_to_transcript_entry(data: &serde_json::Value) -> Option<serde_json::Value> {
+    let btype = data.get("type").and_then(|v| v.as_u64())?;
+    let role = match btype {
+        1 => "user",
+        2 => "assistant",
+        _ => return None,
+    };
+
+    let mut entry = serde_json::Map::new();
+    entry.insert("role".into(), role.into());
+
+    if let Some(ts) = data.get("createdAt").and_then(|v| v.as_str()) {
+        entry.insert("timestamp".into(), ts.into());
+    }
+
+    let text = data
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if !text.is_empty() {
+        entry.insert("text".into(), text.into());
+    }
+
+    if let Some(thinking) = data.get("thinking") {
+        if let Some(think_text) = thinking.get("text").and_then(|v| v.as_str()) {
+            if !think_text.is_empty() {
+                let mut think_obj = serde_json::Map::new();
+                think_obj.insert("text".into(), think_text.into());
+                if let Some(ms) = data.get("thinkingDurationMs").and_then(|v| v.as_u64()) {
+                    think_obj.insert("duration_ms".into(), ms.into());
+                }
+                entry.insert("thinking".into(), think_obj.into());
+            }
+        }
+    }
+
+    if let Some(tfd) = data.get("toolFormerData").and_then(|v| v.as_object()) {
+        let tool_name = tfd.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if !tool_name.is_empty() {
+            let mut tool_obj = serde_json::Map::new();
+            tool_obj.insert("name".into(), tool_name.into());
+
+            if let Some(status) = tfd.get("status").and_then(|v| v.as_str()) {
+                tool_obj.insert("status".into(), status.into());
+            }
+
+            if let Some(params_str) = tfd.get("params").and_then(|v| v.as_str()) {
+                if let Ok(params) = serde_json::from_str::<serde_json::Value>(params_str) {
+                    tool_obj.insert("params".into(), summarize_tool_params(tool_name, &params));
+                }
+            }
+
+            entry.insert("tool_call".into(), tool_obj.into());
+        }
+    }
+
+    if let Some(tc) = data.get("tokenCount").and_then(|v| v.as_object()) {
+        let inp = tc.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let outp = tc
+            .get("outputTokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if inp > 0 || outp > 0 {
+            entry.insert(
+                "tokens".into(),
+                serde_json::json!({"input": inp, "output": outp}),
+            );
+        }
+    }
+
+    if entry.len() <= 2 {
+        return None;
+    }
+
+    Some(entry.into())
+}
+
+/// Summarize tool call params — keep file paths and commands, trim large content.
+fn summarize_tool_params(tool_name: &str, params: &serde_json::Value) -> serde_json::Value {
+    let obj = match params.as_object() {
+        Some(o) => o,
+        None => return params.clone(),
+    };
+
+    let mut summary = serde_json::Map::new();
+
+    match tool_name {
+        "edit_file_v2" => {
+            if let Some(path) = obj.get("relativeWorkspacePath") {
+                summary.insert("path".into(), path.clone());
+            }
+        }
+        "read_file_v2" => {
+            if let Some(path) = obj.get("relativeWorkspacePath") {
+                summary.insert("path".into(), path.clone());
+            }
+        }
+        "run_terminal_command_v2" => {
+            if let Some(cmd) = obj.get("command") {
+                summary.insert("command".into(), cmd.clone());
+            }
+            if let Some(cwd) = obj.get("cwd") {
+                summary.insert("cwd".into(), cwd.clone());
+            }
+        }
+        _ => {
+            for (k, v) in obj {
+                if k == "streamingContent" || k == "toolCallBinary" {
+                    continue;
+                }
+                let val_str = v.to_string();
+                if val_str.len() > 500 {
+                    summary.insert(
+                        k.clone(),
+                        format!("({} chars)", val_str.len()).into(),
+                    );
+                } else {
+                    summary.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+
+    summary.into()
+}
+
 fn global_state_vscdb_path() -> Option<PathBuf> {
     super::state_vscdb_path()
 }
@@ -578,5 +778,100 @@ mod tests {
         assert_eq!(stats.total_accepted(), 100);
         let rate = stats.acceptance_rate();
         assert!((rate - 0.333).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_bubble_to_transcript_user_message() {
+        let data = serde_json::json!({
+            "type": 1,
+            "text": "fix the auth module",
+            "createdAt": "2026-03-11T02:51:53.895Z",
+            "tokenCount": {"inputTokens": 0, "outputTokens": 0},
+        });
+        let entry = bubble_to_transcript_entry(&data).unwrap();
+        assert_eq!(entry["role"], "user");
+        assert_eq!(entry["text"], "fix the auth module");
+        assert_eq!(entry["timestamp"], "2026-03-11T02:51:53.895Z");
+        assert!(entry.get("thinking").is_none());
+        assert!(entry.get("tool_call").is_none());
+    }
+
+    #[test]
+    fn test_bubble_to_transcript_thinking() {
+        let data = serde_json::json!({
+            "type": 2,
+            "text": "",
+            "createdAt": "2026-03-11T02:51:56.314Z",
+            "thinking": {"text": "Let me analyze this code", "signature": "sig"},
+            "thinkingDurationMs": 1500,
+            "tokenCount": {"inputTokens": 100, "outputTokens": 50},
+        });
+        let entry = bubble_to_transcript_entry(&data).unwrap();
+        assert_eq!(entry["role"], "assistant");
+        assert_eq!(entry["thinking"]["text"], "Let me analyze this code");
+        assert_eq!(entry["thinking"]["duration_ms"], 1500);
+        assert_eq!(entry["tokens"]["input"], 100);
+        assert_eq!(entry["tokens"]["output"], 50);
+    }
+
+    #[test]
+    fn test_bubble_to_transcript_tool_call() {
+        let data = serde_json::json!({
+            "type": 2,
+            "createdAt": "2026-03-11T02:51:57.000Z",
+            "toolFormerData": {
+                "name": "edit_file_v2",
+                "status": "completed",
+                "params": "{\"relativeWorkspacePath\":\"/src/main.rs\",\"streamingContent\":\"huge file content here...\"}",
+            },
+            "tokenCount": {"inputTokens": 0, "outputTokens": 0},
+        });
+        let entry = bubble_to_transcript_entry(&data).unwrap();
+        assert_eq!(entry["role"], "assistant");
+        assert_eq!(entry["tool_call"]["name"], "edit_file_v2");
+        assert_eq!(entry["tool_call"]["status"], "completed");
+        assert_eq!(entry["tool_call"]["params"]["path"], "/src/main.rs");
+        assert!(entry["tool_call"]["params"].get("streamingContent").is_none());
+    }
+
+    #[test]
+    fn test_bubble_to_transcript_terminal_command() {
+        let data = serde_json::json!({
+            "type": 2,
+            "createdAt": "2026-03-11T02:52:27.000Z",
+            "toolFormerData": {
+                "name": "run_terminal_command_v2",
+                "status": "completed",
+                "params": "{\"command\":\"oobo commit -m 'test'\",\"cwd\":\"/Users/teddy/projects\"}",
+            },
+            "tokenCount": {"inputTokens": 0, "outputTokens": 0},
+        });
+        let entry = bubble_to_transcript_entry(&data).unwrap();
+        assert_eq!(entry["tool_call"]["name"], "run_terminal_command_v2");
+        assert_eq!(entry["tool_call"]["params"]["command"], "oobo commit -m 'test'");
+    }
+
+    #[test]
+    fn test_bubble_to_transcript_empty_bubble_skipped() {
+        let data = serde_json::json!({
+            "type": 2,
+            "text": "",
+            "createdAt": "2026-03-11T02:52:00.000Z",
+            "tokenCount": {"inputTokens": 0, "outputTokens": 0},
+        });
+        assert!(bubble_to_transcript_entry(&data).is_none());
+    }
+
+    #[test]
+    fn test_summarize_tool_params_strips_content() {
+        let params = serde_json::json!({
+            "relativeWorkspacePath": "/src/main.rs",
+            "streamingContent": "fn main() { /* 10000 lines */ }",
+            "noCodeblock": true,
+        });
+        let summary = summarize_tool_params("edit_file_v2", &params);
+        assert_eq!(summary["path"], "/src/main.rs");
+        assert!(summary.get("streamingContent").is_none());
+        assert!(summary.get("noCodeblock").is_none());
     }
 }

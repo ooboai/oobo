@@ -31,13 +31,13 @@ fn install_cursor_hooks() -> Option<String> {
         "version": 1,
         "hooks": {
             "sessionStart": [
-                { "command": "oobo hooks agent session-start" }
+                { "command": "oobo hooks agent session-start --tool cursor" }
             ],
             "sessionEnd": [
-                { "command": "oobo hooks agent session-end" }
+                { "command": "oobo hooks agent session-end --tool cursor" }
             ],
             "stop": [
-                { "command": "oobo hooks agent stop" }
+                { "command": "oobo hooks agent stop --tool cursor" }
             ]
         }
     });
@@ -53,13 +53,13 @@ fn install_claude_hooks() -> Option<String> {
     let oobo_hooks = serde_json::json!({
         "hooks": {
             "SessionStart": [{
-                "hooks": [{"type": "command", "command": "oobo hooks agent session-start"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent session-start --tool claude"}]
             }],
             "Stop": [{
-                "hooks": [{"type": "command", "command": "oobo hooks agent stop"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent stop --tool claude"}]
             }],
             "SessionEnd": [{
-                "hooks": [{"type": "command", "command": "oobo hooks agent session-end"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent session-end --tool claude"}]
             }]
         }
     });
@@ -76,15 +76,15 @@ fn install_gemini_hooks() -> Option<String> {
         "hooks": {
             "SessionStart": [{
                 "type": "command",
-                "command": "oobo hooks agent session-start"
+                "command": "oobo hooks agent session-start --tool gemini"
             }],
             "SessionEnd": [{
                 "type": "command",
-                "command": "oobo hooks agent session-end"
+                "command": "oobo hooks agent session-end --tool gemini"
             }],
             "AfterAgent": [{
                 "type": "command",
-                "command": "oobo hooks agent stop"
+                "command": "oobo hooks agent stop --tool gemini"
             }]
         }
     });
@@ -103,9 +103,9 @@ fn install_opencode_hooks() -> Option<String> {
     const input = JSON.stringify(event);
     try {
       if (event.type === "session.created")
-        execSync("oobo hooks agent session-start", { input, encoding: "utf-8" });
+        execSync("oobo hooks agent session-start --tool opencode", { input, encoding: "utf-8" });
       if (event.type === "session.deleted")
-        execSync("oobo hooks agent session-end", { input, encoding: "utf-8" });
+        execSync("oobo hooks agent session-end --tool opencode", { input, encoding: "utf-8" });
     } catch (_) {}
   }
 });
@@ -171,14 +171,13 @@ fn merge_cursor_hooks_file(path: &Path, oobo_config: &serde_json::Value) -> Opti
     for (event, handlers) in oobo_hooks {
         let oobo_arr = handlers.as_array()?;
         if let Some(existing_arr) = hooks_obj.get_mut(event).and_then(|v| v.as_array_mut()) {
+            // Remove any existing oobo commands (handles upgrades, e.g. adding --tool flag)
+            existing_arr.retain(|h| {
+                let cmd = h.get("command").and_then(|c| c.as_str()).unwrap_or("");
+                !cmd.contains("oobo hooks agent")
+            });
             for handler in oobo_arr {
-                let cmd = handler.get("command").and_then(|c| c.as_str()).unwrap_or("");
-                let already = existing_arr.iter().any(|h| {
-                    h.get("command").and_then(|c| c.as_str()).unwrap_or("") == cmd
-                });
-                if !already {
-                    existing_arr.push(handler.clone());
-                }
+                existing_arr.push(handler.clone());
             }
         } else {
             hooks_obj.insert(event.clone(), handlers.clone());
