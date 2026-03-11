@@ -144,19 +144,24 @@ fn enrich_commit(
 
     for (path, added, deleted) in &per_file {
         let (attribution, agent) = if ai_file_set.contains(path.as_str()) {
-            // Session explicitly edited this file (via edit_file_v2 or tool stats)
             let agent_name = ai_files_touched
                 .iter()
                 .find(|(p, _)| p == path)
                 .map(|(_, a)| a.clone());
-            (Some(FileAttribution::Ai), agent_name)
+            if is_agent_commit {
+                // Fully automated commit — AI owns the file.
+                (Some(FileAttribution::Ai), agent_name)
+            } else {
+                // Assisted commit — human was also active, so the file
+                // could have both AI and human edits.
+                (Some(FileAttribution::Mixed), agent_name)
+            }
         } else if is_agent_commit && !has_ai_sessions {
             // Agent commit (env var / committer pattern) but no session data
             // to know which files — attribute all to AI as best guess.
             (Some(FileAttribution::Ai), None)
         } else {
             // No evidence this file was AI-edited — attribute to human.
-            // Even in assisted commits, files not touched by AI are human work.
             (Some(FileAttribution::Human), None)
         };
 
