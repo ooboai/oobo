@@ -2,10 +2,10 @@ pub mod payload;
 
 use crate::config::Config;
 
-/// Fire-and-forget: spawn a background thread to POST the anchor to the
-/// ingestion API. Never blocks the caller. Auth/server errors are logged
-/// as warnings; duplicate anchors are silently ignored.
-pub fn send_event(cfg: &Config, payload: &payload::EventPayload) {
+/// Spawn a background thread to POST the anchor to the ingestion API.
+/// Returns the JoinHandle so the caller can wait if needed (e.g. from a
+/// post-commit hook where the process would otherwise exit immediately).
+pub fn send_event(cfg: &Config, payload: &payload::EventPayload) -> std::thread::JoinHandle<()> {
     let url = format!(
         "{}/anchors/ingest",
         cfg.server.url.trim_end_matches('/')
@@ -13,7 +13,7 @@ pub fn send_event(cfg: &Config, payload: &payload::EventPayload) {
     let api_key = cfg.server.api_key.clone();
     let body = match serde_json::to_string(payload) {
         Ok(b) => b,
-        Err(_) => return,
+        Err(_) => return std::thread::spawn(|| {}),
     };
 
     std::thread::spawn(move || {
@@ -71,7 +71,7 @@ pub fn send_event(cfg: &Config, payload: &payload::EventPayload) {
         if status.as_u16() == 422 {
             eprintln!("oobo: warning: sync payload rejected (422). Run `oobo --version` to check for updates.");
         }
-    });
+    })
 }
 
 /// Synchronous anchor ingestion — returns the parsed response.

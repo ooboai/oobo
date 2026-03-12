@@ -24,7 +24,6 @@ pub struct EventPayload {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProjectInfo {
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub git_remote: Option<String>,
 }
 

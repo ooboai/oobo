@@ -46,7 +46,8 @@ pub fn on_write_op(cfg: &Config, args: &[&str]) -> Result<(), String> {
     }
 
     if cfg.should_sync() {
-        let git_remote = resolve_git_remote(cfg);
+        let git_remote = resolve_git_remote(cfg)
+            .or_else(|| Some(String::new()));
 
         let (anchor_payload, transcript) = if let Some((anchor, links, transcripts)) = anchor_data {
             let transcript_messages =
@@ -85,7 +86,8 @@ pub fn on_write_op(cfg: &Config, args: &[&str]) -> Result<(), String> {
             transcript,
         };
 
-        remote::send_event(cfg, &payload);
+        let handle = remote::send_event(cfg, &payload);
+        let _ = handle.join();
     }
 
     Ok(())

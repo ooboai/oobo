@@ -164,7 +164,7 @@ add_to_path() {
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
-    local platform version archive_name url tmpdir
+    local platform version archive_name url
 
     if [[ "$AGENT_MODE" != "1" ]]; then
         echo ""
@@ -190,20 +190,20 @@ main() {
     url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
 
     info "Downloading ${url}..."
-    tmpdir="$(mktemp -d)"
-    trap 'rm -rf "$tmpdir"' EXIT
+    _oobo_tmpdir="$(mktemp -d)"
+    trap 'rm -rf "$_oobo_tmpdir"' EXIT
 
-    download "$url" "${tmpdir}/${archive_name}"
+    download "$url" "${_oobo_tmpdir}/${archive_name}"
 
-    if [[ ! -s "${tmpdir}/${archive_name}" ]]; then
+    if [[ ! -s "${_oobo_tmpdir}/${archive_name}" ]]; then
         error "Download failed or produced an empty file. Check the URL: ${url}"
     fi
 
     info "Extracting..."
-    tar -xzf "${tmpdir}/${archive_name}" -C "$tmpdir"
+    tar -xzf "${_oobo_tmpdir}/${archive_name}" -C "$_oobo_tmpdir"
 
     mkdir -p "$INSTALL_DIR"
-    mv "${tmpdir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+    mv "${_oobo_tmpdir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
     chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 
     ok "Installed ${BINARY_NAME} to ${INSTALL_DIR}/${BINARY_NAME}"
