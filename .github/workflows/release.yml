@@ -16,6 +16,7 @@ jobs:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-apple-darwin
@@ -59,16 +60,21 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools
-          # Install aarch64 musl cross compiler
-          wget -q https://musl.cc/aarch64-linux-musl-cross.tgz
+          wget --retry-connrefused --waitretry=5 --timeout=60 -t 3 \
+            https://musl.cc/aarch64-linux-musl-cross.tgz
           tar -xzf aarch64-linux-musl-cross.tgz -C /opt
           echo "/opt/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
+          aarch64-linux-musl-gcc --version
 
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+          CC_aarch64_unknown_linux_musl: aarch64-linux-musl-gcc
+          AR_aarch64_unknown_linux_musl: aarch64-linux-musl-ar
 
       - name: Package
         run: |
@@ -85,6 +91,7 @@ jobs:
   release:
     name: Create Release
     needs: build
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
