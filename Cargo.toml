@@ -1,6 +1,6 @@
 [package]
 name = "oobo"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Oobo Contributors"]
 description = "Git decorator for humans and agents — captures AI sessions, tokens, costs, and code attribution alongside your commits"

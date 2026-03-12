@@ -18,6 +18,7 @@ pub fn send_event(cfg: &Config, payload: &payload::EventPayload, api_key_overrid
 
     std::thread::spawn(move || {
         let client = match reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(2))
             .timeout(std::time::Duration::from_secs(10))
             .build()
         {

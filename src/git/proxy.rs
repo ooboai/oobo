@@ -74,6 +74,10 @@ pub fn current_branch(cfg: &Config) -> Option<String> {
 
 /// Run git, then intercept write ops to collect and send context.
 pub fn run_and_intercept(cfg: &Config, args: &[&str]) -> Result<i32, String> {
+    if commands::is_write_op(args) && cfg.telemetry.enabled {
+        std::env::set_var("OOBO_INTERCEPTED", "1");
+    }
+
     let exit_code = run_git(cfg, args)?;
 
     if exit_code != 0 {
@@ -103,7 +107,6 @@ pub fn run_and_intercept(cfg: &Config, args: &[&str]) -> Result<i32, String> {
     }
 
     if commands::is_write_op(args) && cfg.telemetry.enabled {
-        std::env::set_var("OOBO_INTERCEPTED", "1");
         if let Err(e) = interceptor::on_write_op(cfg, args) {
             log_error(&format!("interceptor error: {e}"));
         }

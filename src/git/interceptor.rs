@@ -142,6 +142,15 @@ fn enrich_commit(
         initial_author_type
     };
 
+    let now_epoch = chrono::Utc::now().timestamp();
+
+    let cursor_ids: Vec<String> = active_sessions
+        .iter()
+        .filter(|s| is_cursor_session(&s.agent))
+        .map(|s| s.session_id.clone())
+        .collect();
+    let bubble_data = crate::tools::cursor::composer_data::preload_bubble_data_for(&cursor_ids);
+
     let session_links: Vec<SessionLink> = active_sessions
         .iter()
         .map(|s| {
@@ -150,17 +159,31 @@ fn enrich_commit(
                 .filter(|(_, agent)| agent == &s.agent)
                 .map(|(path, _)| path.clone())
                 .collect();
+
+            let native = extract_live_stats(&s.session_id, &s.agent, project_root, &bubble_data);
+
+            let duration_fallback = {
+                let elapsed = now_epoch - s.started_at;
+                if elapsed > 0 { Some(elapsed as u64) } else { None }
+            };
+
             SessionLink {
                 session_id: s.session_id.clone(),
                 agent: s.agent.clone(),
                 model: s.model.clone(),
                 link_type: LinkType::Explicit,
-                input_tokens: None,
-                output_tokens: None,
-                cache_read_tokens: None,
-                cache_creation_tokens: None,
-                duration_secs: None,
-                tool_calls: None,
+                input_tokens: native.as_ref().and_then(|n| n.input_tokens),
+                output_tokens: native.as_ref().and_then(|n| n.output_tokens),
+                cache_read_tokens: native.as_ref().and_then(|n| n.cache_read_tokens),
+                cache_creation_tokens: native.as_ref().and_then(|n| n.cache_creation_tokens),
+                duration_secs: native
+                    .as_ref()
+                    .and_then(|n| n.duration_secs)
+                    .or(duration_fallback),
+                tool_calls: native
+                    .as_ref()
+                    .map(|n| n.tool_call_count)
+                    .filter(|&c| c > 0),
                 files_touched: if touched.is_empty() {
                     None
                 } else {
@@ -899,6 +922,60 @@ fn is_cursor_session(agent: &str) -> bool {
         agent,
         "cursor" | "agent" | "composer" | "ask" | "edit" | "normal" | "chat"
     )
+}
+
+/// Extract live session stats directly from the tool's data files at commit
+/// time. No prior `oobo index` needed — reads Cursor's state.vscdb, Claude's
+/// JSONL transcripts, etc.
+fn extract_live_stats(
+    session_id: &str,
+    agent: &str,
+    project_root: &str,
+    bubble_data: &std::collections::HashMap<String, crate::tools::cursor::composer_data::BubbleSession>,
+) -> Option<crate::analytics::NativeStats> {
+    use crate::tools::cursor::composer_data;
+
+    if is_cursor_session(agent) {
+        if let Some(bubble) = bubble_data.get(session_id) {
+            let mut stats = composer_data::native_stats_from_bubble(bubble);
+            if stats.duration_secs.is_none() {
+                if let Some(cs) = composer_data::read_composer_data(session_id) {
+                    if let (Some(c), Some(u)) = (cs.created_at, cs.last_updated_at) {
+                        if u > c {
+                            stats.duration_secs = Some(((u - c) / 1000) as u64);
+                        }
+                    }
+                }
+            }
+            return Some(stats);
+        }
+        if let Some(stats) = composer_data::extract_native_stats(session_id) {
+            return Some(stats);
+        }
+        return None;
+    }
+
+    if agent == "claude" {
+        return crate::tools::claude::transcript::extract_native_stats(project_root, session_id);
+    }
+
+    if agent == "gemini" {
+        if let Some(stats) = crate::tools::gemini::transcript::stats_for_session(project_root, session_id) {
+            return Some(crate::analytics::NativeStats {
+                model: stats.model,
+                input_tokens: stats.input_tokens,
+                output_tokens: stats.output_tokens,
+                cache_read_tokens: stats.cache_read_tokens,
+                cache_creation_tokens: stats.cache_creation_tokens,
+                duration_secs: stats.duration_secs,
+                files_touched: stats.files_touched,
+                tool_call_count: stats.tool_call_count,
+            });
+        }
+        return None;
+    }
+
+    None
 }
 
 /// Resolve the effective transparency mode for a project. Per-project settings
