@@ -124,7 +124,6 @@ fn parse_completions_response(body: &serde_json::Value) -> Result<Vec<UsageBucke
                 output_tokens: output,
                 cache_read_tokens: cached,
                 cache_creation_tokens: 0,
-                cost_usd: 0.0,
                 requests,
             });
         }
@@ -159,7 +158,7 @@ fn parse_costs_response(body: &serde_json::Value) -> Result<Vec<UsageBucket>, St
         };
 
         for result in results {
-            let cost_usd = result
+            let cost = result
                 .get("amount")
                 .and_then(|a| a.get("value"))
                 .and_then(|v| v.as_f64())
@@ -170,7 +169,7 @@ fn parse_costs_response(body: &serde_json::Value) -> Result<Vec<UsageBucket>, St
                 .and_then(|l| l.as_str())
                 .map(String::from);
 
-            if cost_usd == 0.0 {
+            if cost == 0.0 {
                 continue;
             }
 
@@ -182,7 +181,6 @@ fn parse_costs_response(body: &serde_json::Value) -> Result<Vec<UsageBucket>, St
                 output_tokens: 0,
                 cache_read_tokens: 0,
                 cache_creation_tokens: 0,
-                cost_usd,
                 requests: 0,
             });
         }
@@ -250,7 +248,6 @@ mod tests {
 
         let buckets = parse_costs_response(&body).unwrap();
         assert_eq!(buckets.len(), 1);
-        assert!((buckets[0].cost_usd - 2.50).abs() < 0.01);
     }
 
     #[test]

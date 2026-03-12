@@ -2,10 +2,14 @@ pub mod payload;
 
 use crate::config::Config;
 
-/// Fire-and-forget: spawn a background thread to POST the event.
-/// Never blocks the caller. Errors are silently ignored.
+/// Fire-and-forget: spawn a background thread to POST the anchor to the
+/// ingestion API. Never blocks the caller. Auth/server errors are logged
+/// as warnings; duplicate anchors are silently ignored.
 pub fn send_event(cfg: &Config, payload: &payload::EventPayload) {
-    let url = format!("{}/api/v1/events", cfg.server.url.trim_end_matches('/'));
+    let url = format!(
+        "{}/anchors/ingest",
+        cfg.server.url.trim_end_matches('/')
+    );
     let api_key = cfg.server.api_key.clone();
     let body = match serde_json::to_string(payload) {
         Ok(b) => b,
@@ -21,19 +25,114 @@ pub fn send_event(cfg: &Config, payload: &payload::EventPayload) {
             Err(_) => return,
         };
 
-        let _ = client
+        let resp = match client
             .post(&url)
             .header("Authorization", format!("Bearer {api_key}"))
             .header("Content-Type", "application/json")
             .header("User-Agent", format!("oobo/{}", env!("CARGO_PKG_VERSION")))
             .body(body)
-            .send();
+            .send()
+        {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+
+        let status = resp.status();
+
+        if status.is_success() {
+            return;
+        }
+
+        // Duplicate anchor → (git_remote, commit_hash) unique constraint.
+        // Treat as success.
+        if status.as_u16() == 409 || status.as_u16() == 500 {
+            if let Ok(body) = resp.text() {
+                if body.contains("duplicate") || body.contains("unique") || body.contains("UNIQUE") {
+                    return;
+                }
+                if status.as_u16() == 500 {
+                    eprintln!("oobo: warning: server error during sync: {body}");
+                }
+            }
+            return;
+        }
+
+        if status.as_u16() == 401 {
+            if let Ok(err) = resp.json::<payload::IngestError>() {
+                let detail = err
+                    .detail
+                    .unwrap_or_else(|| "invalid or missing API key".into());
+                eprintln!("oobo: sync auth error: {detail}");
+                eprintln!("      run `oobo sync on` to reconfigure.");
+            }
+            return;
+        }
+
+        if status.as_u16() == 422 {
+            eprintln!("oobo: warning: sync payload rejected (422). Run `oobo --version` to check for updates.");
+        }
     });
 }
 
-/// Synchronous check: can we reach the dashboard?
+/// Synchronous anchor ingestion — returns the parsed response.
+/// Used by explicit `oobo sync` commands and tests.
+#[allow(dead_code)]
+pub fn ingest_anchor(
+    cfg: &Config,
+    payload: &payload::EventPayload,
+) -> Result<payload::IngestResponse, String> {
+    let url = format!(
+        "{}/anchors/ingest",
+        cfg.server.url.trim_end_matches('/')
+    );
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("client error: {e}"))?;
+
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.server.api_key))
+        .header("Content-Type", "application/json")
+        .header("User-Agent", format!("oobo/{}", env!("CARGO_PKG_VERSION")))
+        .json(payload)
+        .send()
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    let status = resp.status();
+
+    if status.is_success() {
+        return resp
+            .json::<payload::IngestResponse>()
+            .map_err(|e| format!("cannot parse response: {e}"));
+    }
+
+    let body = resp.text().unwrap_or_default();
+
+    // Duplicate → treat as success.
+    if body.contains("duplicate") || body.contains("unique") || body.contains("UNIQUE") {
+        return Ok(payload::IngestResponse {
+            success: true,
+            message: "Anchor already ingested (duplicate)".into(),
+            data: None,
+        });
+    }
+
+    if let Ok(err) = serde_json::from_str::<payload::IngestError>(&body) {
+        let msg = err
+            .detail
+            .or(err.message)
+            .unwrap_or_else(|| format!("HTTP {status}"));
+        return Err(msg);
+    }
+
+    Err(format!("HTTP {status}: {body}"))
+}
+
+/// Synchronous check: can we reach the API?
 pub fn check_connection(cfg: &Config) -> Result<String, String> {
-    let url = format!("{}/api/v1/health", cfg.server.url.trim_end_matches('/'));
+    let url = format!("{}/health", cfg.server.url.trim_end_matches('/'));
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(5))

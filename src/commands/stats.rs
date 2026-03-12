@@ -262,7 +262,6 @@ fn print_json(
                         "input_tokens": summary.input_tokens,
                         "output_tokens": summary.output_tokens,
                         "cache_read_tokens": summary.cache_read_tokens,
-                        "cost_usd": summary.cost_usd,
                         "days": summary.days,
                     }),
                 );
@@ -280,7 +279,6 @@ fn print_json(
                 "sessions": s.session_count,
                 "input_tokens": s.total_input_tokens,
                 "output_tokens": s.total_output_tokens,
-                "cost_usd": s.total_cost_usd,
             })
         })
         .collect();
@@ -295,7 +293,6 @@ fn print_json(
                 "sessions": m.session_count,
                 "input_tokens": m.input_tokens,
                 "output_tokens": m.output_tokens,
-                "cost_usd": m.total_cost_usd,
                 "pct_of_total": m.pct_of_total_output,
             })
         })
@@ -332,7 +329,6 @@ fn print_json(
                 "sessions": s.session_count,
                 "input_tokens": s.total_input_tokens,
                 "output_tokens": s.total_output_tokens,
-                "cost_usd": s.total_cost_usd,
             })
         })
         .collect();
@@ -346,7 +342,6 @@ fn print_json(
         "input_tokens": stats.total_input_tokens,
         "output_tokens": stats.total_output_tokens,
         "total_tokens": stats.total_input_tokens + stats.total_output_tokens,
-        "total_cost_usd": stats.total_cost_usd,
         "total_duration_secs": stats.total_duration_secs,
         "api_usage": api_usage,
         "per_tool": per_tool,
@@ -465,7 +460,6 @@ mod tests {
             output_tokens: Some(12000),
             cache_read_tokens: Some(5000),
             cache_creation_tokens: Some(1000),
-            total_cost_usd: Some(0.85),
             is_estimated: false,
             token_source: "native".into(),
             duration_secs: Some(180),
@@ -492,7 +486,6 @@ mod tests {
                     "sessions": s.session_count,
                     "input_tokens": s.total_input_tokens,
                     "output_tokens": s.total_output_tokens,
-                    "cost_usd": s.total_cost_usd,
                 })
             })
             .collect();
@@ -503,7 +496,6 @@ mod tests {
             "input_tokens": stats.total_input_tokens,
             "output_tokens": stats.total_output_tokens,
             "total_tokens": stats.total_input_tokens + stats.total_output_tokens,
-            "total_cost_usd": stats.total_cost_usd,
             "total_duration_secs": stats.total_duration_secs,
             "per_tool": per_tool,
         });
@@ -516,7 +508,6 @@ mod tests {
         assert_eq!(parsed["input_tokens"], 25000);
         assert_eq!(parsed["output_tokens"], 12000);
         assert_eq!(parsed["total_tokens"], 37000);
-        assert!(parsed["total_cost_usd"].as_f64().unwrap() > 0.0);
         assert_eq!(parsed["per_tool"].as_array().unwrap().len(), 1);
         assert_eq!(parsed["per_tool"][0]["tool"], "claude");
     }

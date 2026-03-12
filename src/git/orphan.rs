@@ -603,6 +603,7 @@ mod tests {
             tool_calls: Some(5),
             files_touched: Some(vec!["src/widget.rs".into()]),
             is_subagent: false,
+            is_estimated: false,
         };
 
         let result = write_anchor(repo, &anchor, &[session_link], &[]);

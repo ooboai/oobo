@@ -14,7 +14,6 @@ fn payload_to_native(s: SessionStats) -> NativeStats {
         output_tokens: s.output_tokens,
         cache_read_tokens: s.cache_read_tokens,
         cache_creation_tokens: s.cache_creation_tokens,
-        total_cost_usd: s.total_cost_usd,
         duration_secs: s.duration_secs,
         files_touched: s.files_touched,
         tool_call_count: s.tool_call_count,

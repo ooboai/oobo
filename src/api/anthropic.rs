@@ -134,7 +134,6 @@ fn parse_usage_response(body: &serde_json::Value) -> Result<Vec<UsageBucket>, St
                 output_tokens: output,
                 cache_read_tokens: cache_read,
                 cache_creation_tokens: cache_creation,
-                cost_usd: 0.0,
                 requests: 0,
             });
         }
@@ -182,8 +181,6 @@ fn parse_cost_response(body: &serde_json::Value) -> Result<Vec<UsageBucket>, Str
                 continue;
             }
 
-            let cost_usd = cost / 100.0;
-
             buckets.push(UsageBucket {
                 source: "anthropic".to_string(),
                 date: date.clone(),
@@ -192,7 +189,6 @@ fn parse_cost_response(body: &serde_json::Value) -> Result<Vec<UsageBucket>, Str
                 output_tokens: 0,
                 cache_read_tokens: 0,
                 cache_creation_tokens: 0,
-                cost_usd,
                 requests: 0,
             });
         }
@@ -247,6 +243,5 @@ mod tests {
 
         let buckets = parse_cost_response(&body).unwrap();
         assert_eq!(buckets.len(), 1);
-        assert!((buckets[0].cost_usd - 1.50).abs() < 0.01);
     }
 }

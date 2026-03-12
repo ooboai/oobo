@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -242,6 +241,7 @@ fn test_config_save_and_load() {
         server: oobo::config::ServerConfig {
             url: "https://custom.server.com".into(),
             api_key: "sk_test_key".into(),
+            sync: true,
         },
         git: oobo::config::GitConfig {
             real_git_path: "/usr/local/bin/git".into(),
@@ -327,7 +327,7 @@ url = "https://my.server"
 #[test]
 fn test_config_empty_toml() {
     let cfg: oobo::config::Config = toml::from_str("").unwrap();
-    assert_eq!(cfg.server.url, "https://dashboard.oobo.ai");
+    assert_eq!(cfg.server.url, "https://api.oobo.ai");
     assert!(cfg.cursor.enabled);
 }
 
@@ -726,70 +726,98 @@ fn test_cli_sessions_help() {
 
 #[test]
 fn test_event_payload_roundtrip() {
+    use oobo::core::anchor::*;
     use oobo::remote::payload::*;
 
-    let mut tools = BTreeMap::new();
-    tools.insert(
-        "cursor".into(),
-        ToolContext {
-            active_sessions: 3,
-            recent_session: Some(SessionSummary {
-                id: "session-uuid-123".into(),
-                name: "Debug authentication".into(),
-                mode: "agent".into(),
-                message_count: 42,
-                stats: None,
-                messages: Vec::new(),
-            }),
-        },
-    );
-    tools.insert(
-        "claude".into(),
-        ToolContext {
-            active_sessions: 1,
-            recent_session: Some(SessionSummary {
-                id: "claude-session-456".into(),
-                name: "Refactor module".into(),
-                mode: "opus-4.5".into(),
-                message_count: 10,
-                stats: None,
-                messages: Vec::new(),
-            }),
-        },
-    );
-    tools.insert(
-        "aider".into(),
-        ToolContext {
-            active_sessions: 1,
-            recent_session: Some(SessionSummary {
-                id: "aider-abc".into(),
-                name: "aider chat".into(),
-                mode: "aider".into(),
-                message_count: 5,
-                stats: None,
-                messages: Vec::new(),
-            }),
-        },
-    );
+    let anchor = Anchor {
+        oobo_version: "0.1.0".into(),
+        commit_hash: "abc123def456".into(),
+        branch: "main".into(),
+        author: "Developer <dev@example.com>".into(),
+        author_type: AuthorType::Assisted,
+        contributors: vec![
+            Contributor {
+                name: "Developer <dev@example.com>".into(),
+                role: ContributorRole::Human,
+                model: None,
+            },
+            Contributor {
+                name: "claude".into(),
+                role: ContributorRole::Agent,
+                model: Some("claude-sonnet-4".into()),
+            },
+        ],
+        committed_at: chrono::Utc::now().timestamp(),
+        message: "fix: resolve auth issue".into(),
+        files_changed: vec!["src/auth.rs".into(), "src/main.rs".into()],
+        added: 120,
+        deleted: 45,
+        file_changes: vec![
+            FileChange {
+                path: "src/auth.rs".into(),
+                added: 100,
+                deleted: 30,
+                attribution: Some(FileAttribution::Ai),
+                agent: Some("claude".into()),
+            },
+            FileChange {
+                path: "src/main.rs".into(),
+                added: 20,
+                deleted: 15,
+                attribution: Some(FileAttribution::Human),
+                agent: None,
+            },
+        ],
+        ai_added: 100,
+        ai_deleted: 30,
+        human_added: 20,
+        human_deleted: 15,
+        ai_percentage: Some(78.79),
+        session_ids: vec!["session-uuid-123".into()],
+        summary: None,
+        intent: None,
+        reasoning: None,
+        transparency_mode: TransparencyMode::On,
+    };
+
+    let sessions = vec![SessionLink {
+        session_id: "session-uuid-123".into(),
+        agent: "claude".into(),
+        model: Some("claude-sonnet-4".into()),
+        link_type: LinkType::Explicit,
+        input_tokens: Some(15000),
+        output_tokens: Some(8000),
+        cache_read_tokens: None,
+        cache_creation_tokens: None,
+        duration_secs: Some(120),
+        tool_calls: Some(5),
+        files_touched: Some(vec!["src/auth.rs".into()]),
+        is_subagent: false,
+        is_estimated: false,
+    }];
 
     let payload = EventPayload {
         event: "git.commit".into(),
         timestamp: chrono::Utc::now(),
+        oobo_version: "0.1.0".into(),
         project: ProjectInfo {
-            root: "/home/user/project".into(),
             name: "project".into(),
+            git_remote: Some("github.com/user/project".into()),
         },
-        git: GitInfo {
-            operation: "commit".into(),
-            branch: "main".into(),
-            commit_hash: "abc123def456".into(),
-            commit_message: "fix: resolve auth issue".into(),
-            author: "Developer <dev@example.com>".into(),
-            files_changed: 5,
-            insertions: 120,
-            deletions: 45,
-        },
-        tools,
+        anchor: Some(AnchorPayload {
+            anchor,
+            sessions,
+        }),
+        transcript: vec![
+            TranscriptMessage {
+                role: "user".into(),
+                text: "Fix auth".into(),
+            },
+            TranscriptMessage {
+                role: "assistant".into(),
+                text: "I'll fix the auth module...".into(),
+            },
+        ],
     };
 
     let json = serde_json::to_string(&payload).unwrap();
@@ -797,19 +825,17 @@ fn test_event_payload_roundtrip() {
 
     assert_eq!(parsed["event"], "git.commit");
     assert_eq!(parsed["project"]["name"], "project");
-    assert_eq!(parsed["git"]["files_changed"], 5);
-    assert_eq!(parsed["git"]["insertions"], 120);
-    assert_eq!(parsed["tools"]["cursor"]["active_sessions"], 3);
-    assert_eq!(
-        parsed["tools"]["cursor"]["recent_session"]["name"],
-        "Debug authentication"
-    );
-    assert_eq!(parsed["tools"]["claude"]["active_sessions"], 1);
-    assert_eq!(
-        parsed["tools"]["claude"]["recent_session"]["name"],
-        "Refactor module"
-    );
-    assert_eq!(parsed["tools"]["aider"]["active_sessions"], 1);
+    assert_eq!(parsed["project"]["git_remote"], "github.com/user/project");
+    assert_eq!(parsed["anchor"]["commit_hash"], "abc123def456");
+    assert_eq!(parsed["anchor"]["author_type"], "assisted");
+    assert_eq!(parsed["anchor"]["added"], 120);
+    assert_eq!(parsed["anchor"]["deleted"], 45);
+    assert_eq!(parsed["anchor"]["ai_added"], 100);
+    assert_eq!(parsed["anchor"]["ai_percentage"], 78.79);
+    assert_eq!(parsed["anchor"]["sessions"][0]["agent"], "claude");
+    assert_eq!(parsed["anchor"]["sessions"][0]["input_tokens"], 15000);
+    assert_eq!(parsed["transcript"][0]["role"], "user");
+    assert!(!json.contains("cost"));
 }
 
 // ── Workspace tests ─────────────────────────────────────────────────────────

@@ -38,6 +38,7 @@ tiktoken-rs = "0.6"
 libc = "0.2"
 thiserror = "2"
 regex = "1"
+resvg = "0.47.0"
 
 [dev-dependencies]
 tempfile = "3"

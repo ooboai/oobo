@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use crate::config::Config;
 use crate::core::anchor::{
     Anchor, AuthorType, Contributor, ContributorRole, FileAttribution, FileChange, LinkType,
@@ -7,9 +5,12 @@ use crate::core::anchor::{
 };
 use crate::git::{commands, detect, proxy};
 use crate::hooks;
+use crate::redact;
 use crate::remote;
-use crate::remote::payload::*;
-use crate::tools::cursor;
+use crate::remote::payload;
+
+/// Anchor + linked sessions + raw transcript texts (session_id, content).
+type EnrichResult = (Anchor, Vec<SessionLink>, Vec<(String, String)>);
 
 /// Called after a write operation succeeds.
 /// Logs event locally, creates anchor metadata, and optionally sends to cloud.
@@ -33,51 +34,73 @@ pub fn on_write_op(cfg: &Config, args: &[&str]) -> Result<(), String> {
     let branch = proxy::current_branch(cfg).unwrap_or_default();
     let git_context = collect_git_context(cfg, &op);
 
-    let tools = collect_all_tool_context(cfg, &project_root, cfg.telemetry.send_transcripts);
+    log_event_locally(&project_root, &op, &git_context);
 
-    let payload = EventPayload {
-        event: format!("git.{op}"),
-        timestamp: chrono::Utc::now(),
-        project: ProjectInfo {
-            root: project_root.clone(),
-            name: project_name,
-        },
-        git: GitInfo {
-            operation: op.clone(),
-            branch: branch.clone(),
-            commit_hash: git_context.commit_hash.clone(),
-            commit_message: git_context.commit_message.clone(),
-            author: git_context.author.clone(),
-            files_changed: git_context.files_changed,
-            insertions: git_context.insertions,
-            deletions: git_context.deletions,
-        },
-        tools,
-    };
-
-    log_event_locally(&project_root, &op, &payload);
+    let mut anchor_data: Option<EnrichResult> = None;
 
     if op == "commit" || op == "merge" {
-        if let Err(e) = enrich_commit(cfg, &project_root, &branch, &git_context) {
-            eprintln!("oobo: warning: could not enrich commit: {e}");
+        match enrich_commit(cfg, &project_root, &branch, &git_context) {
+            Ok(data) => anchor_data = data,
+            Err(e) => eprintln!("oobo: warning: could not enrich commit: {e}"),
         }
     }
 
-    if !cfg.server.api_key.is_empty() {
+    if cfg.should_sync() {
+        let git_remote = resolve_git_remote(cfg);
+
+        let (anchor_payload, transcript) = if let Some((anchor, links, transcripts)) = anchor_data {
+            let transcript_messages =
+                if anchor.transparency_mode == TransparencyMode::On && !transcripts.is_empty() {
+                    transcripts
+                        .into_iter()
+                        .flat_map(|(_session_id, text)| {
+                            let redacted = redact::redact(&text);
+                            parse_transcript_messages(&redacted)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+            (
+                Some(payload::AnchorPayload {
+                    anchor,
+                    sessions: links,
+                }),
+                transcript_messages,
+            )
+        } else {
+            (None, Vec::new())
+        };
+
+        let payload = payload::EventPayload {
+            event: format!("git.{op}"),
+            timestamp: chrono::Utc::now(),
+            oobo_version: env!("CARGO_PKG_VERSION").to_string(),
+            project: payload::ProjectInfo {
+                name: project_name,
+                git_remote,
+            },
+            anchor: anchor_payload,
+            transcript,
+        };
+
         remote::send_event(cfg, &payload);
     }
+
     Ok(())
 }
 
 /// Create an Anchor (enriched commit primitive) and write to orphan branch.
+/// Returns the anchor, session links, and transcripts for the backend payload.
 fn enrich_commit(
     cfg: &Config,
     project_root: &str,
     branch: &str,
     git_context: &GitContext,
-) -> Result<(), String> {
+) -> Result<Option<EnrichResult>, String> {
     if git_context.commit_hash.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     let author_info = detect::detect(project_root);
@@ -138,6 +161,7 @@ fn enrich_commit(
                     Some(touched)
                 },
                 is_subagent: false,
+                is_estimated: false,
             }
         })
         .collect();
@@ -304,7 +328,7 @@ fn enrich_commit(
         eprintln!("oobo: warning: could not write anchor to orphan branch: {e}");
     }
 
-    Ok(())
+    Ok(Some((anchor, session_links, transcripts)))
 }
 
 type PostAgentLookup<'a> = std::collections::HashMap<&'a str, (String, Option<String>)>;
@@ -694,7 +718,7 @@ fn normalize_path(file_path: &str, project_root: &str) -> String {
     }
 }
 
-fn log_event_locally(project_root: &str, op: &str, payload: &EventPayload) {
+fn log_event_locally(project_root: &str, op: &str, git_context: &GitContext) {
     let db = match crate::db::Db::open() {
         Ok(db) => db,
         Err(_) => return,
@@ -708,7 +732,15 @@ fn log_event_locally(project_root: &str, op: &str, payload: &EventPayload) {
         Some(slug)
     };
 
-    let data = serde_json::to_string(payload).ok();
+    let data = serde_json::to_string(&serde_json::json!({
+        "commit_hash": git_context.commit_hash,
+        "commit_message": git_context.commit_message,
+        "author": git_context.author,
+        "files_changed": git_context.files_changed,
+        "insertions": git_context.insertions,
+        "deletions": git_context.deletions,
+    }))
+    .ok();
 
     if let Err(e) = db.insert_event(&crate::db::events::EventRow {
         id: None,
@@ -720,6 +752,37 @@ fn log_event_locally(project_root: &str, op: &str, payload: &EventPayload) {
     }) {
         eprintln!("oobo: warning: could not save event: {e}");
     }
+}
+
+fn resolve_git_remote(cfg: &Config) -> Option<String> {
+    proxy::run_git_capture(cfg, &["remote", "get-url", "origin"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn parse_transcript_messages(text: &str) -> Vec<payload::TranscriptMessage> {
+    text.lines()
+        .filter_map(|line| {
+            let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
+            let role = parsed
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let text = parsed
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_str())
+                .or_else(|| parsed.get("text").and_then(|t| t.as_str()))
+                .unwrap_or("")
+                .to_string();
+            if text.is_empty() {
+                return None;
+            }
+            Some(payload::TranscriptMessage { role, text })
+        })
+        .collect()
 }
 
 struct GitContext {
@@ -773,118 +836,6 @@ fn parse_shortstat(stat: &str, ctx: &mut GitContext) {
             }
         }
     }
-}
-
-pub fn collect_all_tool_context(
-    cfg: &Config,
-    project_root: &str,
-    include_transcripts: bool,
-) -> BTreeMap<String, ToolContext> {
-    let mut tools = BTreeMap::new();
-
-    macro_rules! collect_tool {
-        ($enabled:expr, $name:expr, $sessions:expr, $count_fn:expr, $source:expr) => {
-            if $enabled {
-                let sessions = $sessions;
-                let transcript = if include_transcripts {
-                    load_transcript(&sessions, $source)
-                } else {
-                    None
-                };
-                if let Some(ctx) = tool_context_from_sessions(&sessions, $count_fn, transcript) {
-                    tools.insert($name.into(), ctx);
-                }
-            }
-        };
-    }
-
-    macro_rules! collect_tool_with_stats {
-        ($enabled:expr, $name:expr, $sessions:expr, $count_fn:expr, $stats_fn:expr, $source:expr) => {
-            if $enabled {
-                let sessions = $sessions;
-                let transcript = if include_transcripts {
-                    load_transcript(&sessions, $source)
-                } else {
-                    None
-                };
-                if let Some(ctx) = tool_context_from_sessions_with_stats(
-                    &sessions, $count_fn, $stats_fn, transcript,
-                ) {
-                    tools.insert($name.into(), ctx);
-                }
-            }
-        };
-    }
-
-    collect_tool!(
-        cfg.cursor.enabled,
-        "cursor",
-        cursor::sessions_for_project(project_root).unwrap_or_default(),
-        cursor::transcript::count_messages,
-        "cursor"
-    );
-    collect_tool_with_stats!(
-        cfg.claude.enabled,
-        "claude",
-        crate::tools::claude::sessions_for_project(project_root).unwrap_or_default(),
-        crate::tools::claude::transcript::count_messages,
-        crate::tools::claude::transcript::stats_for_session,
-        "claude"
-    );
-    collect_tool!(
-        cfg.windsurf.enabled,
-        "windsurf",
-        crate::tools::windsurf::sessions_for_project(project_root).unwrap_or_default(),
-        crate::tools::windsurf::transcript::count_messages,
-        "windsurf"
-    );
-    collect_tool!(
-        cfg.trae.enabled,
-        "trae",
-        crate::tools::trae::sessions_for_project(project_root).unwrap_or_default(),
-        crate::tools::trae::transcript::count_messages,
-        "trae"
-    );
-    collect_tool!(
-        cfg.aider.enabled,
-        "aider",
-        crate::tools::aider::sessions_for_project(project_root).unwrap_or_default(),
-        crate::tools::aider::transcript::count_messages,
-        "aider"
-    );
-    collect_tool_with_stats!(
-        cfg.copilot.enabled,
-        "copilot",
-        crate::tools::copilot::sessions_for_project(project_root).unwrap_or_default(),
-        crate::tools::copilot::transcript::count_messages,
-        crate::tools::copilot::transcript::stats_for_session,
-        "copilot"
-    );
-    collect_tool!(
-        cfg.zed.enabled,
-        "zed",
-        crate::tools::zed::sessions_for_project(project_root).unwrap_or_default(),
-        crate::tools::zed::transcript::count_messages,
-        "zed"
-    );
-    collect_tool_with_stats!(
-        cfg.codex.enabled,
-        "codex",
-        crate::tools::codex::sessions_for_project(project_root).unwrap_or_default(),
-        crate::tools::codex::transcript::count_messages,
-        crate::tools::codex::transcript::stats_for_session,
-        "codex"
-    );
-    collect_tool_with_stats!(
-        cfg.opencode.enabled,
-        "opencode",
-        crate::tools::opencode::sessions_for_project(project_root).unwrap_or_default(),
-        crate::tools::opencode::transcript::count_messages,
-        crate::tools::opencode::transcript::stats_for_session,
-        "opencode"
-    );
-
-    tools
 }
 
 /// Collect rich transcript content for active sessions (for full-transparency mode).
@@ -960,30 +911,6 @@ fn resolve_transparency(cfg: &Config, project_root: &str) -> crate::core::anchor
         }
     }
     cfg.transparency_mode()
-}
-
-fn load_transcript(
-    sessions: &[crate::tools::cursor::Session],
-    source: &str,
-) -> Option<Vec<TranscriptMessage>> {
-    if sessions.is_empty() {
-        return None;
-    }
-    let recent = &sessions[0];
-    let path = crate::session::find_transcript_path(recent)?;
-    let messages = crate::session::parse_messages(&path, source);
-    if messages.is_empty() {
-        return None;
-    }
-    Some(
-        messages
-            .into_iter()
-            .map(|m| TranscriptMessage {
-                role: m.role,
-                text: m.text,
-            })
-            .collect(),
-    )
 }
 
 #[cfg(test)]

@@ -10,7 +10,6 @@ pub struct NativeStats {
     pub output_tokens: Option<u64>,
     pub cache_read_tokens: Option<u64>,
     pub cache_creation_tokens: Option<u64>,
-    pub total_cost_usd: Option<f64>,
     pub duration_secs: Option<u64>,
     pub files_touched: Vec<String>,
     pub tool_call_count: u32,
@@ -58,8 +57,6 @@ pub fn compute_session_stats(
     let cache_read = native.cache_read_tokens.unwrap_or(0);
     let cache_creation = native.cache_creation_tokens.unwrap_or(0);
 
-    let total_cost = native.total_cost_usd;
-
     let duration = native.duration_secs.or_else(|| compute_duration(messages));
 
     StatsRow {
@@ -70,7 +67,6 @@ pub fn compute_session_stats(
         output_tokens: Some(output_tokens as i64),
         cache_read_tokens: Some(cache_read as i64),
         cache_creation_tokens: Some(cache_creation as i64),
-        total_cost_usd: total_cost,
         is_estimated,
         token_source: token_source.to_string(),
         duration_secs: duration.map(|d| d as i64),
@@ -121,7 +117,6 @@ mod tests {
             output_tokens: Some(3000),
             cache_read_tokens: Some(1000),
             cache_creation_tokens: Some(200),
-            total_cost_usd: Some(0.12),
             duration_secs: Some(45),
             files_touched: vec!["src/main.rs".into()],
             tool_call_count: 2,
@@ -132,7 +127,6 @@ mod tests {
         assert_eq!(stats.output_tokens, Some(3000));
         assert!(!stats.is_estimated);
         assert_eq!(stats.token_source, "native");
-        assert_eq!(stats.total_cost_usd, Some(0.12));
         assert_eq!(stats.duration_secs, Some(45));
     }
 
@@ -161,28 +155,4 @@ mod tests {
         assert_eq!(stats.token_source, "unknown");
     }
 
-    #[test]
-    fn test_cost_passthrough_from_native() {
-        let native = NativeStats {
-            model: Some("claude-sonnet-4".into()),
-            input_tokens: Some(1_000_000),
-            output_tokens: Some(500_000),
-            total_cost_usd: Some(10.50),
-            ..Default::default()
-        };
-        let stats = compute_session_stats("s4", "claude", &[], Some(native));
-        assert_eq!(stats.total_cost_usd, Some(10.50));
-    }
-
-    #[test]
-    fn test_cost_none_when_not_provided() {
-        let native = NativeStats {
-            model: Some("claude-sonnet-4".into()),
-            input_tokens: Some(1_000_000),
-            output_tokens: Some(500_000),
-            ..Default::default()
-        };
-        let stats = compute_session_stats("s5", "claude", &[], Some(native));
-        assert_eq!(stats.total_cost_usd, None);
-    }
 }

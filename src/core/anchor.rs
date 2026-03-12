@@ -162,6 +162,8 @@ pub struct SessionLink {
 
     #[serde(default)]
     pub is_subagent: bool,
+    #[serde(default)]
+    pub is_estimated: bool,
 }
 
 impl Anchor {
@@ -300,6 +302,7 @@ mod tests {
             tool_calls: None,
             files_touched: None,
             is_subagent: false,
+            is_estimated: false,
         };
         let json = serde_json::to_string(&link).unwrap();
         assert!(!json.contains("input_tokens"));

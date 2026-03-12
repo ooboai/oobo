@@ -213,6 +213,7 @@ mod tests {
             server: crate::config::ServerConfig {
                 url: "https://example.com".into(),
                 api_key: String::new(),
+                sync: false,
             },
             ..Config::load_or_default()
         };

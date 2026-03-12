@@ -9,7 +9,6 @@ pub struct OtelEventRow {
     pub event_name: String,
     pub session_id: Option<String>,
     pub model: Option<String>,
-    pub cost_usd: Option<f64>,
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub cache_read_tokens: Option<i64>,
@@ -26,7 +25,6 @@ pub struct OtelEventRow {
 #[derive(Debug, Clone, Default)]
 pub struct OtelSummary {
     pub event_count: i64,
-    pub total_cost_usd: f64,
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
     pub total_cache_read_tokens: i64,
@@ -39,16 +37,15 @@ impl Db {
     pub fn insert_otel_event(&self, row: &OtelEventRow) -> Result<(), String> {
         self.conn
             .execute(
-                "INSERT INTO otel_events (event_name, session_id, model, cost_usd,
+                "INSERT INTO otel_events (event_name, session_id, model,
                     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                     duration_ms, tool_name, tool_success, prompt_length,
                     account_uuid, timestamp, raw_attributes)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     row.event_name,
                     row.session_id,
                     row.model,
-                    row.cost_usd,
                     row.input_tokens,
                     row.output_tokens,
                     row.cache_read_tokens,
@@ -76,7 +73,6 @@ impl Db {
         self.conn
             .query_row(
                 "SELECT COUNT(*),
-                    COALESCE(SUM(cost_usd), 0.0),
                     COALESCE(SUM(input_tokens), 0),
                     COALESCE(SUM(output_tokens), 0),
                     COALESCE(SUM(cache_read_tokens), 0),
@@ -88,13 +84,12 @@ impl Db {
                 |row| {
                     Ok(OtelSummary {
                         event_count: row.get(0)?,
-                        total_cost_usd: row.get(1)?,
-                        total_input_tokens: row.get(2)?,
-                        total_output_tokens: row.get(3)?,
-                        total_cache_read_tokens: row.get(4)?,
-                        total_duration_ms: row.get(5)?,
-                        tool_calls: row.get(6)?,
-                        api_requests: row.get(7)?,
+                        total_input_tokens: row.get(1)?,
+                        total_output_tokens: row.get(2)?,
+                        total_cache_read_tokens: row.get(3)?,
+                        total_duration_ms: row.get(4)?,
+                        tool_calls: row.get(5)?,
+                        api_requests: row.get(6)?,
                     })
                 },
             )

@@ -392,7 +392,6 @@ pub mod transcript {
                 None
             },
             cache_creation_tokens: None,
-            total_cost_usd: None,
             is_estimated: false,
             token_source: if has_tokens {
                 Some("native".to_string())

@@ -61,11 +61,13 @@ oobo stats --tool cursor --agent                   # Per-tool
 oobo stats --since 7d --agent                      # Time-scoped
 ```
 
-### Developer Card
+### AI Development Infographic
 
 ```bash
-oobo card --agent                                  # Developer stats card as JSON
-oobo card --out card.md                            # Save markdown card to custom path
+oobo card --agent                                  # Stats as JSON (includes SVG)
+oobo card --out card.svg                           # Save SVG infographic to custom path
+oobo card --format md --out card.md                # Save markdown card
+oobo card --format json                            # JSON output
 ```
 
 ### Data Sources
@@ -90,14 +92,27 @@ oobo share <session_id> --agent                    # Redacted session as JSON
 oobo share <session_id> --out session.json         # Save to file
 ```
 
+### Backend Sync
+
+```bash
+oobo sync                                          # Show current sync status
+oobo sync on                                       # Enable auto-sync (prompts for key if needed)
+oobo sync off                                      # Disable auto-sync
+oobo sync --import                                 # Import anchors from orphan branch into local DB
+```
+
+When sync is on and `OOBO_SECRET_KEY` (env var) or `api_key` is configured, anchor data syncs to the backend automatically on every commit/push.
+
 ### Auth & Remote
 
 ```bash
-oobo auth login --key <api_key>                    # Authenticate with oobo.dev
+oobo auth login --key <api_key>                    # Authenticate with backend
 oobo auth logout                                   # Remove credentials
 oobo auth status                                   # Show auth state + tool keys
 oobo auth set-remote https://oobo.example.com      # Self-hosted server
 ```
+
+The `OOBO_SECRET_KEY` environment variable overrides the persisted `api_key` when set.
 
 ### Agent Lifecycle Hooks
 
@@ -122,7 +137,7 @@ Cursor, Claude Code, Gemini CLI, Codex CLI, OpenCode, GitHub Copilot Chat, Winds
 
 ## JSON Response Fields
 
-**anchors**: `commit_hash`, `message`, `author`, `author_type`, `branch`, `committed_at`, `contributors[]` (each with `name`, `role`, `model`), `files_changed[]`, `lines_added`, `lines_deleted`, `file_changes[]` (each with `path`, `lines_added`, `lines_deleted`, `attribution` [ai/human/mixed], `agent`), `ai_lines_added`, `ai_lines_deleted`, `human_lines_added`, `human_lines_deleted`, `ai_percentage`, `sessions[]` (each with `session_id`, `agent`, `model`, `link_type`, `input_tokens`, `output_tokens`, `files_touched[]`), `summary`, `intent`
+**anchors**: `commit_hash`, `message`, `author`, `author_type`, `branch`, `committed_at`, `contributors[]` (each with `name`, `role`, `model`), `files_changed[]`, `added`, `deleted`, `file_changes[]` (each with `path`, `added`, `deleted`, `attribution` [ai/human/mixed], `agent`), `ai_added`, `ai_deleted`, `human_added`, `human_deleted`, `ai_percentage`, `sessions[]` (each with `session_id`, `agent`, `model`, `link_type`, `input_tokens`, `output_tokens`, `files_touched[]`), `transparency_mode`, `summary`, `intent`
 
 **sessions list**: `session_id`, `name`, `source`, `mode`, `project_path`, `created_at`, `updated_at`, `model`, `input_tokens`, `output_tokens`, `duration_secs`, `is_estimated`, `files_touched`, `tool_calls`
 
@@ -152,6 +167,9 @@ alias_enabled = true
 
 [transparency]
 mode = "on"
+
+[server]
+sync = false
 EOF
 ```
 
@@ -168,6 +186,7 @@ oobo scan
 |---------|-------|-----|
 | `transparency.mode` | `on` | Metadata + redacted transcripts sync |
 | `git.alias_enabled` | `true` | Automatic enrichment on every commit |
+| `server.sync` | `true` | Auto-sync anchor data to backend on commit/push |
 | `--agent` flag | Always use | Structured JSON output for parsing |
 
 ### Verifying configuration

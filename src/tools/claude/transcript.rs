@@ -151,7 +151,6 @@ pub fn extract_stats(path: &Path) -> Option<crate::remote::payload::SessionStats
     let mut output_tokens: u64 = 0;
     let mut cache_read_tokens: u64 = 0;
     let mut cache_creation_tokens: u64 = 0;
-    let mut total_cost: f64 = 0.0;
     let mut files_touched: Vec<String> = Vec::new();
     let mut tool_call_count: u32 = 0;
     let mut first_ts: Option<i64> = None;
@@ -248,9 +247,6 @@ pub fn extract_stats(path: &Path) -> Option<crate::remote::payload::SessionStats
                         .unwrap_or(0);
                 }
             }
-            if let Some(c) = entry.get("costUSD").and_then(|v| v.as_f64()) {
-                total_cost += c;
-            }
         }
     }
 
@@ -278,11 +274,6 @@ pub fn extract_stats(path: &Path) -> Option<crate::remote::payload::SessionStats
         },
         cache_creation_tokens: if cache_creation_tokens > 0 {
             Some(cache_creation_tokens)
-        } else {
-            None
-        },
-        total_cost_usd: if total_cost > 0.0 {
-            Some(total_cost)
         } else {
             None
         },
@@ -315,7 +306,6 @@ pub fn extract_native_stats(
         output_tokens: stats.output_tokens,
         cache_read_tokens: stats.cache_read_tokens,
         cache_creation_tokens: stats.cache_creation_tokens,
-        total_cost_usd: stats.total_cost_usd,
         duration_secs: stats.duration_secs,
         files_touched: stats.files_touched,
         tool_call_count: stats.tool_call_count,

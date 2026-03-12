@@ -17,7 +17,6 @@ pub struct UsageBucket {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
-    pub cost_usd: f64,
     pub requests: u64,
 }
 
@@ -107,7 +106,6 @@ fn fetch_cursor_usage(api_key: &str) -> Option<FetchResult> {
             output_tokens: 0,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
-            cost_usd: 0.0,
             requests: b.num_requests_total,
         })
         .collect();

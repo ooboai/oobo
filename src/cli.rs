@@ -25,8 +25,7 @@ use crate::git;
   sessions     Browse AI chat sessions
   anchors, a   Enriched commit history with AI context
   share        Share a redacted session
-  ship         Send AI context to dashboard
-  sync         Import anchors from existing repos
+  sync         Enable/disable backend sync
   ignore       Stop tracking this repo
   unignore     Re-enable tracking
   transparency Per-repo transcript transparency
@@ -35,7 +34,7 @@ use crate::git;
   setup        First-time configuration wizard
   projects     Browse and manage all projects
   stats        Token usage analytics and attribution
-  card         Developer stats card
+  card         AI development infographic
   scan         Discover projects and sessions
   index        Compute token analytics
   sources      Data source status and coverage
@@ -119,18 +118,22 @@ pub enum Command {
         out: Option<String>,
     },
 
-    /// Send AI context to the dashboard now
-    #[command(display_order = 4)]
-    Ship,
-
-    /// Import anchors from existing repos
+    /// Enable or disable backend sync
     #[command(
         display_order = 5,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       oobo sync               Import anchors from orphan branch\n  \
-                       oobo sync               Safe to run multiple times (idempotent)"
+                       oobo sync               Show current sync status\n  \
+                       oobo sync on            Enable auto-sync (prompts for key if needed)\n  \
+                       oobo sync off           Disable auto-sync\n  \
+                       oobo sync --import      Import anchors from orphan branch"
     )]
-    Sync,
+    Sync {
+        /// on or off (omit to show current status)
+        mode: Option<String>,
+        /// Import anchors from orphan branch into local DB
+        #[arg(long)]
+        import: bool,
+    },
 
     /// Stop tracking this repo
     #[command(
@@ -210,18 +213,23 @@ pub enum Command {
         since: Option<String>,
     },
 
-    /// Developer stats card (shareable, no private data)
+    /// AI development infographic (shareable, no private data)
     #[command(
         display_order = 13,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       oobo card                  Generate card + save oobo-card.md\n  \
-                       oobo card --out dev.md     Save to custom path\n  \
-                       oobo card --agent          JSON output"
+                       oobo card                       Generate SVG infographic\n  \
+                       oobo card --out dev.svg         Save to custom path\n  \
+                       oobo card --format md            Markdown output\n  \
+                       oobo card --format json          JSON output\n  \
+                       oobo card --agent                JSON output (agent mode)"
     )]
     Card {
-        /// Save markdown to a custom file path (default: oobo-card.md)
+        /// Save to a custom file path (default: oobo-card.png)
         #[arg(long)]
         out: Option<String>,
+        /// Output format: png (default), svg, md, json
+        #[arg(long, default_value = "png")]
+        format: String,
     },
 
     /// Discover projects and sessions across all AI tools
@@ -480,7 +488,6 @@ const OOBO_SUBCOMMANDS: &[&str] = &[
     "sessions",
     "alias",
     "dash",
-    "ship",
     "projects",
     "stats",
     "scan",
@@ -509,7 +516,7 @@ fn is_oobo_subcommand(args: &[String]) -> bool {
 }
 
 /// Determine what to do and dispatch.
-pub fn route(cfg: Config) -> Result<i32, String> {
+pub fn route(mut cfg: Config) -> Result<i32, String> {
     let raw_args: Vec<String> = std::env::args().collect();
 
     // If invoked as `git` (via alias), treat everything as git args
@@ -576,10 +583,6 @@ pub fn route(cfg: Config) -> Result<i32, String> {
             crate::commands::dash::run(&cfg, agent_mode);
             Ok(0)
         }
-        Some(Command::Ship) => {
-            crate::commands::ship::run(&cfg)?;
-            Ok(0)
-        }
         Some(Command::Projects { action }) => {
             let resolved = match action {
                 Some(a) => a,
@@ -637,8 +640,12 @@ pub fn route(cfg: Config) -> Result<i32, String> {
             crate::commands::check::run(fix, agent_mode)?;
             Ok(0)
         }
-        Some(Command::Sync) => {
-            crate::commands::sync::run(&cfg)?;
+        Some(Command::Sync { mode, import }) => {
+            if import {
+                crate::commands::sync::run_import(&cfg)?;
+            } else {
+                crate::commands::sync::run(&mut cfg, mode.as_deref())?;
+            }
             Ok(0)
         }
         Some(Command::Ignore { list }) => {
@@ -661,8 +668,8 @@ pub fn route(cfg: Config) -> Result<i32, String> {
             }
             Ok(0)
         }
-        Some(Command::Card { out }) => {
-            crate::commands::card::run(agent_mode, out)?;
+        Some(Command::Card { out, format }) => {
+            crate::commands::card::run(agent_mode, out, &format)?;
             Ok(0)
         }
         Some(Command::Version) => {

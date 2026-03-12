@@ -19,15 +19,14 @@ impl Db {
             self.conn
                 .execute(
                     "INSERT INTO api_usage (source, date, model, input_tokens, output_tokens,
-                         cache_read_tokens, cache_creation_tokens, cost_usd, requests, fetched_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                         cache_read_tokens, cache_creation_tokens, requests, fetched_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                      ON CONFLICT(source, date, model)
                      DO UPDATE SET
                          input_tokens = excluded.input_tokens,
                          output_tokens = excluded.output_tokens,
                          cache_read_tokens = excluded.cache_read_tokens,
                          cache_creation_tokens = excluded.cache_creation_tokens,
-                         cost_usd = excluded.cost_usd,
                          requests = excluded.requests,
                          fetched_at = excluded.fetched_at",
                     params![
@@ -38,7 +37,6 @@ impl Db {
                         b.output_tokens as i64,
                         b.cache_read_tokens as i64,
                         b.cache_creation_tokens as i64,
-                        b.cost_usd,
                         b.requests as i64,
                         now,
                     ],
@@ -60,7 +58,6 @@ impl Db {
                     COALESCE(SUM(output_tokens), 0),
                     COALESCE(SUM(cache_read_tokens), 0),
                     COALESCE(SUM(cache_creation_tokens), 0),
-                    COALESCE(SUM(cost_usd), 0.0),
                     COALESCE(SUM(requests), 0),
                     COUNT(DISTINCT date),
                     MAX(fetched_at)
@@ -75,10 +72,9 @@ impl Db {
                     output_tokens: row.get::<_, i64>(1)? as u64,
                     cache_read_tokens: row.get::<_, i64>(2)? as u64,
                     cache_creation_tokens: row.get::<_, i64>(3)? as u64,
-                    cost_usd: row.get(4)?,
-                    requests: row.get::<_, i64>(5)? as u64,
-                    days: row.get::<_, i64>(6)? as u64,
-                    last_fetched_at: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
+                    requests: row.get::<_, i64>(4)? as u64,
+                    days: row.get::<_, i64>(5)? as u64,
+                    last_fetched_at: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
                 })
             })
             .map_err(|e| format!("cannot query api_usage: {e}"))?;
@@ -97,7 +93,6 @@ impl Db {
                     COALESCE(SUM(output_tokens), 0),
                     COALESCE(SUM(cache_read_tokens), 0),
                     COALESCE(SUM(cache_creation_tokens), 0),
-                    COALESCE(SUM(cost_usd), 0.0),
                     COALESCE(SUM(requests), 0),
                     COUNT(DISTINCT date),
                     MAX(fetched_at)
@@ -113,10 +108,9 @@ impl Db {
                     output_tokens: row.get::<_, i64>(2)? as u64,
                     cache_read_tokens: row.get::<_, i64>(3)? as u64,
                     cache_creation_tokens: row.get::<_, i64>(4)? as u64,
-                    cost_usd: row.get(5)?,
-                    requests: row.get::<_, i64>(6)? as u64,
-                    days: row.get::<_, i64>(7)? as u64,
-                    last_fetched_at: row.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                    requests: row.get::<_, i64>(5)? as u64,
+                    days: row.get::<_, i64>(6)? as u64,
+                    last_fetched_at: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 };
                 Ok((source, summary))
             })
@@ -132,7 +126,6 @@ pub struct ApiUsageSummary {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
-    pub cost_usd: f64,
     pub requests: u64,
     pub days: u64,
     pub last_fetched_at: i64,
@@ -144,7 +137,7 @@ impl ApiUsageSummary {
     }
 
     pub fn has_data(&self) -> bool {
-        self.total_tokens() > 0 || self.cost_usd > 0.0
+        self.total_tokens() > 0
     }
 }
 
@@ -165,7 +158,6 @@ mod tests {
                 output_tokens: 2000,
                 cache_read_tokens: 1000,
                 cache_creation_tokens: 500,
-                cost_usd: 0.15,
                 requests: 10,
             },
             UsageBucket {
@@ -176,7 +168,6 @@ mod tests {
                 output_tokens: 1000,
                 cache_read_tokens: 0,
                 cache_creation_tokens: 0,
-                cost_usd: 0.08,
                 requests: 5,
             },
         ];
@@ -203,7 +194,6 @@ mod tests {
             output_tokens: 500,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
-            cost_usd: 0.05,
             requests: 3,
         };
 

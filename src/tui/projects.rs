@@ -554,13 +554,12 @@ fn render_session(
         let model_str = st.model.as_deref().unwrap_or("unknown");
         let inp = st.input_tokens.unwrap_or(0);
         let out = st.output_tokens.unwrap_or(0);
-        let cost = st.total_cost_usd.unwrap_or(0.0);
         let dur = st.duration_secs.map(format_duration).unwrap_or_default();
         let tools = st.tool_call_count;
         let files = st.files_touched.len();
 
         header_lines.push(Line::from(""));
-        let mut spans = vec![
+        let spans = vec![
             Span::styled(" Model: ", Style::default().fg(Color::DarkGray)),
             Span::styled(model_str.to_string(), Style::default().fg(Color::Magenta)),
             Span::styled("  Tokens: ", Style::default().fg(Color::DarkGray)),
@@ -569,16 +568,6 @@ fn render_session(
                 Style::default().fg(Color::Yellow),
             ),
         ];
-        if cost > 0.001 {
-            spans.push(Span::styled(
-                "  Cost: ",
-                Style::default().fg(Color::DarkGray),
-            ));
-            spans.push(Span::styled(
-                format!("${:.4}", cost),
-                Style::default().fg(Color::Green),
-            ));
-        }
         header_lines.push(Line::from(spans));
 
         let mut detail = vec![];

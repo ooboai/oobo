@@ -482,7 +482,6 @@ pub mod telemetry {
             } else {
                 None
             },
-            total_cost_usd: None,
             duration_secs,
             files_touched: Vec::new(),
             tool_call_count: 0,

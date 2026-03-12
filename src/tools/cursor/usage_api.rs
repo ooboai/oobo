@@ -292,7 +292,6 @@ pub fn aggregate_events(events: &[UsageEvent]) -> crate::analytics::NativeStats 
     let mut total_output = 0u64;
     let mut total_cache_read = 0u64;
     let mut total_cache_write = 0u64;
-    let mut total_cost_cents = 0.0f64;
     let mut model: Option<String> = None;
 
     for evt in events {
@@ -300,7 +299,6 @@ pub fn aggregate_events(events: &[UsageEvent]) -> crate::analytics::NativeStats 
         total_output += evt.output_tokens;
         total_cache_read += evt.cache_read_tokens;
         total_cache_write += evt.cache_write_tokens;
-        total_cost_cents += evt.cost_cents;
         if model.is_none() {
             model = evt.model.clone();
         }
@@ -325,11 +323,6 @@ pub fn aggregate_events(events: &[UsageEvent]) -> crate::analytics::NativeStats 
         },
         cache_creation_tokens: if total_cache_write > 0 {
             Some(total_cache_write)
-        } else {
-            None
-        },
-        total_cost_usd: if total_cost_cents > 0.0 {
-            Some(total_cost_cents / 100.0)
         } else {
             None
         },

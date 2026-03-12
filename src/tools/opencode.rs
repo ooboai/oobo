@@ -153,7 +153,6 @@ fn stats_from_modern_db(
     let mut output_tokens: u64 = 0;
     let mut cache_read: u64 = 0;
     let mut cache_write: u64 = 0;
-    let mut total_cost: f64 = 0.0;
     let mut model: Option<String> = None;
     let mut tool_call_count: u32 = 0;
     let mut first_ts: Option<i64> = None;
@@ -183,10 +182,6 @@ fn stats_from_modern_db(
                 cache_read += cache.get("read").and_then(|v| v.as_u64()).unwrap_or(0);
                 cache_write += cache.get("write").and_then(|v| v.as_u64()).unwrap_or(0);
             }
-        }
-
-        if let Some(cost) = v.get("cost").and_then(|c| c.as_f64()) {
-            total_cost += cost;
         }
 
         if model.is_none() {
@@ -225,11 +220,6 @@ fn stats_from_modern_db(
         input_tokens: if has_tokens { Some(input_tokens) } else { None },
         output_tokens: if has_tokens {
             Some(output_tokens)
-        } else {
-            None
-        },
-        total_cost_usd: if total_cost > 0.0 {
-            Some(total_cost)
         } else {
             None
         },
@@ -418,7 +408,7 @@ fn stats_from_legacy_db(
         )
         .ok()?;
 
-    let (prompt_tokens, completion_tokens, cost, created_at, updated_at) = row;
+    let (prompt_tokens, completion_tokens, _cost, created_at, updated_at) = row;
 
     let created_ms = normalize_ts(created_at);
     let updated_ms = normalize_ts(updated_at);
@@ -467,7 +457,6 @@ fn stats_from_legacy_db(
         } else {
             None
         },
-        total_cost_usd: if cost > 0.0 { Some(cost) } else { None },
         duration_secs,
         files_touched: Vec::new(),
         tool_call_count,
@@ -1020,7 +1009,6 @@ mod tests {
         assert_eq!(stats.output_tokens, Some(231));
         assert_eq!(stats.cache_read_tokens, Some(11799));
         assert_eq!(stats.cache_creation_tokens, Some(10970));
-        assert_eq!(stats.total_cost_usd, Some(0.08));
         assert_eq!(stats.tool_call_count, 1);
         assert_eq!(stats.token_source, Some("native".to_string()));
     }
@@ -1049,7 +1037,6 @@ mod tests {
         let stats = stats_from_legacy_db(&conn, "s1").unwrap();
         assert_eq!(stats.input_tokens, Some(15000));
         assert_eq!(stats.output_tokens, Some(8000));
-        assert_eq!(stats.total_cost_usd, Some(0.45));
         assert_eq!(stats.tool_call_count, 2);
         assert_eq!(stats.duration_secs, Some(120));
     }

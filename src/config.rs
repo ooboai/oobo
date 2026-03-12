@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-const DEFAULT_SERVER_URL: &str = "https://dashboard.oobo.ai";
+const DEFAULT_SERVER_URL: &str = "https://api.oobo.ai";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -48,6 +48,8 @@ pub struct ServerConfig {
     pub url: String,
     #[serde(default)]
     pub api_key: String,
+    #[serde(default)]
+    pub sync: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +134,7 @@ impl Default for ServerConfig {
         Self {
             url: default_server_url(),
             api_key: String::new(),
+            sync: false,
         }
     }
 }
@@ -192,22 +195,34 @@ impl Config {
     }
 
     /// Load config from disk, or return defaults if it doesn't exist.
+    /// `OOBO_SECRET_KEY` env var overrides the persisted `api_key` when set.
     pub fn load_or_default() -> Self {
         let path = Self::config_path();
-        if path.exists() {
+        let mut cfg = if path.exists() {
             match fs::read_to_string(&path) {
                 Ok(contents) => match toml::from_str(&contents) {
-                    Ok(cfg) => return cfg,
+                    Ok(cfg) => cfg,
                     Err(e) => {
                         eprintln!("oobo: warning: invalid config at {}: {e}", path.display());
+                        Self::default()
                     }
                 },
                 Err(e) => {
                     eprintln!("oobo: warning: cannot read {}: {e}", path.display());
+                    Self::default()
                 }
             }
+        } else {
+            Self::default()
+        };
+
+        if let Ok(key) = std::env::var("OOBO_SECRET_KEY") {
+            if !key.is_empty() {
+                cfg.server.api_key = key;
+            }
         }
-        Self::default()
+
+        cfg
     }
 
     /// Persist config to disk. Sets file permissions to 0600 on Unix when API keys are present.
@@ -243,6 +258,11 @@ impl Config {
             || !self.opencode.api_key.is_empty()
             || !self.aider.api_key.is_empty()
             || !self.trae.api_key.is_empty()
+    }
+
+    /// True when sync is enabled and an API key is available.
+    pub fn should_sync(&self) -> bool {
+        self.server.sync && !self.server.api_key.is_empty()
     }
 
     /// True if the server is configured with a non-default API key.
@@ -334,8 +354,10 @@ mod tests {
     #[test]
     fn test_default_config() {
         let cfg = Config::default();
-        assert_eq!(cfg.server.url, DEFAULT_SERVER_URL);
+        assert_eq!(cfg.server.url, "https://api.oobo.ai");
         assert!(cfg.server.api_key.is_empty());
+        assert!(!cfg.server.sync);
+        assert!(!cfg.should_sync());
         assert!(!cfg.git.alias_enabled);
         assert!(cfg.cursor.enabled);
         assert!(cfg.claude.enabled);
@@ -356,6 +378,7 @@ mod tests {
             server: ServerConfig {
                 url: "https://my.server.com".into(),
                 api_key: "test_key_123".into(),
+                sync: true,
             },
             git: GitConfig {
                 real_git_path: "/usr/bin/git".into(),
@@ -415,6 +438,8 @@ mod tests {
         let deserialized: Config = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.server.url, "https://my.server.com");
         assert_eq!(deserialized.server.api_key, "test_key_123");
+        assert!(deserialized.server.sync);
+        assert!(deserialized.should_sync());
         assert!(deserialized.git.alias_enabled);
         assert!(!deserialized.cursor.enabled);
         assert!(deserialized.claude.enabled);

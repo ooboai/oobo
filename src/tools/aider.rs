@@ -380,8 +380,6 @@ pub mod analytics {
         let model = events.iter().rev().find_map(|e| e.model.clone());
         let input_tokens: u64 = events.iter().map(|e| e.prompt_tokens).sum();
         let output_tokens: u64 = events.iter().map(|e| e.completion_tokens).sum();
-        let total_cost: f64 = events.iter().map(|e| e.cost).sum();
-
         let duration = if events.len() >= 2 {
             let first = events.first().unwrap().time_secs;
             let last = events.last().unwrap().time_secs;
@@ -400,11 +398,6 @@ pub mod analytics {
             output_tokens: Some(output_tokens),
             cache_read_tokens: None,
             cache_creation_tokens: None,
-            total_cost_usd: if total_cost > 0.0 {
-                Some(total_cost)
-            } else {
-                None
-            },
             duration_secs: duration,
             files_touched: Vec::new(),
             tool_call_count: 0,

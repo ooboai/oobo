@@ -101,7 +101,6 @@ fn migrate_v1(conn: &Connection) -> Result<(), String> {
             output_tokens INTEGER,
             cache_read_tokens INTEGER,
             cache_creation_tokens INTEGER,
-            total_cost_usd REAL,
             is_estimated INTEGER DEFAULT 0,
             token_source TEXT DEFAULT 'native',
             duration_secs INTEGER,
@@ -170,7 +169,6 @@ fn migrate_v2(conn: &Connection) -> Result<(), String> {
             event_name TEXT NOT NULL,
             session_id TEXT,
             model TEXT,
-            cost_usd REAL,
             input_tokens INTEGER,
             output_tokens INTEGER,
             cache_read_tokens INTEGER,
@@ -207,7 +205,6 @@ fn migrate_v3(conn: &Connection) -> Result<(), String> {
             output_tokens INTEGER DEFAULT 0,
             cache_read_tokens INTEGER DEFAULT 0,
             cache_creation_tokens INTEGER DEFAULT 0,
-            cost_usd REAL DEFAULT 0.0,
             requests INTEGER DEFAULT 0,
             fetched_at INTEGER NOT NULL,
             UNIQUE(source, date, model)

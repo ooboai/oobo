@@ -468,7 +468,6 @@ pub mod transcript {
             } else {
                 None
             },
-            total_cost_usd: None,
             duration_secs,
             files_touched,
             tool_call_count,

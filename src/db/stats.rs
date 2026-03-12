@@ -13,7 +13,6 @@ pub struct StatsRow {
     pub output_tokens: Option<i64>,
     pub cache_read_tokens: Option<i64>,
     pub cache_creation_tokens: Option<i64>,
-    pub total_cost_usd: Option<f64>,
     pub is_estimated: bool,
     pub token_source: String,
     pub duration_secs: Option<i64>,
@@ -28,7 +27,6 @@ pub struct AggregateStats {
     pub session_count: i64,
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
-    pub total_cost_usd: f64,
     pub total_duration_secs: i64,
 }
 
@@ -39,7 +37,6 @@ pub struct ModelStats {
     pub session_count: i64,
     pub input_tokens: i64,
     pub output_tokens: i64,
-    pub total_cost_usd: f64,
     pub total_duration_secs: i64,
     pub pct_of_total_output: f64,
 }
@@ -51,15 +48,14 @@ impl Db {
 
         self.conn
             .execute(
-                "INSERT INTO session_stats (session_id, source, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, total_cost_usd, is_estimated, token_source, duration_secs, files_touched, tool_call_count, computed_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                "INSERT INTO session_stats (session_id, source, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, is_estimated, token_source, duration_secs, files_touched, tool_call_count, computed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT(session_id, source) DO UPDATE SET
                      model = COALESCE(excluded.model, session_stats.model),
                      input_tokens = excluded.input_tokens,
                      output_tokens = excluded.output_tokens,
                      cache_read_tokens = excluded.cache_read_tokens,
                      cache_creation_tokens = excluded.cache_creation_tokens,
-                     total_cost_usd = excluded.total_cost_usd,
                      is_estimated = excluded.is_estimated,
                      token_source = excluded.token_source,
                      duration_secs = excluded.duration_secs,
@@ -74,7 +70,6 @@ impl Db {
                     stats.output_tokens,
                     stats.cache_read_tokens,
                     stats.cache_creation_tokens,
-                    stats.total_cost_usd,
                     stats.is_estimated as i32,
                     stats.token_source,
                     stats.duration_secs,
@@ -89,7 +84,7 @@ impl Db {
 
     pub fn get_stats(&self, session_id: &str, source: &str) -> Result<Option<StatsRow>, String> {
         let mut stmt = self.conn.prepare(
-            "SELECT session_id, source, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, total_cost_usd, is_estimated, token_source, duration_secs, files_touched, tool_call_count, computed_at
+            "SELECT session_id, source, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, is_estimated, token_source, duration_secs, files_touched, tool_call_count, computed_at
              FROM session_stats WHERE session_id = ?1 AND source = ?2"
         ).map_err(|e| format!("cannot prepare: {e}"))?;
 
@@ -102,7 +97,7 @@ impl Db {
     pub fn aggregate_stats_by_project(&self, project_id: &str) -> Result<AggregateStats, String> {
         self.conn
             .query_row(
-                "SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(total_cost_usd), 0.0), COALESCE(SUM(duration_secs), 0)
+                "SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(duration_secs), 0)
                  FROM session_stats ss
                  JOIN sessions s ON ss.session_id = s.id AND ss.source = s.source
                  WHERE s.project_id = ?1",
@@ -112,8 +107,7 @@ impl Db {
                         session_count: row.get(0)?,
                         total_input_tokens: row.get(1)?,
                         total_output_tokens: row.get(2)?,
-                        total_cost_usd: row.get(3)?,
-                        total_duration_secs: row.get(4)?,
+                        total_duration_secs: row.get(3)?,
                     })
                 },
             )
@@ -124,7 +118,7 @@ impl Db {
     pub fn aggregate_stats_by_tool(&self, source: &str) -> Result<AggregateStats, String> {
         self.conn
             .query_row(
-                "SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(total_cost_usd), 0.0), COALESCE(SUM(duration_secs), 0)
+                "SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(duration_secs), 0)
                  FROM session_stats WHERE source = ?1",
                 params![source],
                 |row| {
@@ -132,8 +126,7 @@ impl Db {
                         session_count: row.get(0)?,
                         total_input_tokens: row.get(1)?,
                         total_output_tokens: row.get(2)?,
-                        total_cost_usd: row.get(3)?,
-                        total_duration_secs: row.get(4)?,
+                        total_duration_secs: row.get(3)?,
                     })
                 },
             )
@@ -143,7 +136,7 @@ impl Db {
     /// Aggregate stats grouped by tool (source), returning (tool_name, stats) pairs.
     pub fn aggregate_stats_per_tool(&self) -> Result<Vec<(String, AggregateStats)>, String> {
         let mut stmt = self.conn.prepare(
-            "SELECT source, COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(total_cost_usd), 0.0), COALESCE(SUM(duration_secs), 0)
+            "SELECT source, COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(duration_secs), 0)
              FROM session_stats GROUP BY source ORDER BY SUM(output_tokens) DESC",
         ).map_err(|e| format!("cannot prepare per-tool query: {e}"))?;
 
@@ -155,8 +148,7 @@ impl Db {
                         session_count: row.get(1)?,
                         total_input_tokens: row.get(2)?,
                         total_output_tokens: row.get(3)?,
-                        total_cost_usd: row.get(4)?,
-                        total_duration_secs: row.get(5)?,
+                        total_duration_secs: row.get(4)?,
                     },
                 ))
             })
@@ -171,7 +163,7 @@ impl Db {
         limit: usize,
     ) -> Result<Vec<(String, AggregateStats)>, String> {
         let mut stmt = self.conn.prepare(
-            "SELECT p.name, COUNT(*), COALESCE(SUM(ss.input_tokens), 0), COALESCE(SUM(ss.output_tokens), 0), COALESCE(SUM(ss.total_cost_usd), 0.0), COALESCE(SUM(ss.duration_secs), 0)
+            "SELECT p.name, COUNT(*), COALESCE(SUM(ss.input_tokens), 0), COALESCE(SUM(ss.output_tokens), 0), COALESCE(SUM(ss.duration_secs), 0)
              FROM session_stats ss
              JOIN sessions s ON s.id = ss.session_id AND s.source = ss.source
              JOIN projects p ON p.id = s.project_id
@@ -188,8 +180,7 @@ impl Db {
                         session_count: row.get(1)?,
                         total_input_tokens: row.get(2)?,
                         total_output_tokens: row.get(3)?,
-                        total_cost_usd: row.get(4)?,
-                        total_duration_secs: row.get(5)?,
+                        total_duration_secs: row.get(4)?,
                     },
                 ))
             })
@@ -208,7 +199,6 @@ impl Db {
                     COUNT(*),
                     COALESCE(SUM(ss.input_tokens), 0),
                     COALESCE(SUM(ss.output_tokens), 0),
-                    COALESCE(SUM(ss.total_cost_usd), 0.0),
                     COALESCE(SUM(ss.duration_secs), 0)
              FROM session_stats ss
              JOIN sessions s ON s.id = ss.session_id AND s.source = ss.source
@@ -228,8 +218,7 @@ impl Db {
                         session_count: row.get(1)?,
                         total_input_tokens: row.get(2)?,
                         total_output_tokens: row.get(3)?,
-                        total_cost_usd: row.get(4)?,
-                        total_duration_secs: row.get(5)?,
+                        total_duration_secs: row.get(4)?,
                     },
                 ))
             })
@@ -250,7 +239,7 @@ impl Db {
     ) -> Result<AggregateStats, String> {
         let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(ts) = since {
             (
-                "SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(total_cost_usd), 0.0), COALESCE(SUM(duration_secs), 0)
+                "SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(duration_secs), 0)
                  FROM session_stats ss
                  JOIN sessions s ON s.id = ss.session_id AND s.source = ss.source
                  WHERE s.created_at >= ?1",
@@ -258,7 +247,7 @@ impl Db {
             )
         } else {
             (
-                "SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(total_cost_usd), 0.0), COALESCE(SUM(duration_secs), 0)
+                "SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(duration_secs), 0)
                  FROM session_stats",
                 vec![],
             )
@@ -271,8 +260,7 @@ impl Db {
                     session_count: row.get(0)?,
                     total_input_tokens: row.get(1)?,
                     total_output_tokens: row.get(2)?,
-                    total_cost_usd: row.get(3)?,
-                    total_duration_secs: row.get(4)?,
+                    total_duration_secs: row.get(3)?,
                 })
             })
             .map_err(|e| format!("cannot aggregate stats: {e}"))
@@ -287,7 +275,6 @@ impl Db {
                     COUNT(*),
                     COALESCE(SUM(ss.input_tokens), 0),
                     COALESCE(SUM(ss.output_tokens), 0),
-                    COALESCE(SUM(ss.total_cost_usd), 0.0),
                     COALESCE(SUM(ss.duration_secs), 0)
              FROM session_stats ss
              JOIN sessions s ON s.id = ss.session_id AND s.source = ss.source
@@ -307,8 +294,7 @@ impl Db {
                         session_count: row.get(1)?,
                         total_input_tokens: row.get(2)?,
                         total_output_tokens: row.get(3)?,
-                        total_cost_usd: row.get(4)?,
-                        total_duration_secs: row.get(5)?,
+                        total_duration_secs: row.get(4)?,
                     },
                 ))
             })
@@ -326,7 +312,6 @@ impl Db {
                     COUNT(*),
                     COALESCE(SUM(ss.input_tokens), 0),
                     COALESCE(SUM(ss.output_tokens), 0),
-                    COALESCE(SUM(ss.total_cost_usd), 0.0),
                     COALESCE(SUM(ss.duration_secs), 0)
              FROM session_stats ss
              JOIN sessions s ON s.id = ss.session_id AND s.source = ss.source
@@ -346,8 +331,7 @@ impl Db {
                         session_count: row.get(1)?,
                         total_input_tokens: row.get(2)?,
                         total_output_tokens: row.get(3)?,
-                        total_cost_usd: row.get(4)?,
-                        total_duration_secs: row.get(5)?,
+                        total_duration_secs: row.get(4)?,
                     },
                 ))
             })
@@ -369,7 +353,6 @@ impl Db {
                     COUNT(*),
                     COALESCE(SUM(ss.input_tokens), 0),
                     COALESCE(SUM(ss.output_tokens), 0),
-                    COALESCE(SUM(ss.total_cost_usd), 0.0),
                     COALESCE(SUM(ss.duration_secs), 0)
              FROM session_stats ss
              JOIN sessions s ON s.id = ss.session_id AND s.source = ss.source
@@ -390,8 +373,7 @@ impl Db {
                         session_count: row.get(2)?,
                         total_input_tokens: row.get(3)?,
                         total_output_tokens: row.get(4)?,
-                        total_cost_usd: row.get(5)?,
-                        total_duration_secs: row.get(6)?,
+                        total_duration_secs: row.get(5)?,
                     },
                 ))
             })
@@ -408,7 +390,6 @@ impl Db {
                 "SELECT model, COUNT(*),
                     COALESCE(SUM(input_tokens), 0),
                     COALESCE(SUM(output_tokens), 0),
-                    COALESCE(SUM(total_cost_usd), 0.0),
                     COALESCE(SUM(duration_secs), 0)
              FROM session_stats
              WHERE model IS NOT NULL AND model != ''
@@ -439,8 +420,7 @@ impl Db {
                     session_count: row.get(1)?,
                     input_tokens: row.get(2)?,
                     output_tokens: output,
-                    total_cost_usd: row.get(4)?,
-                    total_duration_secs: row.get(5)?,
+                    total_duration_secs: row.get(4)?,
                     pct_of_total_output: pct_of_total,
                 })
             })
@@ -461,7 +441,7 @@ impl Db {
         use std::collections::HashMap;
         let mut map = HashMap::new();
         let mut stmt = self.conn.prepare(
-            "SELECT session_id, source, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, total_cost_usd, is_estimated, token_source, duration_secs, files_touched, tool_call_count, computed_at
+            "SELECT session_id, source, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, is_estimated, token_source, duration_secs, files_touched, tool_call_count, computed_at
              FROM session_stats"
         ).map_err(|e| format!("cannot prepare bulk stats: {e}"))?;
 
@@ -478,9 +458,9 @@ impl Db {
 }
 
 fn row_to_stats(row: &rusqlite::Row) -> StatsRow {
-    let files_json: String = row.get(11).unwrap_or_default();
+    let files_json: String = row.get(10).unwrap_or_default();
     let files: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
-    let is_est: i32 = row.get(8).unwrap_or(0);
+    let is_est: i32 = row.get(7).unwrap_or(0);
 
     StatsRow {
         session_id: row.get(0).unwrap_or_default(),
@@ -490,13 +470,12 @@ fn row_to_stats(row: &rusqlite::Row) -> StatsRow {
         output_tokens: row.get(4).unwrap_or_default(),
         cache_read_tokens: row.get(5).unwrap_or_default(),
         cache_creation_tokens: row.get(6).unwrap_or_default(),
-        total_cost_usd: row.get(7).unwrap_or_default(),
         is_estimated: is_est != 0,
-        token_source: row.get(9).unwrap_or_else(|_| "native".to_string()),
-        duration_secs: row.get(10).unwrap_or_default(),
+        token_source: row.get(8).unwrap_or_else(|_| "native".to_string()),
+        duration_secs: row.get(9).unwrap_or_default(),
         files_touched: files,
-        tool_call_count: row.get(12).unwrap_or(0),
-        computed_at: row.get(13).unwrap_or(0),
+        tool_call_count: row.get(11).unwrap_or(0),
+        computed_at: row.get(12).unwrap_or(0),
     }
 }
 
@@ -545,7 +524,6 @@ mod tests {
             output_tokens: Some(8000),
             cache_read_tokens: Some(10000),
             cache_creation_tokens: Some(2000),
-            total_cost_usd: Some(0.45),
             is_estimated: false,
             token_source: "native".into(),
             duration_secs: Some(120),
@@ -562,7 +540,6 @@ mod tests {
 
         let found = db.get_stats("s1", "claude").unwrap().unwrap();
         assert_eq!(found.input_tokens, Some(15000));
-        assert_eq!(found.total_cost_usd, Some(0.45));
         assert!(!found.is_estimated);
         assert_eq!(found.token_source, "native");
         assert_eq!(found.files_touched, vec!["src/main.rs"]);
@@ -598,7 +575,6 @@ mod tests {
 
         let agg = db.aggregate_stats_global().unwrap();
         assert_eq!(agg.session_count, 1);
-        assert!(agg.total_cost_usd > 0.0);
     }
 
     #[test]
@@ -615,13 +591,11 @@ mod tests {
         db.upsert_stats(&stats).unwrap();
 
         stats.input_tokens = Some(99999);
-        stats.total_cost_usd = Some(1.23);
         stats.tool_call_count = 10;
         db.upsert_stats(&stats).unwrap();
 
         let found = db.get_stats("s1", "claude").unwrap().unwrap();
         assert_eq!(found.input_tokens, Some(99999));
-        assert_eq!(found.total_cost_usd, Some(1.23));
         assert_eq!(found.tool_call_count, 10);
     }
 
@@ -663,7 +637,6 @@ mod tests {
             model: Some("gpt-4o".into()),
             input_tokens: Some(5000),
             output_tokens: Some(2000),
-            total_cost_usd: Some(0.10),
             ..Default::default()
         })
         .unwrap();
@@ -693,7 +666,6 @@ mod tests {
         let agg = db.aggregate_stats_global().unwrap();
         assert_eq!(agg.session_count, 0);
         assert_eq!(agg.total_input_tokens, 0);
-        assert!((agg.total_cost_usd - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]
