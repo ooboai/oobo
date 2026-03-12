@@ -168,22 +168,23 @@ struct DayCell {
     date: chrono::NaiveDate,
     commits: i64,
     ai_assisted: i64,
+    sessions: i64,
 }
 
 #[allow(dead_code)]
 mod colors {
-    pub const PRIMARY: &str = "#1F4F6D";
-    pub const CYAN: &str = "#7DD3E8";
+    pub const PRIMARY: &str = "#ffffff";
+    pub const CYAN: &str = "#0ea5e9";
     pub const TEAL: &str = "#14b8a6";
     pub const BG: &str = "#f8fafb";
     pub const DARK: &str = "#111111";
-    pub const BORDER: &str = "#D9E3E1";
-    pub const SECONDARY: &str = "#5F7F84";
-    pub const EMPTY_CELL: &str = "#1a3f57";
-    pub const MUTED: &str = "#2a6485";
-    pub const MUTED_LIGHT: &str = "#4a7a94";
-    pub const TEAL_SHADES: [&str; 4] = ["#b2dfdb", "#4db6ac", "#14b8a6", "#0d7d72"];
-    pub const CYAN_SHADES: [&str; 4] = ["#c5edf5", "#7DD3E8", "#4bbcd6", "#2a98b3"];
+    pub const BORDER: &str = "#e5e7eb";
+    pub const SECONDARY: &str = "#4b5563";
+    pub const EMPTY_CELL: &str = "#ebedf0";
+    pub const MUTED: &str = "#9ca3af";
+    pub const MUTED_LIGHT: &str = "#6b7280";
+    pub const TEAL_SHADES: [&str; 4] = ["#ccfbf1", "#5eead4", "#14b8a6", "#0d7d72"];
+    pub const CYAN_SHADES: [&str; 4] = ["#e0f2fe", "#7dd3fc", "#38bdf8", "#0284c7"];
 }
 use colors::*;
 
@@ -216,36 +217,61 @@ fn build_heatmap(db: &Db) -> Vec<DayCell> {
         }
     }
 
+    let mut session_map: HashMap<String, i64> = HashMap::new();
+    if let Ok(mut stmt) = db.conn.prepare(
+        "SELECT COALESCE(updated_at, created_at) FROM sessions
+         WHERE COALESCE(updated_at, created_at) IS NOT NULL
+           AND COALESCE(updated_at, created_at) > 0",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |row| row.get::<_, i64>(0)) {
+            for ts in rows.flatten() {
+                let secs = crate::utils::to_epoch_secs(ts);
+                if let Some(dt) = chrono::DateTime::from_timestamp(secs, 0) {
+                    let date = dt
+                        .with_timezone(&chrono::Local)
+                        .date_naive();
+                    if date >= start && date <= today {
+                        *session_map
+                            .entry(date.format("%Y-%m-%d").to_string())
+                            .or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+
     let mut cells = Vec::with_capacity(365);
     let mut d = start;
     while d <= today {
         let key = d.format("%Y-%m-%d").to_string();
         let (commits, ai) = day_map.get(&key).copied().unwrap_or((0, 0));
+        let sessions = session_map.get(&key).copied().unwrap_or(0);
         cells.push(DayCell {
             date: d,
             commits,
             ai_assisted: ai,
+            sessions,
         });
         d += chrono::Duration::days(1);
     }
     cells
 }
 
-/// Current streak of consecutive days with AI-assisted commits (from today backwards).
+/// Current streak of consecutive days with AI usage (sessions or AI-assisted
+/// commits) going backwards from today.  Days with zero activity are skipped
+/// once the streak has started (weekends, vacations).
 fn compute_ai_streak(heatmap: &[DayCell]) -> i64 {
     let mut streak: i64 = 0;
     for day in heatmap.iter().rev() {
-        if day.ai_assisted > 0 {
+        let has_ai = day.ai_assisted > 0 || day.sessions > 0;
+        if has_ai {
             streak += 1;
         } else if day.commits > 0 {
             break;
         } else {
-            // skip days with zero activity (weekends, gaps) -- don't break the streak
-            // but only if the streak already started
             if streak > 0 {
                 continue;
             }
-            // haven't started yet, keep scanning back
         }
     }
     streak
@@ -264,7 +290,7 @@ fn render_svg(card: &CardData) -> String {
     // ── Header: name + stats row ────────────────────────────────────────
     y += pad;
     svg_body.push_str(&format!(
-        r#"<text x="{pad}" y="{y}" font-size="20" font-weight="bold" fill="white">{}</text>"#,
+        r#"<text x="{pad}" y="{y}" font-size="20" font-weight="bold" fill="{DARK}">{}</text>"#,
         xml_escape(&card.author)
     ));
 
@@ -290,7 +316,7 @@ fn render_svg(card: &CardData) -> String {
         ));
         sx -= (label.len() as i32) * 5 + 6;
         svg_body.push_str(&format!(
-            r#"<text x="{sx}" y="{}" font-size="12" font-weight="bold" fill="white" text-anchor="end">{val}</text>"#,
+            r#"<text x="{sx}" y="{}" font-size="12" font-weight="bold" fill="{DARK}" text-anchor="end">{val}</text>"#,
             y
         ));
         sx -= (val.len() as i32) * 7 + 16;
@@ -298,7 +324,7 @@ fn render_svg(card: &CardData) -> String {
 
     y += 12;
     svg_body.push_str(&format!(
-        r#"<line x1="{pad}" y1="{y}" x2="{}" y2="{y}" stroke="{MUTED}" stroke-width="0.5" opacity="0.5"/>"#,
+        r#"<line x1="{pad}" y1="{y}" x2="{}" y2="{y}" stroke="{BORDER}" stroke-width="1" opacity="0.8"/>"#,
         w - pad
     ));
 
@@ -310,7 +336,13 @@ fn render_svg(card: &CardData) -> String {
     let step = cell + gap;
     let grid_left = pad + 28;
 
-    let max_commits = card.heatmap.iter().map(|c| c.commits).max().unwrap_or(1).max(1);
+    let max_activity = card
+        .heatmap
+        .iter()
+        .map(|c| c.commits + c.sessions)
+        .max()
+        .unwrap_or(1)
+        .max(1);
 
     // Month labels
     if !card.heatmap.is_empty() {
@@ -342,6 +374,7 @@ fn render_svg(card: &CardData) -> String {
     }
 
     // Grid cells
+    let mut gradient_defs = String::new();
     let first_wd = card
         .heatmap
         .first()
@@ -353,15 +386,19 @@ fn render_svg(card: &CardData) -> String {
         let row = offset % 7;
         let cx = grid_left as u32 + col * step as u32;
         let cy = y as u32 + row * step as u32;
-        let color = heatmap_color(day, max_commits);
+        let cf = heatmap_cell_fill(i, day, max_activity);
+        if let Some(def) = cf.gradient_def {
+            gradient_defs.push_str(&def);
+        }
         svg_body.push_str(&format!(
-            r#"<rect x="{cx}" y="{cy}" width="{cell}" height="{cell}" rx="3" fill="{color}"/>"#
+            r#"<rect x="{cx}" y="{cy}" width="{cell}" height="{cell}" rx="3" fill="{}"/>"#,
+            cf.fill
         ));
     }
     y += 7 * step + 6;
 
     // Legend + AI% badge (right side, same line)
-    let legend_y = y + 2;
+    let legend_y = y + 18;
 
     // AI percentage badge
     let ai_pct = card.ai_percentage.unwrap_or(0.0);
@@ -374,9 +411,9 @@ fn render_svg(card: &CardData) -> String {
         pad + 32, legend_y
     ));
 
-    // Legend squares
+    // Legend: AI (blue) + Human (teal) squares
     let mut lx = w - pad;
-    for (label, color) in [("AI-assisted", CYAN), ("Human", TEAL)].iter().rev() {
+    for (label, color) in [("AI", CYAN), ("Human", TEAL)].iter().rev() {
         let tw = label.len() as i32 * 6;
         lx -= tw;
         svg_body.push_str(&format!(
@@ -389,29 +426,12 @@ fn render_svg(card: &CardData) -> String {
         ));
         lx -= 14;
     }
-    // Less/More gradient
-    lx -= 6;
-    svg_body.push_str(&format!(
-        r#"<text x="{lx}" y="{legend_y}" font-size="9" fill="{MUTED_LIGHT}" text-anchor="end">More</text>"#
-    ));
-    lx -= 30;
-    for c in [TEAL_SHADES[3], TEAL_SHADES[2], TEAL_SHADES[1], TEAL_SHADES[0], EMPTY_CELL].iter() {
-        svg_body.push_str(&format!(
-            r#"<rect x="{lx}" y="{}" width="{cell}" height="{cell}" rx="3" fill="{c}"/>"#,
-            legend_y - 10
-        ));
-        lx -= cell + 2;
-    }
-    svg_body.push_str(&format!(
-        r#"<text x="{}" y="{legend_y}" font-size="9" fill="{MUTED_LIGHT}" text-anchor="end">Less</text>"#,
-        lx - 2
-    ));
 
     y = legend_y + 36;
 
     // ── Tools strip ─────────────────────────────────────────────────────
     svg_body.push_str(&format!(
-        r#"<line x1="{pad}" y1="{y}" x2="{}" y2="{y}" stroke="{MUTED}" stroke-width="0.5" opacity="0.4"/>"#,
+        r#"<line x1="{pad}" y1="{y}" x2="{}" y2="{y}" stroke="{BORDER}" stroke-width="1" opacity="0.8"/>"#,
         w - pad
     ));
     y += 20;
@@ -422,7 +442,7 @@ fn render_svg(card: &CardData) -> String {
         for (i, t) in card.top_tools.iter().take(tool_count).enumerate() {
             let tx = pad + i as i32 * col_w;
             svg_body.push_str(&format!(
-                r#"<text x="{tx}" y="{y}" font-size="12" font-weight="bold" fill="white">{}</text>"#,
+                r#"<text x="{tx}" y="{y}" font-size="12" font-weight="bold" fill="{DARK}">{}</text>"#,
                 xml_escape(&t.name)
             ));
             svg_body.push_str(&format!(
@@ -442,34 +462,86 @@ fn render_svg(card: &CardData) -> String {
 
     // ── Assemble ────────────────────────────────────────────────────────
     let h = y;
-    let mut svg = String::with_capacity(svg_body.len() + 512);
+    let mut svg = String::with_capacity(svg_body.len() + gradient_defs.len() + 1024);
     svg.push_str(&format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" font-family="{font}">"#
     ));
+    if !gradient_defs.is_empty() {
+        svg.push_str("<defs>");
+        svg.push_str(&gradient_defs);
+        svg.push_str("</defs>");
+    }
     svg.push_str(&format!(
         r#"<rect width="{w}" height="{h}" rx="12" fill="{PRIMARY}"/>"#
+    ));
+    svg.push_str(&format!(
+        r#"<rect width="{w}" height="{h}" rx="12" fill="none" stroke="{BORDER}" stroke-width="1"/>"#
     ));
     svg.push_str(&svg_body);
     svg.push_str("</svg>\n");
     svg
 }
 
-fn heatmap_color(cell: &DayCell, max_commits: i64) -> &'static str {
-    if cell.commits == 0 {
-        return EMPTY_CELL;
+struct CellFill {
+    fill: String,
+    gradient_def: Option<String>,
+}
+
+/// Compute the fill for a heatmap cell.  Pure human → solid teal, pure AI →
+/// solid blue, mixed → a left-to-right gradient split proportionally.
+/// Lightness is driven by activity volume (more = darker).
+fn heatmap_cell_fill(idx: usize, cell: &DayCell, max_activity: i64) -> CellFill {
+    if cell.commits == 0 && cell.sessions == 0 {
+        return CellFill {
+            fill: EMPTY_CELL.to_string(),
+            gradient_def: None,
+        };
     }
-    let intensity = (cell.commits as f64 / max_commits as f64).min(1.0);
-    let bucket = match intensity {
-        x if x <= 0.25 => 0,
-        x if x <= 0.50 => 1,
-        x if x <= 0.75 => 2,
-        _ => 3,
+
+    let total = cell.commits + cell.sessions;
+    let ai = (cell.ai_assisted + cell.sessions).min(total);
+    let ai_pct = ai as f64 / total.max(1) as f64;
+    let human_pct = 1.0 - ai_pct;
+
+    let volume = (total as f64 / max_activity.max(1) as f64).min(1.0);
+    let intensity = match volume {
+        x if x <= 0.25 => 0.35,
+        x if x <= 0.50 => 0.55,
+        x if x <= 0.75 => 0.78,
+        _ => 1.0,
     };
 
-    if cell.ai_assisted > 0 {
-        CYAN_SHADES[bucket]
+    let bg: (f64, f64, f64) = (235.0, 237.0, 240.0);
+    let teal_base: (f64, f64, f64) = (20.0, 184.0, 166.0);
+    let blue_base: (f64, f64, f64) = (14.0, 165.0, 233.0);
+
+    let shade = |base: (f64, f64, f64)| -> String {
+        let r = (bg.0 + (base.0 - bg.0) * intensity) as u8;
+        let g = (bg.1 + (base.1 - bg.1) * intensity) as u8;
+        let b = (bg.2 + (base.2 - bg.2) * intensity) as u8;
+        format!("#{r:02x}{g:02x}{b:02x}")
+    };
+
+    let teal_hex = shade(teal_base);
+    let blue_hex = shade(blue_base);
+
+    if ai_pct < 0.05 {
+        CellFill { fill: teal_hex, gradient_def: None }
+    } else if human_pct < 0.05 {
+        CellFill { fill: blue_hex, gradient_def: None }
     } else {
-        TEAL_SHADES[bucket]
+        let stop = (human_pct * 100.0).round() as i32;
+        let id = format!("hm{idx}");
+        let def = format!(
+            r#"<linearGradient id="{id}" x1="0" x2="1" y1="0" y2="0">\
+               <stop offset="{stop}%" stop-color="{teal_hex}"/>\
+               <stop offset="{stop}%" stop-color="{blue_hex}"/>\
+               </linearGradient>"#
+        );
+        CellFill {
+            fill: format!("url(#{id})"),
+            gradient_def: Some(def),
+        }
     }
 }
 
@@ -841,35 +913,71 @@ mod tests {
     }
 
     #[test]
-    fn test_heatmap_color_empty() {
+    fn test_heatmap_cell_empty() {
         let cell = DayCell {
             date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             commits: 0,
             ai_assisted: 0,
+            sessions: 0,
         };
-        assert_eq!(heatmap_color(&cell, 10), EMPTY_CELL);
+        let cf = heatmap_cell_fill(0, &cell, 10);
+        assert_eq!(cf.fill, EMPTY_CELL);
+        assert!(cf.gradient_def.is_none());
     }
 
     #[test]
-    fn test_heatmap_color_human() {
+    fn test_heatmap_cell_pure_human() {
         let cell = DayCell {
             date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             commits: 5,
             ai_assisted: 0,
+            sessions: 0,
         };
-        let color = heatmap_color(&cell, 10);
-        assert!(TEAL_SHADES.contains(&color));
+        let cf = heatmap_cell_fill(0, &cell, 10);
+        assert!(cf.fill.starts_with('#'));
+        assert!(cf.gradient_def.is_none());
     }
 
     #[test]
-    fn test_heatmap_color_ai() {
+    fn test_heatmap_cell_pure_ai() {
         let cell = DayCell {
             date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             commits: 5,
-            ai_assisted: 3,
+            ai_assisted: 5,
+            sessions: 0,
         };
-        let color = heatmap_color(&cell, 10);
-        assert!(CYAN_SHADES.contains(&color));
+        let cf = heatmap_cell_fill(0, &cell, 10);
+        assert!(cf.fill.starts_with('#'));
+        assert!(cf.gradient_def.is_none());
+    }
+
+    #[test]
+    fn test_heatmap_cell_session_only() {
+        let cell = DayCell {
+            date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            commits: 0,
+            ai_assisted: 0,
+            sessions: 3,
+        };
+        let cf = heatmap_cell_fill(0, &cell, 10);
+        assert!(cf.fill.starts_with('#'));
+        assert!(cf.gradient_def.is_none());
+    }
+
+    #[test]
+    fn test_heatmap_cell_mixed_has_gradient() {
+        let cell = DayCell {
+            date: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            commits: 10,
+            ai_assisted: 4,
+            sessions: 0,
+        };
+        let cf = heatmap_cell_fill(42, &cell, 10);
+        assert!(cf.fill.starts_with("url(#hm42)"));
+        assert!(cf.gradient_def.is_some());
+        let def = cf.gradient_def.unwrap();
+        assert!(def.contains("hm42"));
+        assert!(def.contains("60%")); // 6 human / 10 total = 60% human stop
     }
 
     #[test]
@@ -944,7 +1052,7 @@ mod tests {
         assert!(svg.contains("TestDev"));
         assert!(svg.contains("oobo.ai"));
         assert!(svg.contains("100"));
-        assert!(svg.contains("45%"));
+        assert!(svg.contains("45% AI"));
         assert!(svg.contains("500.0K"));
         assert!(svg.contains("Cursor"));
         assert!(svg.ends_with("</svg>\n"));
