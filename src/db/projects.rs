@@ -11,6 +11,8 @@ pub struct ProjectSettings {
     pub transparency: Option<String>,
     #[serde(default)]
     pub ignored: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync: Option<bool>,
 }
 
 #[derive(Debug, Clone)]

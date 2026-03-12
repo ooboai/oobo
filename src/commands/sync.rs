@@ -2,23 +2,35 @@ use crate::config::Config;
 
 const HYDRATION_INTERVAL_SECS: i64 = 3600;
 
-/// `oobo sync [on|off]` — toggle backend sync or show current status.
+/// `oobo sync [on|off]` — toggle backend sync for the current project.
 pub fn run(cfg: &mut Config, mode: Option<&str>) -> Result<(), String> {
     match mode {
         Some("on") => enable_sync(cfg),
-        Some("off") => {
-            cfg.server.sync = false;
-            cfg.save()?;
-            eprintln!("oobo: sync disabled");
-            eprintln!("      anchor metadata is still written locally.");
-            Ok(())
-        }
+        Some("off") => disable_sync(cfg),
         Some(other) => Err(format!("unknown mode: {other} (use on or off)")),
         None => {
             show_status(cfg);
             Ok(())
         }
     }
+}
+
+fn disable_sync(cfg: &mut Config) -> Result<(), String> {
+    if let Some(project_root) = crate::git::proxy::project_root(cfg) {
+        let db = crate::db::Db::open()?;
+        let slug = crate::paths::slug_from_path(&project_root);
+        let _ = db.ensure_project(&slug, &project_root);
+        let mut settings = db.get_project_settings(&slug).unwrap_or_default();
+        settings.sync = Some(false);
+        db.set_project_settings(&slug, &settings)?;
+        eprintln!("oobo: sync disabled for this project");
+    } else {
+        cfg.server.sync = false;
+        cfg.save()?;
+        eprintln!("oobo: sync disabled globally");
+    }
+    eprintln!("      anchor metadata is still written locally.");
+    Ok(())
 }
 
 fn enable_sync(cfg: &mut Config) -> Result<(), String> {
@@ -55,11 +67,26 @@ fn enable_sync(cfg: &mut Config) -> Result<(), String> {
         cfg.server.url = url_input.to_string();
     }
 
-    cfg.server.sync = true;
     cfg.save()?;
 
-    eprintln!();
-    eprintln!("oobo: sync enabled");
+    if let Some(project_root) = crate::git::proxy::project_root(cfg) {
+        let db = crate::db::Db::open()?;
+        let slug = crate::paths::slug_from_path(&project_root);
+        let _ = db.ensure_project(&slug, &project_root);
+        let mut settings = db.get_project_settings(&slug).unwrap_or_default();
+        settings.sync = Some(true);
+        db.set_project_settings(&slug, &settings)?;
+
+        eprintln!();
+        eprintln!("oobo: sync enabled for this project");
+    } else {
+        cfg.server.sync = true;
+        cfg.save()?;
+
+        eprintln!();
+        eprintln!("oobo: sync enabled globally");
+    }
+
     eprintln!("      anchors will be pushed to {} on every commit.", cfg.server.url);
     eprintln!("      run `oobo sync off` to disable.");
 
@@ -67,17 +94,37 @@ fn enable_sync(cfg: &mut Config) -> Result<(), String> {
 }
 
 fn show_status(cfg: &Config) {
-    if cfg.should_sync() {
-        eprintln!("oobo: sync is on");
+    let project_sync = resolve_project_sync(cfg);
+    let effective = project_sync.unwrap_or(cfg.server.sync) && !cfg.server.api_key.is_empty();
+
+    if effective {
+        eprintln!("oobo: sync is on{}", scope_label(project_sync));
         eprintln!("      server: {}", cfg.server.url);
         eprintln!("      key:    {}", mask_key(&cfg.server.api_key));
-    } else if cfg.server.sync && cfg.server.api_key.is_empty() {
+    } else if cfg.server.api_key.is_empty() && (project_sync.unwrap_or(cfg.server.sync)) {
         eprintln!("oobo: sync is on but no secret key is configured");
         eprintln!("      set OOBO_SECRET_KEY or run `oobo sync on` to provide one");
     } else {
-        eprintln!("oobo: sync is off");
+        eprintln!("oobo: sync is off{}", scope_label(project_sync));
         eprintln!("      run `oobo sync on` to enable backend sync");
     }
+}
+
+fn scope_label(project_sync: Option<bool>) -> &'static str {
+    match project_sync {
+        Some(_) => " (this project)",
+        None => "",
+    }
+}
+
+/// Check the per-project sync override. Returns `None` if no override exists
+/// (fall back to global config).
+pub fn resolve_project_sync(cfg: &Config) -> Option<bool> {
+    let project_root = crate::git::proxy::project_root(cfg)?;
+    let db = crate::db::Db::open().ok()?;
+    let slug = crate::paths::slug_from_path(&project_root);
+    let settings = db.get_project_settings(&slug).ok()?;
+    settings.sync
 }
 
 fn mask_key(key: &str) -> String {

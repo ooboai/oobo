@@ -45,7 +45,10 @@ pub fn on_write_op(cfg: &Config, args: &[&str]) -> Result<(), String> {
         }
     }
 
-    if cfg.should_sync() {
+    let project_sync = crate::commands::sync::resolve_project_sync(cfg);
+    let should_sync = project_sync.unwrap_or(cfg.server.sync) && !cfg.server.api_key.is_empty();
+
+    if should_sync {
         let git_remote = resolve_git_remote(cfg)
             .or_else(|| Some(String::new()));
 
