@@ -5,12 +5,12 @@ use crate::config::Config;
 /// Spawn a background thread to POST the anchor to the ingestion API.
 /// Returns the JoinHandle so the caller can wait if needed (e.g. from a
 /// post-commit hook where the process would otherwise exit immediately).
-pub fn send_event(cfg: &Config, payload: &payload::EventPayload) -> std::thread::JoinHandle<()> {
+pub fn send_event(cfg: &Config, payload: &payload::EventPayload, api_key_override: Option<&str>) -> std::thread::JoinHandle<()> {
     let url = format!(
         "{}/anchors/ingest",
         cfg.server.url.trim_end_matches('/')
     );
-    let api_key = cfg.server.api_key.clone();
+    let api_key = api_key_override.unwrap_or(&cfg.server.api_key).to_string();
     let body = match serde_json::to_string(payload) {
         Ok(b) => b,
         Err(_) => return std::thread::spawn(|| {}),

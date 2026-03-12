@@ -46,7 +46,8 @@ pub fn on_write_op(cfg: &Config, args: &[&str]) -> Result<(), String> {
     }
 
     let project_sync = crate::commands::sync::resolve_project_sync(cfg);
-    let should_sync = project_sync.unwrap_or(cfg.server.sync) && !cfg.server.api_key.is_empty();
+    let effective_key = crate::commands::sync::resolve_api_key(cfg);
+    let should_sync = project_sync.unwrap_or(cfg.server.sync) && !effective_key.is_empty();
 
     if should_sync {
         let git_remote = resolve_git_remote(cfg)
@@ -89,7 +90,7 @@ pub fn on_write_op(cfg: &Config, args: &[&str]) -> Result<(), String> {
             transcript,
         };
 
-        let handle = remote::send_event(cfg, &payload);
+        let handle = remote::send_event(cfg, &payload, Some(&effective_key));
         let _ = handle.join();
     }
 

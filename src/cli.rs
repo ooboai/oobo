@@ -123,13 +123,16 @@ pub enum Command {
         display_order = 5,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo sync               Show current sync status\n  \
-                       oobo sync on            Enable auto-sync (prompts for key if needed)\n  \
-                       oobo sync off           Disable auto-sync\n  \
+                       oobo sync on            Enable auto-sync for this project\n  \
+                       oobo sync off           Disable auto-sync for this project\n  \
+                       oobo sync key <key>     Set a per-project API key\n  \
                        oobo sync --import      Import anchors from orphan branch"
     )]
     Sync {
-        /// on or off (omit to show current status)
+        /// on, off, or key (omit to show current status)
         mode: Option<String>,
+        /// Value for the key subcommand
+        value: Option<String>,
         /// Import anchors from orphan branch into local DB
         #[arg(long)]
         import: bool,
@@ -640,11 +643,11 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
             crate::commands::check::run(fix, agent_mode)?;
             Ok(0)
         }
-        Some(Command::Sync { mode, import }) => {
+        Some(Command::Sync { mode, value, import }) => {
             if import {
                 crate::commands::sync::run_import(&cfg)?;
             } else {
-                crate::commands::sync::run(&mut cfg, mode.as_deref())?;
+                crate::commands::sync::run(&mut cfg, mode.as_deref(), value.as_deref())?;
             }
             Ok(0)
         }

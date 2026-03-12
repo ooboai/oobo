@@ -2,12 +2,13 @@ use crate::config::Config;
 
 const HYDRATION_INTERVAL_SECS: i64 = 3600;
 
-/// `oobo sync [on|off]` — toggle backend sync for the current project.
-pub fn run(cfg: &mut Config, mode: Option<&str>) -> Result<(), String> {
+/// `oobo sync [on|off|key <key>]` — toggle backend sync or set per-project key.
+pub fn run(cfg: &mut Config, mode: Option<&str>, extra: Option<&str>) -> Result<(), String> {
     match mode {
         Some("on") => enable_sync(cfg),
         Some("off") => disable_sync(cfg),
-        Some(other) => Err(format!("unknown mode: {other} (use on or off)")),
+        Some("key") => set_project_key(cfg, extra),
+        Some(other) => Err(format!("unknown mode: {other} (use on, off, or key <key>)")),
         None => {
             show_status(cfg);
             Ok(())
@@ -95,13 +96,14 @@ fn enable_sync(cfg: &mut Config) -> Result<(), String> {
 
 fn show_status(cfg: &Config) {
     let project_sync = resolve_project_sync(cfg);
-    let effective = project_sync.unwrap_or(cfg.server.sync) && !cfg.server.api_key.is_empty();
+    let effective_key = resolve_api_key(cfg);
+    let effective = project_sync.unwrap_or(cfg.server.sync) && !effective_key.is_empty();
 
     if effective {
         eprintln!("oobo: sync is on{}", scope_label(project_sync));
         eprintln!("      server: {}", cfg.server.url);
-        eprintln!("      key:    {}", mask_key(&cfg.server.api_key));
-    } else if cfg.server.api_key.is_empty() && (project_sync.unwrap_or(cfg.server.sync)) {
+        eprintln!("      key:    {}", mask_key(&effective_key));
+    } else if effective_key.is_empty() && (project_sync.unwrap_or(cfg.server.sync)) {
         eprintln!("oobo: sync is on but no secret key is configured");
         eprintln!("      set OOBO_SECRET_KEY or run `oobo sync on` to provide one");
     } else {
@@ -125,6 +127,55 @@ pub fn resolve_project_sync(cfg: &Config) -> Option<bool> {
     let slug = crate::paths::slug_from_path(&project_root);
     let settings = db.get_project_settings(&slug).ok()?;
     settings.sync
+}
+
+/// Resolve per-project API key, falling back to global config.
+pub fn resolve_api_key(cfg: &Config) -> String {
+    if let Some(project_root) = crate::git::proxy::project_root(cfg) {
+        if let Ok(db) = crate::db::Db::open() {
+            let slug = crate::paths::slug_from_path(&project_root);
+            if let Ok(settings) = db.get_project_settings(&slug) {
+                if let Some(ref key) = settings.api_key {
+                    if !key.is_empty() {
+                        return key.clone();
+                    }
+                }
+            }
+        }
+    }
+    cfg.server.api_key.clone()
+}
+
+fn set_project_key(cfg: &Config, key_arg: Option<&str>) -> Result<(), String> {
+    let project_root = crate::git::proxy::project_root(cfg)
+        .ok_or("not inside a git repository — run this from a project directory")?;
+
+    let key = if let Some(k) = key_arg {
+        k.to_string()
+    } else {
+        eprint!("API key for this project: ");
+        let mut line = String::new();
+        std::io::stdin()
+            .read_line(&mut line)
+            .map_err(|e| format!("read stdin: {e}"))?;
+        line.trim().to_string()
+    };
+
+    if key.is_empty() {
+        return Err("no key provided".into());
+    }
+
+    let db = crate::db::Db::open()?;
+    let slug = crate::paths::slug_from_path(&project_root);
+    let _ = db.ensure_project(&slug, &project_root);
+    let mut settings = db.get_project_settings(&slug).unwrap_or_default();
+    settings.api_key = Some(key.clone());
+    db.set_project_settings(&slug, &settings)?;
+
+    eprintln!("oobo: API key set for this project");
+    eprintln!("      key: {}", mask_key(&key));
+
+    Ok(())
 }
 
 fn mask_key(key: &str) -> String {
