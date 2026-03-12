@@ -254,7 +254,7 @@ pub fn retry_pending_pushes(project_root: &str) {
 }
 
 fn pending_push_path(project_root: &str) -> std::path::PathBuf {
-    std::path::Path::new(project_root).join(".git/oobo-push-pending")
+    crate::git::detect::resolve_git_common_dir(project_root).join("oobo-push-pending")
 }
 
 fn mark_pending_push(project_root: &str) {
@@ -343,7 +343,8 @@ fn write_to_branch(project_root: &str, entries: &[(String, String)]) -> Result<(
     let tree_hash = git_in(project_root, &["rev-parse", &format!("{BRANCH}^{{tree}}")])?;
 
     let env_key = "GIT_INDEX_FILE";
-    let tmp_index = format!("{}/.git/oobo-index-tmp", project_root);
+    let git_common = crate::git::detect::resolve_git_common_dir(project_root);
+    let tmp_index = format!("{}/oobo-index-tmp", git_common.display());
 
     git_env_in(
         project_root,

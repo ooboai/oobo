@@ -54,10 +54,10 @@ fn fetch_latest_version() -> Result<String, String> {
 
 fn install_latest(tag: &str) -> Result<(), String> {
     let target = current_target();
-    if target == "unknown" {
+    if target == "unknown" || target.is_empty() {
         return Err("prebuilt binaries are not available for this platform".to_string());
     }
-    let asset_name = format!("oobo-{target}.tar.gz");
+    let asset_name = format!("oobo-{tag}-{target}.tar.gz");
     let url = format!("https://github.com/{REPO}/releases/download/{tag}/{asset_name}");
 
     let client = reqwest::blocking::Client::builder()
@@ -115,22 +115,24 @@ fn install_latest(tag: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn current_target() -> &'static str {
+fn current_target() -> String {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        "aarch64-apple-darwin"
+        "aarch64-apple-darwin".into()
     }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     {
-        "x86_64-apple-darwin"
+        "x86_64-apple-darwin".into()
     }
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        "x86_64-unknown-linux-gnu"
+        let libc = if is_musl() { "musl" } else { "gnu" };
+        format!("x86_64-unknown-linux-{libc}")
     }
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
     {
-        "aarch64-unknown-linux-gnu"
+        let libc = if is_musl() { "musl" } else { "gnu" };
+        format!("aarch64-unknown-linux-{libc}")
     }
     #[cfg(not(any(
         all(target_os = "macos", target_arch = "aarch64"),
@@ -139,6 +141,19 @@ fn current_target() -> &'static str {
         all(target_os = "linux", target_arch = "aarch64"),
     )))]
     {
-        "unknown"
+        "unknown".into()
     }
+}
+
+#[cfg(target_os = "linux")]
+fn is_musl() -> bool {
+    std::path::Path::new("/etc/alpine-release").exists()
+        || std::process::Command::new("ldd")
+            .arg("--version")
+            .output()
+            .map(|o| {
+                let out = String::from_utf8_lossy(&o.stderr);
+                out.to_ascii_lowercase().contains("musl")
+            })
+            .unwrap_or(false)
 }

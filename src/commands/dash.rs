@@ -57,24 +57,28 @@ fn run_json(cfg: &Config) {
 const TOOLS: &[(&str, &str)] = &[
     ("cursor", "Cursor"),
     ("claude", "Claude"),
+    ("gemini", "Gemini CLI"),
     ("windsurf", "Windsurf"),
     ("trae", "Trae"),
     ("aider", "Aider"),
     ("copilot", "Copilot"),
     ("zed", "Zed"),
     ("codex", "Codex"),
+    ("opencode", "OpenCode"),
 ];
 
 fn tool_enabled(cfg: &Config, key: &str) -> bool {
     match key {
         "cursor" => cfg.cursor.enabled,
         "claude" => cfg.claude.enabled,
+        "gemini" => cfg.gemini.enabled,
         "windsurf" => cfg.windsurf.enabled,
         "trae" => cfg.trae.enabled,
         "aider" => cfg.aider.enabled,
         "copilot" => cfg.copilot.enabled,
         "zed" => cfg.zed.enabled,
         "codex" => cfg.codex.enabled,
+        "opencode" => cfg.opencode.enabled,
         _ => false,
     }
 }
@@ -151,12 +155,14 @@ fn tool_session_count(key: &str, root: &str) -> Result<usize, String> {
     match key {
         "cursor" => cursor::sessions_for_project(root).map(|s| s.len()),
         "claude" => crate::tools::claude::sessions_for_project(root).map(|s| s.len()),
+        "gemini" => crate::tools::gemini::sessions_for_project(root).map(|s| s.len()),
         "windsurf" => crate::tools::windsurf::sessions_for_project(root).map(|s| s.len()),
         "trae" => crate::tools::trae::sessions_for_project(root).map(|s| s.len()),
         "aider" => crate::tools::aider::sessions_for_project(root).map(|s| s.len()),
         "copilot" => crate::tools::copilot::sessions_for_project(root).map(|s| s.len()),
         "zed" => crate::tools::zed::sessions_for_project(root).map(|s| s.len()),
         "codex" => crate::tools::codex::sessions_for_project(root).map(|s| s.len()),
+        "opencode" => crate::tools::opencode::sessions_for_project(root).map(|s| s.len()),
         _ => Ok(0),
     }
 }

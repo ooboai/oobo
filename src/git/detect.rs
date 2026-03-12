@@ -101,6 +101,53 @@ pub fn is_interactive() -> bool {
     std::io::stdin().is_terminal()
 }
 
+/// Resolve the worktree-specific git directory.
+///
+/// - Main worktree: `<repo>/.git`
+/// - Linked worktree: `<main-repo>/.git/worktrees/<name>`
+///
+/// Use this for resources scoped to a single worktree (hooks, first-use marker).
+pub fn resolve_git_dir(project_root: &str) -> std::path::PathBuf {
+    resolve_git_path(project_root, "--git-dir")
+}
+
+/// Resolve the shared git directory that all worktrees share.
+///
+/// - Main worktree: `<repo>/.git`
+/// - Linked worktree: `<main-repo>/.git` (the common dir)
+///
+/// Use this for shared resources (orphan branch index, push-pending marker, sessions).
+pub fn resolve_git_common_dir(project_root: &str) -> std::path::PathBuf {
+    resolve_git_path(project_root, "--git-common-dir")
+}
+
+fn resolve_git_path(project_root: &str, flag: &str) -> std::path::PathBuf {
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+    let output = std::process::Command::new(git)
+        .args(["rev-parse", flag])
+        .current_dir(project_root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_QUARANTINE_PATH")
+        .output();
+
+    if let Ok(o) = output {
+        if o.status.success() {
+            let raw = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let p = std::path::Path::new(&raw);
+            if p.is_absolute() {
+                return p.to_path_buf();
+            }
+            return std::path::Path::new(project_root).join(p);
+        }
+    }
+
+    std::path::Path::new(project_root).join(".git")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

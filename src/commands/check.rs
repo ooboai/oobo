@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use crate::config::Config;
 use crate::db::Db;
 
@@ -224,7 +222,7 @@ fn check_git_hooks() -> CheckResult {
         }
     };
 
-    let hooks_dir = Path::new(&root).join(".git/hooks");
+    let hooks_dir = crate::git::detect::resolve_git_dir(&root).join("hooks");
     let post_commit = hooks_dir.join("post-commit");
 
     if post_commit.exists() {

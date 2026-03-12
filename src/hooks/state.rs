@@ -38,35 +38,8 @@ pub struct ActiveSession {
     pub updated_at: i64,
 }
 
-/// Resolve the shared git directory that all worktrees use.
-/// For main worktree: returns `<repo>/.git`
-/// For linked worktree: returns `<main-repo>/.git` (the common dir)
-/// Falls back to `<project_root>/.git` if git isn't available.
 fn git_common_dir(project_root: &str) -> PathBuf {
-    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let output = Command::new(git)
-        .args(["rev-parse", "--git-common-dir"])
-        .current_dir(project_root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
-        .output();
-
-    if let Ok(o) = output {
-        if o.status.success() {
-            let raw = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            let p = Path::new(&raw);
-            if p.is_absolute() {
-                return p.to_path_buf();
-            }
-            return Path::new(project_root).join(p);
-        }
-    }
-
-    Path::new(project_root).join(".git")
+    crate::git::detect::resolve_git_common_dir(project_root)
 }
 
 fn sessions_dir(project_root: &str) -> PathBuf {
@@ -244,25 +217,43 @@ pub fn snapshot_pre_agent_state(project_root: &str, session_id: &str) -> Result<
 
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
 
-    // Get all modified/new files in the worktree
-    let output = Command::new(&git)
+    // Get all modified/new files in the worktree (tracked + untracked)
+    let mut dirty_files: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    if let Ok(o) = Command::new(&git)
         .args(["diff", "--name-only", "HEAD"])
         .current_dir(project_root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output();
+        .output()
+    {
+        if o.status.success() {
+            for line in String::from_utf8_lossy(&o.stdout).lines() {
+                if !line.is_empty() && seen.insert(line.to_string()) {
+                    dirty_files.push(line.to_string());
+                }
+            }
+        }
+    }
 
-    let dirty_files: Vec<String> = output
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .map(|l| l.to_string())
-                .collect()
-        })
-        .unwrap_or_default();
+    if let Ok(o) = Command::new(&git)
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(project_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+    {
+        if o.status.success() {
+            for line in String::from_utf8_lossy(&o.stdout).lines() {
+                if !line.is_empty() && seen.insert(line.to_string()) {
+                    dirty_files.push(line.to_string());
+                }
+            }
+        }
+    }
 
     if dirty_files.is_empty() {
         // No dirty files → HEAD IS the pre-agent state. No snapshot needed;

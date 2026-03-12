@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::config::Config;
 use crate::git::orphan;
 
-const MARKER_FILE: &str = ".git/oobo-initialized";
+const MARKER_NAME: &str = "oobo-initialized";
 
 /// Check if this is the first time oobo runs in this repo.
 /// Shows a first-use notice, fetches remote anchors if available.
@@ -11,7 +11,7 @@ const MARKER_FILE: &str = ".git/oobo-initialized";
 /// Called from the git interceptor on write ops, but only
 /// does work once per repo (writes a marker file).
 pub fn check_first_use(cfg: &Config, project_root: &str) {
-    let marker = Path::new(project_root).join(MARKER_FILE);
+    let marker = crate::git::detect::resolve_git_dir(project_root).join(MARKER_NAME);
     if marker.exists() {
         return;
     }

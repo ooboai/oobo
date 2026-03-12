@@ -247,7 +247,7 @@ fn merge_json_file(
 
 /// Install a per-repo git hook. Chains with existing hooks if present.
 pub fn install_git_hook(project_root: &str, hook_name: &str, script: &str) -> Result<(), String> {
-    let hooks_dir = Path::new(project_root).join(".git/hooks");
+    let hooks_dir = crate::git::detect::resolve_git_dir(project_root).join("hooks");
     fs::create_dir_all(&hooks_dir)
         .map_err(|e| format!("cannot create {}: {e}", hooks_dir.display()))?;
 
@@ -289,13 +289,14 @@ pub fn install_project_hooks(project_root: &str) -> Result<Vec<String>, String> 
         "#!/bin/sh\nmkdir -p {log_dir}\noobo hooks post-commit \"$@\" 2>>{log_dir}/hooks.log || true\n"
     );
     install_git_hook(project_root, "post-commit", &post_commit)?;
-    installed.push(format!("post-commit → {project_root}/.git/hooks/"));
+    let hooks_display = crate::git::detect::resolve_git_dir(project_root).join("hooks");
+    installed.push(format!("post-commit → {}/", hooks_display.display()));
 
     let pre_push = format!(
         "#!/bin/sh\nmkdir -p {log_dir}\noobo hooks pre-push \"$@\" 2>>{log_dir}/hooks.log || true\n"
     );
     install_git_hook(project_root, "pre-push", &pre_push)?;
-    installed.push(format!("pre-push → {project_root}/.git/hooks/"));
+    installed.push(format!("pre-push → {}/", hooks_display.display()));
 
     Ok(installed)
 }

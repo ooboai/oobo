@@ -67,6 +67,10 @@ pub fn run(agent: bool, out: Option<String>) -> Result<(), String> {
         print_terminal(&card);
     }
 
+    if agent && out.is_none() {
+        return Ok(());
+    }
+
     let md = render_markdown(&card);
     let path = out.unwrap_or_else(|| "oobo-card.md".to_string());
     std::fs::write(&path, &md).map_err(|e| format!("cannot write {path}: {e}"))?;

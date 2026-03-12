@@ -72,6 +72,11 @@ pub fn handle_event(
                 "session-start requires session_id".into(),
             ))?;
             state::write_session(&project_root, session_id, agent, event.model.as_deref())?;
+            // For non-Cursor agents, capture pre-agent state at session start.
+            // Cursor uses the more precise `before-submit-prompt` hook instead.
+            if !project_root.is_empty() && !is_cursor_agent(agent) {
+                let _ = state::snapshot_pre_agent_state(&project_root, session_id);
+            }
         }
         "session-end" => {
             if let Some(sid) = session_id_field {
@@ -92,15 +97,26 @@ pub fn handle_event(
                 let transcript_path = event.extra.get("transcript_path").and_then(|v| v.as_str());
                 state::touch_session(&project_root, sid, transcript_path)?;
 
-                // Snapshot post-agent state: files the agent edited.
-                if !project_root.is_empty() && is_cursor_agent(agent) {
-                    let files = crate::tools::cursor::composer_data::files_edited_in_session(
-                        sid,
-                        &project_root,
-                        0,
-                    );
-                    if !files.is_empty() {
-                        let _ = state::snapshot_session_files(&project_root, sid, &files);
+                if !project_root.is_empty() {
+                    if is_cursor_agent(agent) {
+                        // Cursor: use composerData for precise file list.
+                        let files =
+                            crate::tools::cursor::composer_data::files_edited_in_session(
+                                sid,
+                                &project_root,
+                                0,
+                            );
+                        if !files.is_empty() {
+                            let _ = state::snapshot_session_files(&project_root, sid, &files);
+                        }
+                    } else {
+                        // Non-Cursor agents (Claude Code, Gemini, etc.): snapshot all
+                        // dirty files in the worktree so the interceptor can compute
+                        // precise AI vs human attribution at commit time.
+                        let files = dirty_worktree_files(&project_root);
+                        if !files.is_empty() {
+                            let _ = state::snapshot_session_files(&project_root, sid, &files);
+                        }
                     }
                 }
             }
@@ -129,6 +145,49 @@ pub fn handle_event(
     }
 
     Ok(())
+}
+
+fn dirty_worktree_files(project_root: &str) -> Vec<String> {
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+    let mut files = std::collections::HashSet::new();
+
+    // Modified tracked files (staged + unstaged)
+    if let Ok(o) = std::process::Command::new(&git)
+        .args(["diff", "--name-only", "HEAD"])
+        .current_dir(project_root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+    {
+        if o.status.success() {
+            for line in String::from_utf8_lossy(&o.stdout).lines() {
+                if !line.is_empty() {
+                    files.insert(line.to_string());
+                }
+            }
+        }
+    }
+
+    // Untracked files (new files created by the agent)
+    if let Ok(o) = std::process::Command::new(&git)
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(project_root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+    {
+        if o.status.success() {
+            for line in String::from_utf8_lossy(&o.stdout).lines() {
+                if !line.is_empty() {
+                    files.insert(line.to_string());
+                }
+            }
+        }
+    }
+
+    files.into_iter().collect()
 }
 
 fn is_cursor_agent(agent: &str) -> bool {

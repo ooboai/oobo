@@ -399,7 +399,12 @@ fn compute_precise_attribution(
     }
 
     // AI contribution: baseline → agent_blob
-    let ai_stats = diff_blobs_numstat(cfg, &baseline_blob, agent_blob);
+    let ai_stats = if baseline_blob.is_empty() {
+        // New file: baseline doesn't exist. Count lines in the agent's blob.
+        count_blob_lines(cfg, agent_blob).map(|n| (n, 0))
+    } else {
+        diff_blobs_numstat(cfg, &baseline_blob, agent_blob)
+    };
     // Human contribution: agent_blob → committed
     let human_stats = diff_blobs_numstat(cfg, agent_blob, &committed_blob);
 
@@ -428,6 +433,15 @@ fn compute_precise_attribution(
         attribution,
         agent_name,
     )
+}
+
+/// Count lines in a git blob object.
+fn count_blob_lines(cfg: &Config, blob: &str) -> Option<u32> {
+    if blob.is_empty() {
+        return None;
+    }
+    let content = proxy::run_git_capture(cfg, &["cat-file", "-p", blob]).ok()?;
+    Some(content.lines().count() as u32)
 }
 
 /// Diff two blob objects and return (added, deleted) line counts.
@@ -505,6 +519,16 @@ fn collect_ai_files_touched(
     let mut seen = std::collections::HashSet::new();
 
     for session in active_sessions {
+        // Session file_snapshots are the strongest signal: the hooks captured
+        // exactly which files the agent edited. Check these first.
+        if let Some(ref snapshots) = session.file_snapshots {
+            for file in snapshots.keys() {
+                if seen.insert(file.clone()) {
+                    result.push((file.clone(), session.agent.clone()));
+                }
+            }
+        }
+
         if is_cursor_session(&session.agent) {
             let files = crate::tools::cursor::composer_data::files_edited_in_session(
                 &session.session_id,
