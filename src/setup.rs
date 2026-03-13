@@ -1,3 +1,5 @@
+use std::io::IsTerminal;
+
 use crate::config::Config;
 use crate::tui::setup::ScanInfo;
 
@@ -34,65 +36,70 @@ pub fn run_setup() -> Result<(), String> {
         sessions,
     };
 
-    match crate::tui::setup::run_setup_wizard(&cfg, scan)? {
-        Some(new_cfg) => {
-            new_cfg.save()?;
-
-            println!();
-            println!(
-                "  Configuration saved to {}",
-                Config::config_path().display()
-            );
-
-            if new_cfg.git.alias_enabled {
-                if let Err(e) = crate::alias::install_alias() {
-                    eprintln!("oobo: warning: could not install alias: {e}");
-                } else {
-                    println!("  Git alias installed (git = oobo)");
-                }
-            }
-
-            println!("  Agent skill installed at ~/.agents/skills/oobo/");
-
-            let hooks_installed = crate::hooks::install::install_all_agent_hooks();
-            if !hooks_installed.is_empty() {
+    let new_cfg = if std::io::stdout().is_terminal() {
+        match crate::tui::setup::run_setup_wizard(&cfg, scan)? {
+            Some(c) => c,
+            None => {
                 println!();
-                println!("  Agent lifecycle hooks installed:");
-                for h in &hooks_installed {
+                println!("  Setup cancelled.");
+                println!();
+                return Ok(());
+            }
+        }
+    } else {
+        eprintln!("  non-interactive environment detected — using defaults");
+        crate::tui::setup::build_default_config(&cfg, scan)
+    };
+
+    new_cfg.save()?;
+
+    println!();
+    println!(
+        "  Configuration saved to {}",
+        Config::config_path().display()
+    );
+
+    if new_cfg.git.alias_enabled {
+        if let Err(e) = crate::alias::install_alias() {
+            eprintln!("oobo: warning: could not install alias: {e}");
+        } else {
+            println!("  Git alias installed (git = oobo)");
+        }
+    }
+
+    println!("  Agent skill installed at ~/.agents/skills/oobo/");
+
+    let hooks_installed = crate::hooks::install::install_all_agent_hooks();
+    if !hooks_installed.is_empty() {
+        println!();
+        println!("  Agent lifecycle hooks installed:");
+        for h in &hooks_installed {
+            println!("    {h}");
+        }
+    }
+
+    if let Some(root) = crate::git::proxy::project_root(&new_cfg) {
+        match crate::hooks::install::install_project_hooks(&root) {
+            Ok(hooks) => {
+                println!();
+                println!("  Git hooks installed for this project:");
+                for h in &hooks {
                     println!("    {h}");
                 }
             }
-
-            if let Some(root) = crate::git::proxy::project_root(&new_cfg) {
-                match crate::hooks::install::install_project_hooks(&root) {
-                    Ok(hooks) => {
-                        println!();
-                        println!("  Git hooks installed for this project:");
-                        for h in &hooks {
-                            println!("    {h}");
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("oobo: warning: could not install git hooks: {e}");
-                    }
-                }
+            Err(e) => {
+                eprintln!("oobo: warning: could not install git hooks: {e}");
             }
-
-            println!();
-            println!("  You're all set! Try:");
-            println!("    oobo sessions   -- view your AI chat sessions");
-            println!("    oobo scan       -- discover projects and sessions");
-            println!("    oobo dash       -- interactive dashboard");
-            println!();
-            Ok(())
-        }
-        None => {
-            println!();
-            println!("  Setup cancelled.");
-            println!();
-            Ok(())
         }
     }
+
+    println!();
+    println!("  You're all set! Try:");
+    println!("    oobo sessions   -- view your AI chat sessions");
+    println!("    oobo scan       -- discover projects and sessions");
+    println!("    oobo dash       -- interactive dashboard");
+    println!();
+    Ok(())
 }
 
 fn detect_tools() -> Vec<(String, usize)> {

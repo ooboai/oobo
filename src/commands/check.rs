@@ -255,14 +255,14 @@ fn check_agent_hooks() -> CheckResult {
     if installed.is_empty() {
         CheckResult {
             name: "agent hooks".into(),
-            status: Status::Warn,
-            detail: "no agent hooks found — run oobo setup".into(),
+            status: Status::Fail,
+            detail: "no agent hooks found".into(),
             fix_fn: Some(Box::new(|| {
                 let results = crate::hooks::install::install_all_agent_hooks();
                 if results.is_empty() {
                     Err("no hooks could be installed".into())
                 } else {
-                    Ok(format!("{} hooks installed", results.len()))
+                    Ok(format!("{} tool(s): {}", results.len(), results.join(", ")))
                 }
             })),
         }

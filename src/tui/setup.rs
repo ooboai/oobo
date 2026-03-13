@@ -185,6 +185,11 @@ impl Wizard {
     }
 }
 
+/// Build a default config without showing the TUI wizard (for non-interactive environments).
+pub fn build_default_config(cfg: &Config, scan: ScanInfo) -> Config {
+    Wizard::new(cfg, scan).to_config()
+}
+
 pub fn run_setup_wizard(cfg: &Config, scan: ScanInfo) -> Result<Option<Config>, String> {
     let mut wiz = Wizard::new(cfg, scan);
     let mut terminal = crate::tui::init().map_err(|e| e.to_string())?;

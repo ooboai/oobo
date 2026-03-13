@@ -181,6 +181,13 @@ pub fn hydrate_from_branch(project_root: &str, db: &crate::db::Db) -> Result<usi
                 link.model.as_deref(),
                 lt,
                 link.files_touched.as_deref(),
+                link.input_tokens,
+                link.output_tokens,
+                link.cache_read_tokens,
+                link.cache_creation_tokens,
+                link.duration_secs,
+                link.tool_calls,
+                link.is_subagent,
             )?;
         }
 

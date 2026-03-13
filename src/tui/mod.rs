@@ -13,7 +13,7 @@ use ratatui::DefaultTerminal;
 pub const KEY_POLL: Duration = Duration::from_millis(50);
 
 pub fn init() -> io::Result<DefaultTerminal> {
-    Ok(ratatui::init())
+    ratatui::try_init()
 }
 
 pub fn restore() {

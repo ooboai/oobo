@@ -124,14 +124,37 @@ impl Db {
         model: Option<&str>,
         link_type: &str,
         files_touched: Option<&[String]>,
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+        cache_read_tokens: Option<u64>,
+        cache_creation_tokens: Option<u64>,
+        duration_secs: Option<u64>,
+        tool_calls: Option<u32>,
+        is_subagent: bool,
     ) -> Result<(), String> {
         let ft_json = files_touched.map(|ft| serde_json::to_string(ft).unwrap_or_default());
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO anchor_sessions
-                 (commit_hash, session_id, agent, model, link_type, files_touched)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![commit_hash, session_id, agent, model, link_type, ft_json],
+                 (commit_hash, session_id, agent, model, link_type, files_touched,
+                  input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                  duration_secs, tool_calls, is_subagent)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                rusqlite::params![
+                    commit_hash,
+                    session_id,
+                    agent,
+                    model,
+                    link_type,
+                    ft_json,
+                    input_tokens.map(|v| v as i64),
+                    output_tokens.map(|v| v as i64),
+                    cache_read_tokens.map(|v| v as i64),
+                    cache_creation_tokens.map(|v| v as i64),
+                    duration_secs.map(|v| v as i64),
+                    tool_calls.map(|v| v as i64),
+                    is_subagent as i64,
+                ],
             )
             .map_err(|e| format!("insert anchor_session: {e}"))?;
         Ok(())
@@ -203,6 +226,13 @@ mod tests {
             Some("claude-opus"),
             "explicit",
             Some(&files),
+            Some(1500),
+            Some(3000),
+            None,
+            None,
+            Some(120),
+            Some(5),
+            false,
         )
         .unwrap();
 
@@ -213,10 +243,15 @@ mod tests {
             Option<String>,
             String,
             Option<String>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
         ) = db
             .conn
             .query_row(
-                "SELECT commit_hash, session_id, agent, model, link_type, files_touched
+                "SELECT commit_hash, session_id, agent, model, link_type, files_touched,
+                        input_tokens, output_tokens, duration_secs, tool_calls
                  FROM anchor_sessions WHERE commit_hash = ?1 AND session_id = ?2",
                 rusqlite::params!["abc123", "sess-42"],
                 |r| {
@@ -227,6 +262,10 @@ mod tests {
                         r.get(3)?,
                         r.get(4)?,
                         r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                        r.get(9)?,
                     ))
                 },
             )
@@ -240,6 +279,10 @@ mod tests {
         assert!(row.5.is_some());
         let ft: Vec<String> = serde_json::from_str(&row.5.unwrap()).unwrap();
         assert_eq!(ft, files);
+        assert_eq!(row.6, Some(1500));
+        assert_eq!(row.7, Some(3000));
+        assert_eq!(row.8, Some(120));
+        assert_eq!(row.9, Some(5));
     }
 
     #[test]
@@ -247,8 +290,11 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         db.insert_anchor("def456", "{}").unwrap();
 
-        db.insert_anchor_session("def456", "sess-99", "claude", None, "inferred", None)
-            .unwrap();
+        db.insert_anchor_session(
+            "def456", "sess-99", "claude", None, "inferred", None, None, None, None, None, None,
+            None, false,
+        )
+        .unwrap();
 
         let model: Option<String> = db
             .conn

@@ -341,6 +341,13 @@ fn enrich_commit(
                 link.model.as_deref(),
                 lt,
                 link.files_touched.as_deref(),
+                link.input_tokens,
+                link.output_tokens,
+                link.cache_read_tokens,
+                link.cache_creation_tokens,
+                link.duration_secs,
+                link.tool_calls,
+                link.is_subagent,
             ) {
                 eprintln!("oobo: warning: could not save session link: {e}");
             }

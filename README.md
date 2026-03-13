@@ -135,17 +135,27 @@ oobo alias install      # adds alias git=oobo to your shell rc
 ```bash
 oobo sessions                    # interactive TUI — navigate with arrows, Enter to view
 oobo sessions --all              # sessions across all projects
-oobo sessions search "auth bug"  # search by keyword (shows IDs in output)
+oobo sessions search "auth bug"  # search by keyword
 ```
 
 The TUI shows source, model, tokens, duration, and title for each session. Select one to scroll through the full conversation.
 
-For scripting and automation, session IDs (UUIDs) are available in JSON output. You can then use a short prefix to reference them:
+For scripting and automation, session IDs (UUIDs) are available in JSON output. You can use a short prefix to reference them:
 
 ```bash
-oobo sessions list --agent       # get session IDs as JSON
-oobo sessions show abc12def      # view by ID prefix
+oobo sessions list --agent             # get session IDs as JSON
+oobo sessions list --tool claude -n 10 # filter by tool, limit results
+oobo sessions show abc12def            # view by ID prefix
+oobo sessions search "auth" --all      # search across all projects
 oobo sessions export abc12def --format md --out chat.md
+```
+
+### Enriched commit history
+
+```bash
+oobo anchors                     # commit history with AI context, attribution
+oobo anchors -n 20               # show last 20 commits
+oobo a --agent                   # JSON output (short alias)
 ```
 
 ### Analytics
@@ -157,23 +167,85 @@ oobo stats --tool cursor         # per-tool
 oobo stats --since 30d           # time-filtered
 ```
 
+### Projects
+
+```bash
+oobo projects                    # interactive TUI for all tracked projects
+oobo projects show myapp         # details + sessions for a project
+oobo projects forget myapp       # remove a project from tracking
+```
+
 ### Developer card
 
 ```bash
-oobo card                        # generate your AI-first developer stats card
-oobo card --out dev.md           # save to a custom path
+oobo card                        # generate your developer stats card (PNG)
+oobo card --format svg           # SVG output
+oobo card --format md            # markdown output
+oobo card --out dev.png          # save to a custom path
 ```
 
-Generates an overview of your AI tool usage — sessions, tokens, models, AI code percentage, commit profile — and saves it as a shareable markdown file. No project names or private data included.
+<p align="center">
+  <img src=".github/oobo-card.png" alt="oobo card" width="720" />
+</p>
+
+Generates an overview of your AI tool usage — sessions, tokens, models, AI code percentage, commit profile — and saves it as a shareable file. No project names or private data included.
+
+### Sharing & exporting
+
+```bash
+oobo share <session_id>                # preview a redacted session
+oobo share <session_id> --out s.json   # save redacted session to file
+oobo sessions export <id> --format md  # export full session as markdown
+oobo sessions export <id> --format json --out chat.json
+```
+
+### Sync & transparency
+
+```bash
+oobo sync                        # show current sync status
+oobo sync on                     # enable backend sync for this project
+oobo sync off                    # disable backend sync
+oobo sync --import               # import anchors from orphan branch into local DB
+oobo transparency                # show current per-repo transparency setting
+oobo transparency on             # sync redacted transcripts for this repo
+oobo transparency off            # keep transcripts local only
+oobo transparency reset          # clear per-repo override, use global default
+```
+
+### Auth
+
+```bash
+oobo auth login                  # log in to oobo.dev (or self-hosted)
+oobo auth login --key <key>      # authenticate with an API key
+oobo auth status                 # show auth state + configured tool keys
+oobo auth logout                 # remove credentials
+oobo auth set-remote <url>       # point to a self-hosted server
+oobo auth anthropic <key>        # set Anthropic Admin API key
+oobo auth openai <key>           # set OpenAI API key
+oobo auth copilot <token>        # set GitHub Copilot org PAT
+oobo auth google <key>           # set Google AI Studio key
+oobo auth windsurf <key>         # set Windsurf/Codeium service key
+```
+
+### Ignore & unignore
+
+```bash
+oobo ignore                      # stop tracking the current repo
+oobo ignore --list               # show all ignored repos
+oobo unignore                    # re-enable tracking for this repo
+```
 
 ### Maintenance
 
 ```bash
 oobo scan                        # discover projects + sessions from all tools
 oobo index                       # compute token counts and analytics
+oobo index --force               # re-index already indexed sessions
+oobo index --bg                  # run indexing in background
 oobo inspect --fix               # diagnose and auto-repair issues
 oobo sources                     # data source status per tool
-oobo update                      # check for updates
+oobo update                      # check for updates and self-update
+oobo update --check              # only check, don't install
 ```
 
 ---
@@ -187,21 +259,23 @@ Oobo is built for agents. Agents commit code constantly, across tools, often in 
 Every command supports `--agent` for structured JSON output:
 
 ```bash
-oobo sessions --agent            # JSON list of sessions
-oobo sessions list --agent       # same (explicit subcommand)
-oobo sessions show <id> --agent  # full conversation as JSON
-oobo sessions search <q> --agent # search results as JSON
-oobo projects --agent            # JSON list of projects
-oobo projects show <n> --agent   # project detail as JSON
-oobo anchors --agent             # enriched commit history as JSON
-oobo stats --agent               # analytics as structured data
-oobo card --agent                # developer card as JSON
-oobo sources --agent             # data source coverage as JSON
-oobo dash --agent                # configuration overview as JSON
-oobo version --agent             # version info as JSON
-oobo inspect --agent             # diagnostics as machine-readable JSON
-oobo share <id> --agent          # shared session as JSON
-oobo scan --agent                # suppresses interactive output
+oobo sessions --agent                  # JSON list of sessions
+oobo sessions list --agent             # same (explicit subcommand)
+oobo sessions list --all --tool claude --agent  # filter + JSON
+oobo sessions show <id> --agent        # full conversation as JSON
+oobo sessions search <q> --agent       # search results as JSON
+oobo sessions export <id> --format json # export session as JSON
+oobo projects --agent                  # JSON list of projects
+oobo projects show <name> --agent      # project detail as JSON
+oobo anchors --agent                   # enriched commit history as JSON
+oobo stats --agent                     # analytics as structured data
+oobo card --agent                      # developer card as JSON
+oobo sources --agent                   # data source coverage as JSON
+oobo dash --agent                      # configuration overview as JSON
+oobo version --agent                   # version info as JSON
+oobo inspect --agent                   # diagnostics as machine-readable JSON
+oobo share <id> --agent                # redacted session as JSON
+oobo scan --agent                      # suppresses interactive output
 ```
 
 `--agent` is a global flag. It works with any command at any position.
