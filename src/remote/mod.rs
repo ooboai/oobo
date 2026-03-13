@@ -70,7 +70,12 @@ pub fn send_event(cfg: &Config, payload: &payload::EventPayload, api_key_overrid
         }
 
         if status.as_u16() == 422 {
-            eprintln!("oobo: warning: sync payload rejected (422). Run `oobo --version` to check for updates.");
+            let detail = resp.text().unwrap_or_default();
+            if detail.is_empty() {
+                eprintln!("oobo: warning: sync payload rejected (422). Run `oobo --version` to check for updates.");
+            } else {
+                eprintln!("oobo: warning: sync payload rejected (422): {detail}");
+            }
         }
     })
 }
