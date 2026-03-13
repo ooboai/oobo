@@ -100,12 +100,11 @@ pub fn handle_event(
                 if !project_root.is_empty() {
                     if is_cursor_agent(agent) {
                         // Cursor: use composerData for precise file list.
-                        let files =
-                            crate::tools::cursor::composer_data::files_edited_in_session(
-                                sid,
-                                &project_root,
-                                0,
-                            );
+                        let files = crate::tools::cursor::composer_data::files_edited_in_session(
+                            sid,
+                            &project_root,
+                            0,
+                        );
                         if !files.is_empty() {
                             let _ = state::snapshot_session_files(&project_root, sid, &files);
                         }

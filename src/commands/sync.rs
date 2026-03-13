@@ -88,7 +88,10 @@ fn enable_sync(cfg: &mut Config) -> Result<(), String> {
         eprintln!("oobo: sync enabled globally");
     }
 
-    eprintln!("      anchors will be pushed to {} on every commit.", cfg.server.url);
+    eprintln!(
+        "      anchors will be pushed to {} on every commit.",
+        cfg.server.url
+    );
     eprintln!("      run `oobo sync off` to disable.");
 
     Ok(())

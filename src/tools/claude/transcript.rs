@@ -285,6 +285,7 @@ pub fn extract_stats(path: &Path) -> Option<crate::remote::payload::SessionStats
     })
 }
 
+#[allow(dead_code)]
 pub fn stats_for_session(
     project_path: &str,
     session_id: &str,

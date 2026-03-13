@@ -5,11 +5,12 @@ use crate::config::Config;
 /// Spawn a background thread to POST the anchor to the ingestion API.
 /// Returns the JoinHandle so the caller can wait if needed (e.g. from a
 /// post-commit hook where the process would otherwise exit immediately).
-pub fn send_event(cfg: &Config, payload: &payload::EventPayload, api_key_override: Option<&str>) -> std::thread::JoinHandle<()> {
-    let url = format!(
-        "{}/anchors/ingest",
-        cfg.server.url.trim_end_matches('/')
-    );
+pub fn send_event(
+    cfg: &Config,
+    payload: &payload::EventPayload,
+    api_key_override: Option<&str>,
+) -> std::thread::JoinHandle<()> {
+    let url = format!("{}/anchors/ingest", cfg.server.url.trim_end_matches('/'));
     let api_key = api_key_override.unwrap_or(&cfg.server.api_key).to_string();
     let body = match serde_json::to_string(payload) {
         Ok(b) => b,
@@ -48,7 +49,8 @@ pub fn send_event(cfg: &Config, payload: &payload::EventPayload, api_key_overrid
         // Treat as success.
         if status.as_u16() == 409 || status.as_u16() == 500 {
             if let Ok(body) = resp.text() {
-                if body.contains("duplicate") || body.contains("unique") || body.contains("UNIQUE") {
+                if body.contains("duplicate") || body.contains("unique") || body.contains("UNIQUE")
+                {
                     return;
                 }
                 if status.as_u16() == 500 {
@@ -87,10 +89,7 @@ pub fn ingest_anchor(
     cfg: &Config,
     payload: &payload::EventPayload,
 ) -> Result<payload::IngestResponse, String> {
-    let url = format!(
-        "{}/anchors/ingest",
-        cfg.server.url.trim_end_matches('/')
-    );
+    let url = format!("{}/anchors/ingest", cfg.server.url.trim_end_matches('/'));
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(15))

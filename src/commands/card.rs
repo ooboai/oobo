@@ -227,9 +227,7 @@ fn build_heatmap(db: &Db) -> Vec<DayCell> {
             for ts in rows.flatten() {
                 let secs = crate::utils::to_epoch_secs(ts);
                 if let Some(dt) = chrono::DateTime::from_timestamp(secs, 0) {
-                    let date = dt
-                        .with_timezone(&chrono::Local)
-                        .date_naive();
+                    let date = dt.with_timezone(&chrono::Local).date_naive();
                     if date >= start && date <= today {
                         *session_map
                             .entry(date.format("%Y-%m-%d").to_string())
@@ -355,7 +353,8 @@ fn render_svg(card: &CardData) -> String {
                 let x = grid_left as i64 + week_col * step as i64;
                 svg_body.push_str(&format!(
                     r#"<text x="{x}" y="{}" font-size="10" fill="{MUTED_LIGHT}">{}</text>"#,
-                    y, c.date.format("%b")
+                    y,
+                    c.date.format("%b")
                 ));
                 last_month = m;
             }
@@ -447,7 +446,9 @@ fn render_svg(card: &CardData) -> String {
             ));
             svg_body.push_str(&format!(
                 r#"<text x="{tx}" y="{}" font-size="9" fill="{MUTED_LIGHT}">{} · {}</text>"#,
-                y + 14, t.sessions, tui::format_tokens(t.tokens)
+                y + 14,
+                t.sessions,
+                tui::format_tokens(t.tokens)
             ));
         }
     }
@@ -526,9 +527,15 @@ fn heatmap_cell_fill(idx: usize, cell: &DayCell, max_activity: i64) -> CellFill 
     let blue_hex = shade(blue_base);
 
     if ai_pct < 0.05 {
-        CellFill { fill: teal_hex, gradient_def: None }
+        CellFill {
+            fill: teal_hex,
+            gradient_def: None,
+        }
     } else if human_pct < 0.05 {
-        CellFill { fill: blue_hex, gradient_def: None }
+        CellFill {
+            fill: blue_hex,
+            gradient_def: None,
+        }
     } else {
         let stop = (human_pct * 100.0).round() as i32;
         let id = format!("hm{idx}");
@@ -561,8 +568,7 @@ fn svg_to_png(svg_data: &str) -> Result<Vec<u8>, String> {
     let w = (size.width() * scale).ceil() as u32;
     let h = (size.height() * scale).ceil() as u32;
 
-    let mut pixmap =
-        resvg::tiny_skia::Pixmap::new(w, h).ok_or("cannot create pixmap")?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h).ok_or("cannot create pixmap")?;
 
     let transform = resvg::tiny_skia::Transform::from_scale(scale, scale);
     resvg::render(&tree, transform, &mut pixmap.as_mut());

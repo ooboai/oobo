@@ -261,6 +261,7 @@ impl Config {
     }
 
     /// True when sync is enabled and an API key is available.
+    #[allow(dead_code)]
     pub fn should_sync(&self) -> bool {
         self.server.sync && !self.server.api_key.is_empty()
     }

@@ -804,10 +804,7 @@ fn test_event_payload_roundtrip() {
             name: "project".into(),
             git_remote: Some("github.com/user/project".into()),
         },
-        anchor: Some(AnchorPayload {
-            anchor,
-            sessions,
-        }),
+        anchor: Some(AnchorPayload { anchor, sessions }),
         transcript: vec![
             TranscriptMessage {
                 role: "user".into(),

@@ -116,6 +116,7 @@ impl Db {
     }
 
     /// Insert a session link for an anchor into `anchor_sessions`.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_anchor_session(
         &self,
         commit_hash: &str,
@@ -236,6 +237,7 @@ mod tests {
         )
         .unwrap();
 
+        #[allow(clippy::type_complexity)]
         let row: (
             String,
             String,

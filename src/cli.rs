@@ -643,7 +643,11 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
             crate::commands::check::run(fix, agent_mode)?;
             Ok(0)
         }
-        Some(Command::Sync { mode, value, import }) => {
+        Some(Command::Sync {
+            mode,
+            value,
+            import,
+        }) => {
             if import {
                 crate::commands::sync::run_import(&cfg)?;
             } else {

@@ -154,5 +154,4 @@ mod tests {
         assert_eq!(stats.output_tokens, Some(0));
         assert_eq!(stats.token_source, "unknown");
     }
-
 }

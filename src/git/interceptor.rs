@@ -50,8 +50,7 @@ pub fn on_write_op(cfg: &Config, args: &[&str]) -> Result<(), String> {
     let should_sync = project_sync.unwrap_or(cfg.server.sync) && !effective_key.is_empty();
 
     if should_sync && anchor_data.is_some() {
-        let git_remote = resolve_git_remote(cfg)
-            .or_else(|| Some(String::new()));
+        let git_remote = resolve_git_remote(cfg).or_else(|| Some(String::new()));
 
         let (anchor_payload, transcript) = if let Some((anchor, links, transcripts)) = anchor_data {
             let transcript_messages =
@@ -164,7 +163,11 @@ fn enrich_commit(
 
             let duration_fallback = {
                 let elapsed = now_epoch - s.started_at;
-                if elapsed > 0 { Some(elapsed as u64) } else { None }
+                if elapsed > 0 {
+                    Some(elapsed as u64)
+                } else {
+                    None
+                }
             };
 
             SessionLink {
@@ -938,7 +941,10 @@ fn extract_live_stats(
     session_id: &str,
     agent: &str,
     project_root: &str,
-    bubble_data: &std::collections::HashMap<String, crate::tools::cursor::composer_data::BubbleSession>,
+    bubble_data: &std::collections::HashMap<
+        String,
+        crate::tools::cursor::composer_data::BubbleSession,
+    >,
 ) -> Option<crate::analytics::NativeStats> {
     use crate::tools::cursor::composer_data;
 
@@ -967,7 +973,9 @@ fn extract_live_stats(
     }
 
     if agent == "gemini" {
-        if let Some(stats) = crate::tools::gemini::transcript::stats_for_session(project_root, session_id) {
+        if let Some(stats) =
+            crate::tools::gemini::transcript::stats_for_session(project_root, session_id)
+        {
             return Some(crate::analytics::NativeStats {
                 model: stats.model,
                 input_tokens: stats.input_tokens,
