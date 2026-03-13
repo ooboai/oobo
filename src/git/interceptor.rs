@@ -49,7 +49,7 @@ pub fn on_write_op(cfg: &Config, args: &[&str]) -> Result<(), String> {
     let effective_key = crate::commands::sync::resolve_api_key(cfg);
     let should_sync = project_sync.unwrap_or(cfg.server.sync) && !effective_key.is_empty();
 
-    if should_sync {
+    if should_sync && anchor_data.is_some() {
         let git_remote = resolve_git_remote(cfg)
             .or_else(|| Some(String::new()));
 
