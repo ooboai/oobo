@@ -1,10 +1,23 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+
+/// Atomically write a JSON file by writing to a temp file then renaming.
+/// This prevents partial writes from corrupting session state when
+/// multiple hooks fire concurrently (e.g. stop + subagent-stop).
+fn atomic_write_json(path: &Path, json: &str) -> std::io::Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(json.as_bytes())?;
+    tmp.flush()?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
 
 /// Active session state — written to `<git-common-dir>/oobo-sessions/<session_id>.json`.
 ///
@@ -113,7 +126,7 @@ pub fn write_session(
 
     let json = serde_json::to_string_pretty(&state)?;
     let path = session_path(project_root, session_id);
-    fs::write(&path, json)?;
+    atomic_write_json(&path, &json)?;
 
     Ok(())
 }
@@ -141,7 +154,7 @@ pub fn touch_session(
     }
 
     let json = serde_json::to_string_pretty(&state)?;
-    fs::write(&path, json)?;
+    atomic_write_json(&path, &json)?;
 
     Ok(())
 }
@@ -294,7 +307,7 @@ pub fn snapshot_pre_agent_state(project_root: &str, session_id: &str) -> Result<
     };
 
     let json = serde_json::to_string_pretty(&state)?;
-    fs::write(&path, json)?;
+    atomic_write_json(&path, &json)?;
 
     Ok(())
 }
@@ -354,7 +367,7 @@ pub fn snapshot_session_files(
     };
 
     let json = serde_json::to_string_pretty(&state)?;
-    fs::write(&path, json)?;
+    atomic_write_json(&path, &json)?;
 
     Ok(())
 }

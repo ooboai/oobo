@@ -228,7 +228,12 @@ pub mod transcript {
         match find_transcript_path(project_path, session_id) {
             Some(p) => {
                 let content = fs::read_to_string(&p).unwrap_or_default();
-                let data: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
+                let data: serde_json::Value =
+                    if p.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                        replay_jsonl(&content).unwrap_or_default()
+                    } else {
+                        serde_json::from_str(&content).unwrap_or_default()
+                    };
                 data.get("requests")
                     .and_then(|v| v.as_array())
                     .map(|a| a.len() as u32 * 2)
@@ -240,9 +245,17 @@ pub mod transcript {
 
     pub fn parse_messages(path: &Path) -> Vec<Message> {
         let content = fs::read_to_string(path).unwrap_or_default();
-        let data: serde_json::Value = match serde_json::from_str(&content) {
-            Ok(v) => v,
-            Err(_) => return Vec::new(),
+        let data: serde_json::Value = if path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+        {
+            match replay_jsonl(&content) {
+                Some(v) => v,
+                None => return Vec::new(),
+            }
+        } else {
+            match serde_json::from_str(&content) {
+                Ok(v) => v,
+                Err(_) => return Vec::new(),
+            }
         };
 
         let requests = match data.get("requests").and_then(|v| v.as_array()) {
@@ -305,7 +318,12 @@ pub mod transcript {
 
     pub fn extract_stats(path: &Path) -> Option<crate::remote::payload::SessionStats> {
         let content = fs::read_to_string(path).ok()?;
-        let data: serde_json::Value = serde_json::from_str(&content).ok()?;
+        let data: serde_json::Value =
+            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                replay_jsonl(&content)?
+            } else {
+                serde_json::from_str(&content).ok()?
+            };
         let requests = data.get("requests").and_then(|v| v.as_array())?;
 
         let model = requests

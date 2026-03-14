@@ -738,11 +738,8 @@ fn is_agent_tool_match(session_agent: &str, tool_name: &str) -> bool {
     if session_agent == tool_name {
         return true;
     }
-    let cursor_aliases = [
-        "cursor", "agent", "composer", "ask", "edit", "normal", "chat",
-    ];
-    let cursor_tools = ["composer", "cursor"];
-    cursor_aliases.contains(&session_agent) && cursor_tools.contains(&tool_name)
+    crate::core::tool::is_cursor_agent(session_agent)
+        && (tool_name == "composer" || tool_name == "cursor")
 }
 
 /// Normalize a file path to be relative to the project root.
@@ -928,10 +925,7 @@ fn collect_session_transcripts(
 }
 
 fn is_cursor_session(agent: &str) -> bool {
-    matches!(
-        agent,
-        "cursor" | "agent" | "composer" | "ask" | "edit" | "normal" | "chat"
-    )
+    crate::core::tool::is_cursor_agent(agent)
 }
 
 /// Extract live session stats directly from the tool's data files at commit
@@ -988,6 +982,22 @@ fn extract_live_stats(
             });
         }
         return None;
+    }
+
+    // Fall through to the tool registry for all other tools (codex, opencode,
+    // aider, copilot, windsurf, trae, zed) so commit-time stats aren't lost.
+    let registry = crate::tools::registry();
+    for tool in registry.all() {
+        if !is_agent_tool_match(agent, tool.name()) {
+            continue;
+        }
+        if let Ok(sessions) = tool.sessions_for_project(project_root) {
+            if let Some(tool_session) = sessions.iter().find(|s| s.session_id == session_id) {
+                return tool.extract_native_stats(tool_session);
+            }
+        }
+        // One agent name maps to exactly one tool — don't try others.
+        break;
     }
 
     None

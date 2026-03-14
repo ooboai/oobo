@@ -89,6 +89,20 @@ fn check_env_vars() -> Option<CommitAuthor> {
         });
     }
 
+    if std::env::var("CLAUDECODE").is_ok() || std::env::var("CLAUDE_CODE_ENTRYPOINT").is_ok() {
+        return Some(CommitAuthor::Agent {
+            tool: "claude".to_string(),
+            session_id: None,
+        });
+    }
+
+    if std::env::var("CODEX_SANDBOX").is_ok() {
+        return Some(CommitAuthor::Agent {
+            tool: "codex".to_string(),
+            session_id: None,
+        });
+    }
+
     if std::env::var("CI").is_ok() {
         return Some(CommitAuthor::Automated);
     }
@@ -267,6 +281,74 @@ mod tests {
             result,
             Some(CommitAuthor::Agent {
                 tool: "cursor".to_string(),
+                session_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_detect_env_claudecode() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        let saved_cursor = std::env::var("CURSOR_TRACE_ID").ok();
+        let saved_claude = std::env::var("CLAUDECODE").ok();
+        std::env::remove_var("CURSOR_TRACE_ID");
+        std::env::set_var("CLAUDECODE", "1");
+
+        let result = check_env_vars();
+
+        if let Some(v) = saved_cursor {
+            std::env::set_var("CURSOR_TRACE_ID", v);
+        }
+        if let Some(v) = saved_claude {
+            std::env::set_var("CLAUDECODE", v);
+        } else {
+            std::env::remove_var("CLAUDECODE");
+        }
+
+        assert_eq!(
+            result,
+            Some(CommitAuthor::Agent {
+                tool: "claude".to_string(),
+                session_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_detect_env_codex_sandbox() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        let saved_cursor = std::env::var("CURSOR_TRACE_ID").ok();
+        let saved_claude = std::env::var("CLAUDECODE").ok();
+        let saved_entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT").ok();
+        let saved_codex = std::env::var("CODEX_SANDBOX").ok();
+        std::env::remove_var("CURSOR_TRACE_ID");
+        std::env::remove_var("CLAUDECODE");
+        std::env::remove_var("CLAUDE_CODE_ENTRYPOINT");
+        std::env::set_var("CODEX_SANDBOX", "seatbelt");
+
+        let result = check_env_vars();
+
+        if let Some(v) = saved_cursor {
+            std::env::set_var("CURSOR_TRACE_ID", v);
+        }
+        if let Some(v) = saved_claude {
+            std::env::set_var("CLAUDECODE", v);
+        }
+        if let Some(v) = saved_entrypoint {
+            std::env::set_var("CLAUDE_CODE_ENTRYPOINT", v);
+        }
+        if let Some(v) = saved_codex {
+            std::env::set_var("CODEX_SANDBOX", v);
+        } else {
+            std::env::remove_var("CODEX_SANDBOX");
+        }
+
+        assert_eq!(
+            result,
+            Some(CommitAuthor::Agent {
+                tool: "codex".to_string(),
                 session_id: None,
             })
         );

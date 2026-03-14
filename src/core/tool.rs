@@ -75,6 +75,15 @@ pub trait Tool: Send + Sync {
     }
 }
 
+/// Whether the given agent name refers to a Cursor session.
+/// Cursor hooks may report the agent as any of these mode names.
+pub fn is_cursor_agent(agent: &str) -> bool {
+    matches!(
+        agent,
+        "cursor" | "agent" | "composer" | "ask" | "edit" | "normal" | "chat"
+    )
+}
+
 /// Central registry of all supported AI tools.
 pub struct ToolRegistry {
     tools: Vec<Box<dyn Tool>>,
@@ -98,11 +107,12 @@ impl ToolRegistry {
             .map(|t| t.as_ref())
     }
 
-    /// Look up a tool by its source name.
+    /// Look up a tool by its source name or config key.
+    /// This handles the Cursor case where name() is "composer" but config_key() is "cursor".
     pub fn by_name(&self, name: &str) -> Option<&dyn Tool> {
         self.tools
             .iter()
-            .find(|t| t.name() == name)
+            .find(|t| t.name() == name || t.config_key() == name)
             .map(|t| t.as_ref())
     }
 
@@ -113,5 +123,25 @@ impl ToolRegistry {
             .iter()
             .map(|t| (t.name(), t.display_name()))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_cursor_agent() {
+        assert!(is_cursor_agent("cursor"));
+        assert!(is_cursor_agent("agent"));
+        assert!(is_cursor_agent("composer"));
+        assert!(is_cursor_agent("ask"));
+        assert!(is_cursor_agent("edit"));
+        assert!(is_cursor_agent("normal"));
+        assert!(is_cursor_agent("chat"));
+        assert!(!is_cursor_agent("claude"));
+        assert!(!is_cursor_agent("gemini"));
+        assert!(!is_cursor_agent("codex"));
+        assert!(!is_cursor_agent(""));
     }
 }

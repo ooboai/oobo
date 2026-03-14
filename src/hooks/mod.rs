@@ -190,10 +190,7 @@ fn dirty_worktree_files(project_root: &str) -> Vec<String> {
 }
 
 fn is_cursor_agent(agent: &str) -> bool {
-    matches!(
-        agent,
-        "cursor" | "agent" | "composer" | "ask" | "edit" | "normal" | "chat"
-    )
+    crate::core::tool::is_cursor_agent(agent)
 }
 
 #[cfg(test)]

@@ -64,4 +64,32 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_registry_by_name_cursor_alias() {
+        let reg = registry();
+        // CursorTool::name() returns "composer" but config_key() returns "cursor".
+        // by_name should find it via either.
+        assert!(reg.by_name("composer").is_some());
+        assert!(reg.by_name("cursor").is_some());
+        assert_eq!(
+            reg.by_name("composer").unwrap().display_name(),
+            reg.by_name("cursor").unwrap().display_name()
+        );
+    }
+
+    #[test]
+    fn test_registry_by_name_all_config_keys() {
+        let reg = registry();
+        let keys = [
+            "cursor", "claude", "gemini", "windsurf", "aider", "copilot", "codex", "opencode",
+            "trae", "zed",
+        ];
+        for key in keys {
+            assert!(
+                reg.by_name(key).is_some(),
+                "by_name({key:?}) should find a tool"
+            );
+        }
+    }
 }
