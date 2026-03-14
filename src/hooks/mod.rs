@@ -125,12 +125,11 @@ pub fn handle_event(
                     let files = if is_cursor_agent(agent) {
                         // Cursor: composerData (bubble DB) is the primary source.
                         // Fall back to per-edit tracking if DB is unavailable.
-                        let db_files =
-                            crate::tools::cursor::composer_data::files_edited_in_session(
-                                sid,
-                                &project_root,
-                                0,
-                            );
+                        let db_files = crate::tools::cursor::composer_data::files_edited_in_session(
+                            sid,
+                            &project_root,
+                            0,
+                        );
                         if db_files.is_empty() {
                             state::get_edited_files(&project_root, sid)
                         } else {
@@ -229,8 +228,8 @@ fn is_cursor_agent(agent: &str) -> bool {
 /// and the rest of the attribution pipeline represent file paths.
 /// Canonicalizes both sides to handle symlinks and macOS `/var` vs `/private/var`.
 fn make_relative(abs_path: &str, project_root: &str) -> String {
-    let abs = std::fs::canonicalize(abs_path)
-        .unwrap_or_else(|_| std::path::PathBuf::from(abs_path));
+    let abs =
+        std::fs::canonicalize(abs_path).unwrap_or_else(|_| std::path::PathBuf::from(abs_path));
     let root = std::fs::canonicalize(project_root)
         .unwrap_or_else(|_| std::path::PathBuf::from(project_root));
     abs.strip_prefix(&root)

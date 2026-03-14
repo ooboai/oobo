@@ -547,6 +547,12 @@ mod tests {
         assert!(user_cmd.contains("user-stop.sh"));
         let oobo_cmd = stops[1]["hooks"][0]["command"].as_str().unwrap();
         assert!(oobo_cmd.contains("oobo hooks agent stop"));
-        assert!(content["hooks"]["UserPromptSubmit"].as_array().unwrap().len() == 1);
+        assert!(
+            content["hooks"]["UserPromptSubmit"]
+                .as_array()
+                .unwrap()
+                .len()
+                == 1
+        );
     }
 }

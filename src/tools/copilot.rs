@@ -318,12 +318,12 @@ pub mod transcript {
 
     pub fn extract_stats(path: &Path) -> Option<crate::remote::payload::SessionStats> {
         let content = fs::read_to_string(path).ok()?;
-        let data: serde_json::Value =
-            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                replay_jsonl(&content)?
-            } else {
-                serde_json::from_str(&content).ok()?
-            };
+        let data: serde_json::Value = if path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+        {
+            replay_jsonl(&content)?
+        } else {
+            serde_json::from_str(&content).ok()?
+        };
         let requests = data.get("requests").and_then(|v| v.as_array())?;
 
         let model = requests
