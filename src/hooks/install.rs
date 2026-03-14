@@ -36,6 +36,9 @@ fn install_cursor_hooks() -> Option<String> {
             "beforeSubmitPrompt": [
                 { "command": "oobo hooks agent before-submit-prompt --tool cursor" }
             ],
+            "afterFileEdit": [
+                { "command": "oobo hooks agent after-file-edit --tool cursor" }
+            ],
             "stop": [
                 { "command": "oobo hooks agent stop --tool cursor" }
             ],
@@ -61,6 +64,16 @@ fn install_claude_hooks() -> Option<String> {
             "SessionStart": [{
                 "hooks": [{"type": "command", "command": "oobo hooks agent session-start --tool claude"}]
             }],
+            "UserPromptSubmit": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent before-submit-prompt --tool claude"}]
+            }],
+            "PostToolUse": [{
+                "matcher": "^(Write|Edit)$",
+                "hooks": [{"type": "command", "command": "oobo hooks agent after-file-edit --tool claude"}]
+            }],
+            "SubagentStop": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent subagent-stop --tool claude"}]
+            }],
             "Stop": [{
                 "hooks": [{"type": "command", "command": "oobo hooks agent stop --tool claude"}]
             }],
@@ -70,7 +83,7 @@ fn install_claude_hooks() -> Option<String> {
         }
     });
 
-    merge_json_file(&path, &oobo_hooks, &["hooks"])?;
+    merge_claude_hooks_file(&path, &oobo_hooks)?;
     Some(format!("Claude Code hooks → {}", path.display()))
 }
 
@@ -187,6 +200,56 @@ fn merge_cursor_hooks_file(path: &Path, oobo_config: &serde_json::Value) -> Opti
             }
         } else {
             hooks_obj.insert(event.clone(), handlers.clone());
+        }
+    }
+
+    let json = serde_json::to_string_pretty(&existing).ok()?;
+    fs::write(path, json).ok()?;
+
+    Some(())
+}
+
+/// Merge oobo hooks into Claude Code's ~/.claude/settings.json.
+/// Claude uses `{ "hooks": { "<Event>": [{ "matcher?": "...", "hooks": [{ "type": "command", "command": "..." }] }] } }`.
+/// For each event, we upsert oobo's matcher group: remove stale oobo entries then insert fresh ones.
+fn merge_claude_hooks_file(path: &Path, oobo_config: &serde_json::Value) -> Option<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok()?;
+    }
+
+    let mut existing: serde_json::Value = if path.exists() {
+        let content = fs::read_to_string(path).ok()?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let obj = existing.as_object_mut()?;
+    if !obj.contains_key("hooks") {
+        obj.insert("hooks".to_string(), serde_json::json!({}));
+    }
+    let hooks_obj = obj.get_mut("hooks")?.as_object_mut()?;
+    let oobo_hooks = oobo_config.get("hooks")?.as_object()?;
+
+    for (event, matcher_groups) in oobo_hooks {
+        let oobo_arr = matcher_groups.as_array()?;
+        if let Some(existing_arr) = hooks_obj.get_mut(event).and_then(|v| v.as_array_mut()) {
+            // Remove stale oobo matcher groups (any group whose hooks contain "oobo hooks agent")
+            existing_arr.retain(|group| {
+                let hooks = group.get("hooks").and_then(|h| h.as_array());
+                !hooks.is_some_and(|arr| {
+                    arr.iter().any(|h| {
+                        h.get("command")
+                            .and_then(|c| c.as_str())
+                            .is_some_and(|c| c.contains("oobo hooks agent"))
+                    })
+                })
+            });
+            for group in oobo_arr {
+                existing_arr.push(group.clone());
+            }
+        } else {
+            hooks_obj.insert(event.clone(), matcher_groups.clone());
         }
     }
 
@@ -403,5 +466,87 @@ mod tests {
 
         let backup = fs::read_to_string(hooks_dir.join("post-commit.pre-oobo")).unwrap();
         assert!(backup.contains("original"));
+    }
+
+    #[test]
+    fn test_merge_claude_hooks_file_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+
+        let oobo = serde_json::json!({
+            "hooks": {
+                "SessionStart": [{"hooks": [{"type": "command", "command": "oobo hooks agent session-start --tool claude"}]}],
+                "Stop": [{"hooks": [{"type": "command", "command": "oobo hooks agent stop --tool claude"}]}]
+            }
+        });
+        merge_claude_hooks_file(&path, &oobo);
+
+        let content: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let starts = content["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(starts.len(), 1);
+        let cmd = starts[0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(cmd.contains("session-start"));
+    }
+
+    #[test]
+    fn test_merge_claude_hooks_file_preserves_user_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+
+        let existing = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "user-script.sh"}]}]
+            },
+            "other_setting": true
+        });
+        fs::write(&path, serde_json::to_string_pretty(&existing).unwrap()).unwrap();
+
+        let oobo = serde_json::json!({
+            "hooks": {
+                "Stop": [{"hooks": [{"type": "command", "command": "oobo hooks agent stop --tool claude"}]}]
+            }
+        });
+        merge_claude_hooks_file(&path, &oobo);
+
+        let content: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(content["other_setting"], true);
+        assert_eq!(content["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(content["hooks"]["Stop"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_merge_claude_hooks_file_upgrades_stale_oobo() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+
+        let stale = serde_json::json!({
+            "hooks": {
+                "Stop": [
+                    {"hooks": [{"type": "command", "command": "oobo hooks agent stop --tool claude"}]},
+                    {"matcher": "Bash", "hooks": [{"type": "command", "command": "user-stop.sh"}]}
+                ]
+            }
+        });
+        fs::write(&path, serde_json::to_string_pretty(&stale).unwrap()).unwrap();
+
+        let oobo = serde_json::json!({
+            "hooks": {
+                "Stop": [{"hooks": [{"type": "command", "command": "oobo hooks agent stop --tool claude"}]}],
+                "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "oobo hooks agent before-submit-prompt --tool claude"}]}]
+            }
+        });
+        merge_claude_hooks_file(&path, &oobo);
+
+        let content: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let stops = content["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stops.len(), 2); // user hook + fresh oobo hook
+        let user_cmd = stops[0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(user_cmd.contains("user-stop.sh"));
+        let oobo_cmd = stops[1]["hooks"][0]["command"].as_str().unwrap();
+        assert!(oobo_cmd.contains("oobo hooks agent stop"));
+        assert!(content["hooks"]["UserPromptSubmit"].as_array().unwrap().len() == 1);
     }
 }

@@ -47,6 +47,11 @@ pub struct ActiveSession {
     /// Diff post_agent → committed = human's work.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_snapshots: Option<std::collections::HashMap<String, String>>,
+    /// Files edited by the agent, accumulated from `afterFileEdit` / `PostToolUse`
+    /// hooks. Used at `stop` time to know exactly which files to snapshot
+    /// (instead of scanning all dirty worktree files).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited_files: Option<std::collections::HashSet<String>>,
     pub started_at: i64,
     pub updated_at: i64,
 }
@@ -120,6 +125,7 @@ pub fn write_session(
         transcript_path: None,
         pre_agent_snapshots: None,
         file_snapshots: None,
+        edited_files: None,
         started_at: now,
         updated_at: now,
     };
@@ -157,6 +163,47 @@ pub fn touch_session(
     atomic_write_json(&path, &json)?;
 
     Ok(())
+}
+
+/// Record a file edited by the agent during this session.
+/// Called from `after-file-edit` hook events. Accumulates file paths so the
+/// `stop` handler can snapshot exactly the agent-touched files instead of
+/// scanning the entire worktree.
+pub fn record_edited_file(project_root: &str, session_id: &str, file_path: &str) -> Result<()> {
+    let path = session_path(project_root, session_id);
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&path)?;
+    let mut state: ActiveSession = serde_json::from_str(&content)?;
+
+    let mut files = state.edited_files.unwrap_or_default();
+    files.insert(file_path.to_string());
+    state.edited_files = Some(files);
+    state.updated_at = chrono::Utc::now().timestamp();
+
+    let json = serde_json::to_string_pretty(&state)?;
+    atomic_write_json(&path, &json)?;
+
+    Ok(())
+}
+
+/// Read the accumulated edited_files set from a session's state.
+pub fn get_edited_files(project_root: &str, session_id: &str) -> Vec<String> {
+    let path = session_path(project_root, session_id);
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let state: ActiveSession = match serde_json::from_str(&content) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    state
+        .edited_files
+        .map(|s| s.into_iter().collect())
+        .unwrap_or_default()
 }
 
 /// Remove a session state file (session ended).
@@ -454,6 +501,7 @@ mod tests {
             transcript_path: None,
             pre_agent_snapshots: None,
             file_snapshots: None,
+            edited_files: None,
             started_at: now,
             updated_at: now,
         };
@@ -465,6 +513,7 @@ mod tests {
             transcript_path: None,
             pre_agent_snapshots: None,
             file_snapshots: None,
+            edited_files: None,
             started_at: now,
             updated_at: now,
         };
@@ -476,6 +525,7 @@ mod tests {
             transcript_path: None,
             pre_agent_snapshots: None,
             file_snapshots: None,
+            edited_files: None,
             started_at: now,
             updated_at: now,
         };
@@ -517,5 +567,38 @@ mod tests {
         assert_eq!(sanitize_session_id("../"), "invalid");
         assert_eq!(sanitize_session_id(".."), "invalid");
         assert_eq!(sanitize_session_id(""), "invalid");
+    }
+
+    #[test]
+    fn test_record_and_get_edited_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        write_session(root_str, "edit-sess", "claude", None).unwrap();
+
+        assert!(get_edited_files(root_str, "edit-sess").is_empty());
+
+        record_edited_file(root_str, "edit-sess", "src/main.rs").unwrap();
+        record_edited_file(root_str, "edit-sess", "src/lib.rs").unwrap();
+        record_edited_file(root_str, "edit-sess", "src/main.rs").unwrap(); // duplicate
+
+        let files = get_edited_files(root_str, "edit-sess");
+        assert_eq!(files.len(), 2);
+        assert!(files.contains(&"src/main.rs".to_string()));
+        assert!(files.contains(&"src/lib.rs".to_string()));
+    }
+
+    #[test]
+    fn test_record_edited_file_nonexistent_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        let result = record_edited_file(root_str, "no-such-session", "file.rs");
+        assert!(result.is_ok()); // no-op, not an error
+        assert!(get_edited_files(root_str, "no-such-session").is_empty());
     }
 }

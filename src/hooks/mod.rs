@@ -92,30 +92,62 @@ pub fn handle_event(
                 }
             }
         }
+        "after-file-edit" => {
+            if let Some(sid) = session_id_field {
+                if !project_root.is_empty() {
+                    // Cursor: file_path at top level.
+                    // Claude PostToolUse: file_path inside tool_input.
+                    let file_path = event
+                        .extra
+                        .get("file_path")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| {
+                            event
+                                .extra
+                                .get("tool_input")
+                                .and_then(|ti| ti.get("file_path"))
+                                .and_then(|v| v.as_str())
+                        });
+
+                    if let Some(abs_path) = file_path {
+                        let rel = make_relative(abs_path, &project_root);
+                        let _ = state::record_edited_file(&project_root, sid, &rel);
+                    }
+                }
+            }
+        }
         "stop" => {
             if let Some(sid) = session_id_field {
                 let transcript_path = event.extra.get("transcript_path").and_then(|v| v.as_str());
                 state::touch_session(&project_root, sid, transcript_path)?;
 
                 if !project_root.is_empty() {
-                    if is_cursor_agent(agent) {
-                        // Cursor: use composerData for precise file list.
-                        let files = crate::tools::cursor::composer_data::files_edited_in_session(
-                            sid,
-                            &project_root,
-                            0,
-                        );
-                        if !files.is_empty() {
-                            let _ = state::snapshot_session_files(&project_root, sid, &files);
+                    let files = if is_cursor_agent(agent) {
+                        // Cursor: composerData (bubble DB) is the primary source.
+                        // Fall back to per-edit tracking if DB is unavailable.
+                        let db_files =
+                            crate::tools::cursor::composer_data::files_edited_in_session(
+                                sid,
+                                &project_root,
+                                0,
+                            );
+                        if db_files.is_empty() {
+                            state::get_edited_files(&project_root, sid)
+                        } else {
+                            db_files
                         }
                     } else {
-                        // Non-Cursor agents (Claude Code, Gemini, etc.): snapshot all
-                        // dirty files in the worktree so the interceptor can compute
-                        // precise AI vs human attribution at commit time.
-                        let files = dirty_worktree_files(&project_root);
-                        if !files.is_empty() {
-                            let _ = state::snapshot_session_files(&project_root, sid, &files);
+                        // Non-Cursor: per-edit tracking is the primary source.
+                        // Fall back to dirty worktree scan if no edits were tracked.
+                        let tracked = state::get_edited_files(&project_root, sid);
+                        if tracked.is_empty() {
+                            dirty_worktree_files(&project_root)
+                        } else {
+                            tracked
                         }
+                    };
+                    if !files.is_empty() {
+                        let _ = state::snapshot_session_files(&project_root, sid, &files);
                     }
                 }
             }
@@ -193,6 +225,19 @@ fn is_cursor_agent(agent: &str) -> bool {
     crate::core::tool::is_cursor_agent(agent)
 }
 
+/// Strip the project root prefix to get a relative path, matching how git
+/// and the rest of the attribution pipeline represent file paths.
+/// Canonicalizes both sides to handle symlinks and macOS `/var` vs `/private/var`.
+fn make_relative(abs_path: &str, project_root: &str) -> String {
+    let abs = std::fs::canonicalize(abs_path)
+        .unwrap_or_else(|_| std::path::PathBuf::from(abs_path));
+    let root = std::fs::canonicalize(project_root)
+        .unwrap_or_else(|_| std::path::PathBuf::from(project_root));
+    abs.strip_prefix(&root)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| abs_path.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,5 +295,23 @@ mod tests {
         let json = r#"{"session_id": "s1", "agent": "agent"}"#;
         let event: HookEvent = serde_json::from_str(json).unwrap();
         assert_eq!(event.agent.as_deref(), Some("agent"));
+    }
+
+    #[test]
+    fn test_make_relative_strips_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let file = root.join("src/main.rs");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(&file, "fn main() {}").unwrap();
+
+        let result = make_relative(file.to_str().unwrap(), root.to_str().unwrap());
+        assert_eq!(result, "src/main.rs");
+    }
+
+    #[test]
+    fn test_make_relative_outside_project() {
+        let result = make_relative("/tmp/other/file.rs", "/home/user/project");
+        assert_eq!(result, "/tmp/other/file.rs");
     }
 }
