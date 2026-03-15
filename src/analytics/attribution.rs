@@ -294,7 +294,7 @@ fn parse_git_log(project_path: &str, days: u32) -> Result<Vec<GitCommit>, String
             "-C",
             project_path,
             "log",
-            "--all",
+            "--first-parent",
             &since,
             "--format=%H|%at|%s",
             "--numstat",

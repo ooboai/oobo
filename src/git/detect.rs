@@ -49,16 +49,15 @@ pub fn detect(project_root: &str) -> CommitAuthor {
     }
 
     if let Some(author) = check_env_vars() {
-        if interactive {
-            return CommitAuthor::Assisted {
-                tool: match &author {
-                    CommitAuthor::Agent { tool, .. } => tool.clone(),
-                    _ => "unknown".into(),
-                },
-                session_id: None,
-            };
+        match &author {
+            CommitAuthor::Agent { tool, .. } if interactive => {
+                return CommitAuthor::Assisted {
+                    tool: tool.clone(),
+                    session_id: None,
+                };
+            }
+            _ => return author,
         }
-        return author;
     }
 
     if interactive {
@@ -386,5 +385,35 @@ mod tests {
 
         let result = check_active_sessions(root.to_str().unwrap());
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_check_env_vars_ci_returns_automated() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        let saved_ci = std::env::var("CI").ok();
+        let saved_cursor = std::env::var("CURSOR_TRACE_ID").ok();
+        let saved_claude = std::env::var("CLAUDECODE").ok();
+        std::env::remove_var("CURSOR_TRACE_ID");
+        std::env::remove_var("CLAUDECODE");
+        std::env::remove_var("CLAUDE_CODE_ENTRYPOINT");
+        std::env::remove_var("CODEX_SANDBOX");
+        std::env::set_var("CI", "1");
+
+        let result = check_env_vars();
+
+        if let Some(v) = saved_ci {
+            std::env::set_var("CI", v);
+        } else {
+            std::env::remove_var("CI");
+        }
+        if let Some(v) = saved_cursor {
+            std::env::set_var("CURSOR_TRACE_ID", v);
+        }
+        if let Some(v) = saved_claude {
+            std::env::set_var("CLAUDECODE", v);
+        }
+
+        assert_eq!(result, Some(CommitAuthor::Automated));
     }
 }

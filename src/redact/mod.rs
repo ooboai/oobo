@@ -28,7 +28,14 @@ pub fn gitleaks_available() -> bool {
 /// Returns redacted text or None if gitleaks is not available.
 fn redact_with_gitleaks(text: &str) -> Option<String> {
     let tmp_dir = std::env::temp_dir();
-    let tmp_path = tmp_dir.join(format!("oobo-redact-{}.txt", std::process::id()));
+    let tmp_path = tmp_dir.join(format!(
+        "oobo-redact-{}-{}.txt",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+    ));
     std::fs::write(&tmp_path, text).ok()?;
 
     let result = redact_with_gitleaks_inner(text, &tmp_path);

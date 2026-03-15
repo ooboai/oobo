@@ -64,16 +64,13 @@ pub fn write_anchor(
 fn strip_absolute_paths(text: &str, project_root: &str) -> String {
     let mut result = text.to_string();
 
-    // Strip project root (with and without trailing slash)
     let root_slash = if project_root.ends_with('/') {
         project_root.to_string()
     } else {
         format!("{project_root}/")
     };
     result = result.replace(&root_slash, "");
-    result = result.replace(project_root, "");
 
-    // Strip home directory from any other absolute paths
     if let Some(home) = dirs::home_dir() {
         let home_str = home.to_string_lossy();
         let home_slash = format!("{home_str}/");
@@ -228,10 +225,14 @@ pub fn push(project_root: &str) -> Result<(), String> {
                 last_err = e;
                 if attempt < MAX_PUSH_ATTEMPTS - 1 {
                     let _ = git_in(project_root, &["fetch", "origin", BRANCH]);
-                    let _ = git_in(
+                    if git_in(
                         project_root,
                         &["rebase", &format!("origin/{BRANCH}"), BRANCH],
-                    );
+                    )
+                    .is_err()
+                    {
+                        let _ = git_in(project_root, &["rebase", "--abort"]);
+                    }
                     jitter_sleep(attempt);
                 }
             }
@@ -351,7 +352,15 @@ fn write_to_branch(project_root: &str, entries: &[(String, String)]) -> Result<(
 
     let env_key = "GIT_INDEX_FILE";
     let git_common = crate::git::detect::resolve_git_common_dir(project_root);
-    let tmp_index = format!("{}/oobo-index-tmp", git_common.display());
+    let tmp_index = format!(
+        "{}/oobo-index-{}-{}",
+        git_common.display(),
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+    );
 
     git_env_in(
         project_root,
@@ -391,7 +400,12 @@ fn write_to_branch(project_root: &str, entries: &[(String, String)]) -> Result<(
 
     git_in(
         project_root,
-        &["update-ref", &format!("refs/heads/{BRANCH}"), &new_commit],
+        &[
+            "update-ref",
+            &format!("refs/heads/{BRANCH}"),
+            &new_commit,
+            &parent,
+        ],
     )?;
 
     Ok(())
@@ -704,5 +718,16 @@ mod tests {
         let input = r#"{"path":"src/main.rs"}"#;
         let result = strip_absolute_paths(input, root);
         assert_eq!(result, r#"{"path":"src/main.rs"}"#);
+    }
+
+    #[test]
+    fn test_strip_absolute_paths_does_not_mangle_prefix_match() {
+        let root = "/path/myapp";
+        let input = r#"{"path":"/path/myapp-backup/file.rs"}"#;
+        let result = strip_absolute_paths(input, root);
+        assert!(
+            result.contains("/myapp-backup/file.rs"),
+            "should preserve paths that share a prefix but aren't inside the project root: {result}"
+        );
     }
 }

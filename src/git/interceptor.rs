@@ -280,7 +280,8 @@ fn enrich_commit(
 
     let total_lines = git_context.insertions + git_context.deletions;
     let ai_percentage = if total_lines > 0 {
-        Some(((ai_added + ai_deleted) as f64 / total_lines as f64) * 100.0)
+        let pct = ((ai_added + ai_deleted) as f64 / total_lines as f64) * 100.0;
+        Some(pct.min(100.0))
     } else {
         None
     };
@@ -711,6 +712,10 @@ fn filter_by_recency(
 ) -> Vec<crate::hooks::state::ActiveSession> {
     let now = chrono::Utc::now().timestamp();
 
+    if sessions.is_empty() {
+        return Vec::new();
+    }
+
     let mut sorted: Vec<&crate::hooks::state::ActiveSession> = sessions.iter().collect();
     sorted.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
 
@@ -1060,5 +1065,11 @@ mod tests {
         assert_eq!(ctx.files_changed, 1);
         assert_eq!(ctx.insertions, 5);
         assert_eq!(ctx.deletions, 0);
+    }
+
+    #[test]
+    fn test_filter_by_recency_empty() {
+        let result = filter_by_recency(&[]);
+        assert!(result.is_empty());
     }
 }

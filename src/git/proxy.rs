@@ -28,6 +28,9 @@ pub fn run_git_capture(cfg: &Config, args: &[&str]) -> Result<String, String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_QUARANTINE_PATH")
         .output()
         .map_err(|e| format!("failed to run {git_path}: {e}"))?;
 
@@ -225,7 +228,7 @@ fn resolve_clone_dir(args: &[&str]) -> Option<String> {
 /// Print a one-line stderr hint when an agent runs a read-only git command
 /// through oobo, so it discovers enriched alternatives.
 fn maybe_print_agent_hint(args: &[&str]) {
-    let cmd = args.first().copied().unwrap_or("");
+    let cmd = commands::subcommand_name(args).unwrap_or("");
     let hint = match cmd {
         "log" => Some("oobo anchors --agent"),
         "shortlog" => Some("oobo anchors --agent"),

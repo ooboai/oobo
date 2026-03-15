@@ -12,11 +12,14 @@ const MARKER_NAME: &str = "oobo-initialized";
 /// does work once per repo (writes a marker file).
 pub fn check_first_use(cfg: &Config, project_root: &str) {
     let marker = crate::git::detect::resolve_git_dir(project_root).join(MARKER_NAME);
-    if marker.exists() {
-        return;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&marker)
+    {
+        Ok(_) => {}
+        Err(_) => return,
     }
-
-    let _ = std::fs::write(&marker, "");
 
     // First-use notice so the user knows oobo is active here.
     if crate::git::detect::is_interactive() {
