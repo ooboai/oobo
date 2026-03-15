@@ -455,6 +455,23 @@ impl Tool for OpenCodeTool {
         crate::tools::opencode::transcript::read_transcript(path, max_messages)
     }
 
+    fn read_transcript_by_id(
+        &self,
+        _project_path: &str,
+        session_id: &str,
+        max_messages: u32,
+    ) -> String {
+        if let Some(db_path) = crate::tools::opencode::find_db_path() {
+            crate::tools::opencode::transcript::read_transcript_for_session(
+                &db_path,
+                session_id,
+                max_messages,
+            )
+        } else {
+            String::new()
+        }
+    }
+
     fn extract_native_stats(&self, session: &Session) -> Option<NativeStats> {
         let stats = crate::tools::opencode::transcript::stats_for_session(
             &session.project_path,

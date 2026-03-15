@@ -107,7 +107,10 @@ fn install_latest(tag: &str) -> Result<(), String> {
         eprintln!("oobo: warning: could not backup current binary: {e}");
     }
 
-    std::fs::copy(&new_binary, &current_exe).map_err(|e| format!("cannot replace binary: {e}"))?;
+    if let Err(e) = std::fs::copy(&new_binary, &current_exe) {
+        let _ = std::fs::rename(&backup, &current_exe);
+        return Err(format!("cannot replace binary: {e}"));
+    }
 
     let _ = std::fs::remove_file(&backup);
     let _ = std::fs::remove_dir_all(&tmp_dir);

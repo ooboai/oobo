@@ -1068,6 +1068,102 @@ mod tests {
     }
 
     #[test]
+    fn test_modern_parse_messages_for_session() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("opencode.db");
+        create_modern_test_db(&db_path);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO project (id, worktree, time_created, time_updated) VALUES ('p1', '/dev', 1000, 1000)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO session (id, project_id, title, time_created, time_updated) \
+             VALUES ('s1', 'p1', 'test session', 1772701435000, 1772701472000)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+            ('m1', 's1', 1772701435000, 1772701435000, '{"role":"user"}')"#,
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+            ('m2', 's1', 1772701446000, 1772701446000, '{"role":"assistant","modelID":"gpt-4"}')"#,
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+            ('p1', 'm1', 's1', 1772701435000, 1772701435000, '{"type":"text","text":"Hello"}')"#,
+            [],
+        ).unwrap();
+        conn.execute(
+            r#"INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+            ('p2', 'm2', 's1', 1772701446000, 1772701446000, '{"type":"text","text":"Hi there!"}')"#,
+            [],
+        ).unwrap();
+        drop(conn);
+
+        let messages = transcript::parse_messages_for_session(&db_path, "s1");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[0].text, "Hello");
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[1].text, "Hi there!");
+    }
+
+    #[test]
+    fn test_read_transcript_for_session() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("opencode.db");
+        create_legacy_test_db(&db_path);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO session (id, title, created_at, updated_at) VALUES ('s1', 'test', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message (id, session_id, role, content, created_at) VALUES ('m1', 's1', 'user', 'hello', 1000)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO message (id, session_id, role, content, created_at) VALUES ('m2', 's1', 'assistant', 'hi there', 2000)",
+            [],
+        ).unwrap();
+        drop(conn);
+
+        let text = transcript::read_transcript_for_session(&db_path, "s1", 10);
+        assert!(!text.is_empty());
+        assert!(text.contains("hello"));
+        assert!(text.contains("hi there"));
+    }
+
+    #[test]
+    fn test_parse_messages_returns_empty_without_session_context() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("opencode.db");
+        create_legacy_test_db(&db_path);
+
+        let messages = transcript::parse_messages(&db_path);
+        assert!(
+            messages.is_empty(),
+            "parse_messages without session context should return empty"
+        );
+
+        let text = transcript::read_transcript(&db_path, 10);
+        assert!(
+            text.is_empty(),
+            "read_transcript without session context should return empty"
+        );
+    }
+
+    #[test]
     fn test_title_truncation() {
         let tmp = tempfile::TempDir::new().unwrap();
         let db_path = tmp.path().join("opencode.db");
