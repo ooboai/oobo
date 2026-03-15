@@ -62,20 +62,25 @@ fn resolve_workspace_for_session(session_id: &str) -> Option<String> {
             continue;
         }
 
-        let conn = crate::utils::open_db_readonly(&db_path).ok()?;
+        let conn = match crate::utils::open_db_readonly(&db_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
 
-        let mut stmt = conn
-            .prepare(
-                "SELECT value FROM ItemTable WHERE key LIKE '%cascade%' OR key LIKE '%session%'",
-            )
-            .ok()?;
+        let mut stmt = match conn.prepare(
+            "SELECT value FROM ItemTable WHERE key LIKE '%cascade%' OR key LIKE '%session%'",
+        ) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
 
-        let rows = stmt
-            .query_map([], |row| {
-                let v: String = row.get(0)?;
-                Ok(v)
-            })
-            .ok()?;
+        let rows = match stmt.query_map([], |row| {
+            let v: String = row.get(0)?;
+            Ok(v)
+        }) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
 
         for row in rows.flatten() {
             if row.contains(session_id) {

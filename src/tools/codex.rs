@@ -12,6 +12,14 @@ fn sessions_dir() -> Option<PathBuf> {
     codex_dir().map(|d| d.join("sessions"))
 }
 
+fn normalize_ts(ts: i64) -> i64 {
+    if ts > 1_000_000_000_000 {
+        ts
+    } else {
+        ts * 1000
+    }
+}
+
 /// Parse a rollout JSONL file to extract session metadata.
 fn session_from_rollout(path: &Path) -> Option<Session> {
     let content = fs::read_to_string(path).ok()?;
@@ -221,8 +229,8 @@ fn sessions_from_sqlite() -> Result<Vec<Session>, String> {
                 session_id,
                 name: crate::utils::truncate_name(&title, crate::utils::MAX_SESSION_NAME_LEN),
                 mode: "codex".to_string(),
-                created_at: Some(created_at * 1000),
-                updated_at: Some(updated_at * 1000),
+                created_at: Some(normalize_ts(created_at)),
+                updated_at: Some(normalize_ts(updated_at)),
                 project_path: cwd,
                 workspace_dir: String::new(),
                 source: "codex".to_string(),

@@ -36,7 +36,10 @@ fn replay_jsonl(content: &str) -> Option<serde_json::Value> {
         if line.is_empty() {
             continue;
         }
-        let entry: serde_json::Value = serde_json::from_str(line).ok()?;
+        let entry: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
         let kind = entry.get("kind").and_then(|k| k.as_u64()).unwrap_or(99);
 
         match kind {
@@ -374,6 +377,30 @@ pub mod transcript {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_replay_jsonl_skips_malformed_lines() {
+        let content = r#"{"kind":0,"v":{"sessionId":"abc","requests":[]},"vscode":"1.85.1"}
+not valid json at all!!!
+{"kind":1,"k":["title"],"v":"My Chat"}
+{"kind":2,"k":["requests"],"v":[{"requestId":"r1","message":{"text":"hello"}}]}"#;
+        let result = replay_jsonl(content);
+        assert!(
+            result.is_some(),
+            "replay_jsonl should skip malformed lines, not bail"
+        );
+        let v = result.unwrap();
+        assert_eq!(v.get("sessionId").unwrap().as_str().unwrap(), "abc");
+        assert_eq!(v.get("title").unwrap().as_str().unwrap(), "My Chat");
+        let requests = v.get("requests").unwrap().as_array().unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[test]
+    fn test_replay_jsonl_empty_input() {
+        assert!(replay_jsonl("").is_none());
+        assert!(replay_jsonl("\n\n").is_none());
+    }
 
     #[test]
     fn test_parse_copilot_session() {

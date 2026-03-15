@@ -326,47 +326,15 @@ fn migrate_v6(conn: &Connection) -> Result<(), String> {
 }
 
 fn migrate_v7(conn: &Connection) -> Result<(), String> {
+    // v7 was originally a duplicate of v5 (anchors + anchor_sessions tables).
+    // Since v5 already created them with IF NOT EXISTS, v7 was a no-op.
+    // Kept as placeholder to preserve version numbering for existing databases.
     conn.execute_batch(
         "
-        CREATE TABLE IF NOT EXISTS anchors (
-            commit_hash TEXT PRIMARY KEY,
-            branch TEXT,
-            author TEXT,
-            committed_at INTEGER,
-            message TEXT,
-            files_changed TEXT DEFAULT '[]',
-            lines_added INTEGER DEFAULT 0,
-            lines_deleted INTEGER DEFAULT 0,
-            session_ids TEXT DEFAULT '[]',
-            summary TEXT,
-            intent TEXT,
-            reasoning TEXT,
-            transparency_mode TEXT DEFAULT 'off',
-            oobo_version TEXT,
-            raw_json TEXT,
-            created_at INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS anchor_sessions (
-            commit_hash TEXT NOT NULL REFERENCES anchors(commit_hash),
-            session_id TEXT NOT NULL,
-            agent TEXT NOT NULL,
-            model TEXT,
-            link_type TEXT NOT NULL DEFAULT 'inferred',
-            input_tokens INTEGER,
-            output_tokens INTEGER,
-            cache_read_tokens INTEGER,
-            cache_creation_tokens INTEGER,
-            duration_secs INTEGER,
-            tool_calls INTEGER,
-            files_touched TEXT,
-            is_subagent INTEGER DEFAULT 0,
-            PRIMARY KEY (commit_hash, session_id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_anchors_branch ON anchors(branch);
-        CREATE INDEX IF NOT EXISTS idx_anchors_committed_at ON anchors(committed_at);
-        CREATE INDEX IF NOT EXISTS idx_anchor_sessions_session ON anchor_sessions(session_id);
+        CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at);
+        CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_session_stats_source ON session_stats(source);
         ",
     )
     .map_err(|e| format!("migration v7 failed: {e}"))?;
@@ -405,5 +373,24 @@ mod tests {
         assert!(tables.contains(&"session_stats".to_string()));
         assert!(tables.contains(&"events".to_string()));
         assert!(tables.contains(&"project_settings".to_string()));
+    }
+
+    #[test]
+    fn test_migration_v7_creates_indexes() {
+        let conn = Connection::open_in_memory().unwrap();
+        run(&conn).unwrap();
+
+        let indexes: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert!(indexes.contains(&"idx_sessions_created".to_string()));
+        assert!(indexes.contains(&"idx_sessions_updated".to_string()));
+        assert!(indexes.contains(&"idx_events_timestamp".to_string()));
+        assert!(indexes.contains(&"idx_session_stats_source".to_string()));
     }
 }

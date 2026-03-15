@@ -99,7 +99,8 @@ pub fn all_sessions() -> Result<Vec<Session>, String> {
                 if let Ok(entries) = fs::read_dir(&dir) {
                     for entry in entries.flatten() {
                         let p = entry.path();
-                        if p.is_file() {
+                        let ext = p.extension().and_then(|e| e.to_str());
+                        if p.is_file() && matches!(ext, Some("json" | "jsonl")) {
                             if let Some(s) = parse_conversation_file(&p) {
                                 sessions.push(s);
                             }

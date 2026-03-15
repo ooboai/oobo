@@ -52,7 +52,9 @@ impl Db {
 
     fn init(&self) -> Result<(), String> {
         self.conn
-            .execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+            .execute_batch(
+                "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
+            )
             .map_err(|e| format!("cannot set pragmas: {e}"))?;
         migrations::run(&self.conn)?;
         Ok(())
@@ -200,6 +202,16 @@ mod tests {
             .unwrap();
         // In-memory databases use "memory" mode, not WAL
         assert!(!mode.is_empty());
+    }
+
+    #[test]
+    fn test_busy_timeout_set() {
+        let db = Db::open_in_memory().unwrap();
+        let timeout: i32 = db
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
     }
 
     fn seed_project_and_session(db: &Db) {

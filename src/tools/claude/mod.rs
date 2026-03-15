@@ -19,7 +19,7 @@ pub fn claude_projects_dir() -> Option<PathBuf> {
 /// Convert a filesystem path to Claude's project directory slug.
 /// `/home/user/projects/my-app` → `-home-user-projects-my-app`
 pub fn path_to_slug(path: &str) -> String {
-    path.replace('/', "-")
+    path.replace(['/', '\\'], "-")
 }
 
 /// Get all sessions for a given project root.
@@ -236,6 +236,15 @@ mod tests {
             "-home-user-projects-my-app"
         );
         assert_eq!(path_to_slug("/tmp"), "-tmp");
+    }
+
+    #[test]
+    fn test_path_to_slug_windows() {
+        assert_eq!(
+            path_to_slug("C:\\Users\\dev\\project"),
+            "C:-Users-dev-project"
+        );
+        assert_eq!(path_to_slug("D:\\code\\my-app"), "D:-code-my-app");
     }
 
     #[test]

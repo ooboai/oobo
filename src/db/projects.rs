@@ -132,24 +132,43 @@ impl Db {
 
     pub fn delete_project(&self, id: &str) -> Result<(), String> {
         self.conn
-            .execute("DELETE FROM session_stats WHERE (session_id, source) IN (SELECT id, source FROM sessions WHERE project_id = ?1)", params![id])
-            .map_err(|e| format!("cannot delete session_stats: {e}"))?;
-        self.conn
-            .execute("DELETE FROM sessions WHERE project_id = ?1", params![id])
-            .map_err(|e| format!("cannot delete sessions: {e}"))?;
-        self.conn
-            .execute("DELETE FROM events WHERE project_id = ?1", params![id])
-            .map_err(|e| format!("cannot delete events: {e}"))?;
-        self.conn
-            .execute(
-                "DELETE FROM project_settings WHERE project_id = ?1",
-                params![id],
-            )
-            .map_err(|e| format!("cannot delete settings: {e}"))?;
-        self.conn
-            .execute("DELETE FROM projects WHERE id = ?1", params![id])
-            .map_err(|e| format!("cannot delete project: {e}"))?;
-        Ok(())
+            .execute_batch("BEGIN")
+            .map_err(|e| format!("cannot begin transaction: {e}"))?;
+
+        let result = (|| -> Result<(), String> {
+            self.conn
+                .execute("DELETE FROM session_stats WHERE (session_id, source) IN (SELECT id, source FROM sessions WHERE project_id = ?1)", params![id])
+                .map_err(|e| format!("cannot delete session_stats: {e}"))?;
+            self.conn
+                .execute("DELETE FROM sessions WHERE project_id = ?1", params![id])
+                .map_err(|e| format!("cannot delete sessions: {e}"))?;
+            self.conn
+                .execute("DELETE FROM events WHERE project_id = ?1", params![id])
+                .map_err(|e| format!("cannot delete events: {e}"))?;
+            self.conn
+                .execute(
+                    "DELETE FROM project_settings WHERE project_id = ?1",
+                    params![id],
+                )
+                .map_err(|e| format!("cannot delete settings: {e}"))?;
+            self.conn
+                .execute("DELETE FROM projects WHERE id = ?1", params![id])
+                .map_err(|e| format!("cannot delete project: {e}"))?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => {
+                self.conn
+                    .execute_batch("COMMIT")
+                    .map_err(|e| format!("cannot commit: {e}"))?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
     }
 
     #[cfg(test)]
@@ -587,5 +606,15 @@ mod tests {
             synced: false,
         })
         .unwrap();
+    }
+
+    #[test]
+    fn test_delete_nonexistent_project_succeeds() {
+        let db = test_db();
+        let result = db.delete_project("does-not-exist");
+        assert!(
+            result.is_ok(),
+            "deleting nonexistent project should not error"
+        );
     }
 }

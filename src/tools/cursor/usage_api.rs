@@ -13,7 +13,7 @@ pub fn extract_jwt() -> Option<String> {
     let conn = crate::utils::open_db_readonly(&db_path).ok()?;
 
     // Cursor stores auth tokens in state.vscdb under various keys
-    let token_keys = ["cursorAuth/accessToken", "cursorAuth/cachedSignUpType"];
+    let token_keys = ["cursorAuth/accessToken"];
 
     for key in &token_keys {
         let result: Result<String, _> =
