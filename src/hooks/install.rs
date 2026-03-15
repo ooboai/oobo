@@ -290,9 +290,7 @@ fn merge_json_file(
                 {
                     let mut merged = existing_inner.clone();
                     for (k, v) in oobo_inner {
-                        if !merged.contains_key(k) {
-                            merged.insert(k.clone(), v.clone());
-                        }
+                        merged.insert(k.clone(), v.clone());
                     }
                     existing_obj.insert(key.to_string(), serde_json::Value::Object(merged));
                 }

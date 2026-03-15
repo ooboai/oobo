@@ -234,7 +234,10 @@ impl Config {
             toml::to_string_pretty(self).map_err(|e| format!("cannot serialize config: {e}"))?;
 
         let path = Self::config_path();
-        fs::write(&path, &content).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        let tmp_path = path.with_extension("tmp");
+        fs::write(&tmp_path, &content)
+            .map_err(|e| format!("cannot write {}: {e}", tmp_path.display()))?;
+        fs::rename(&tmp_path, &path).map_err(|e| format!("cannot rename config: {e}"))?;
 
         #[cfg(unix)]
         if self.has_any_key() {

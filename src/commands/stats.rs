@@ -12,6 +12,10 @@ pub fn run(
 
     let since_ts = since.as_deref().and_then(parse_since);
 
+    if since_ts.is_some() && (project.is_some() || tool.is_some()) {
+        eprintln!("oobo: warning: --since is not yet supported with --project or --tool and will be ignored");
+    }
+
     let (stats, scope_label) = if let Some(ref proj) = project {
         let p = find_project_id(&db, proj)?;
         let name = db

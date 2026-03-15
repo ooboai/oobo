@@ -24,11 +24,10 @@ pub fn send(title: &str, message: &str) {
             }
         }
 
-        let script = format!(
-            "display notification \"{}\" with title \"{}\"",
-            message.replace('"', "\\\""),
-            title.replace('"', "\\\"")
-        );
+        let escaped_msg = message.replace('\\', "\\\\").replace('"', "\\\"");
+        let escaped_title = title.replace('\\', "\\\\").replace('"', "\\\"");
+        let script =
+            format!("display notification \"{escaped_msg}\" with title \"{escaped_title}\"");
         let _ = std::process::Command::new("osascript")
             .args(["-e", &script])
             .stdin(std::process::Stdio::null())

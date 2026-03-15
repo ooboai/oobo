@@ -17,9 +17,12 @@ pub fn detect_family(model: &str) -> ModelFamily {
     if m.contains("o200k")
         || m.contains("gpt-4o")
         || m.contains("gpt-5")
-        || m.contains("o1")
-        || m.contains("o3")
-        || m.contains("o4")
+        || m.starts_with("o1")
+        || m.starts_with("o3")
+        || m.starts_with("o4")
+        || m.contains("-o1")
+        || m.contains("-o3")
+        || m.contains("-o4")
     {
         return ModelFamily::O200k;
     }
@@ -106,6 +109,16 @@ mod tests {
     #[test]
     fn test_detect_family_unknown() {
         assert_eq!(detect_family("some-unknown-model"), ModelFamily::Cl100k);
+    }
+
+    #[test]
+    fn test_detect_family_no_false_positives() {
+        assert_eq!(detect_family("proto1-model"), ModelFamily::Cl100k);
+        assert_eq!(detect_family("co1umn-reader"), ModelFamily::Cl100k);
+        assert_eq!(
+            detect_family("anthropic/claude-sonnet-4-20250514"),
+            ModelFamily::Cl100k
+        );
     }
 
     #[test]

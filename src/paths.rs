@@ -45,7 +45,12 @@ pub fn git_project_root() -> String {
 
 /// The root oobo configuration directory (`~/.oobo`).
 pub fn oobo_home() -> PathBuf {
+    if let Ok(v) = std::env::var("OOBO_HOME") {
+        return PathBuf::from(v);
+    }
     dirs::home_dir()
+        .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
+        .or_else(|| std::env::var("USERPROFILE").ok().map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".oobo")
 }

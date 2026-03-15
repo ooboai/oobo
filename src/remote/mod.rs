@@ -46,17 +46,17 @@ pub fn send_event(
         }
 
         // Duplicate anchor → (git_remote, commit_hash) unique constraint.
-        // Treat as success.
-        if status.as_u16() == 409 || status.as_u16() == 500 {
-            if let Ok(body) = resp.text() {
-                if body.contains("duplicate") || body.contains("unique") || body.contains("UNIQUE")
-                {
-                    return;
-                }
-                if status.as_u16() == 500 {
-                    eprintln!("oobo: warning: server error during sync: {body}");
-                }
+        // Treat 409 as success.
+        if status.as_u16() == 409 {
+            return;
+        }
+
+        if status.as_u16() == 500 {
+            let body = resp.text().unwrap_or_default();
+            if body.contains("duplicate") || body.contains("unique") || body.contains("UNIQUE") {
+                return;
             }
+            eprintln!("oobo: warning: server error during sync: {body}");
             return;
         }
 

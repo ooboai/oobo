@@ -99,8 +99,9 @@ fn print_plain(projects: &[crate::tui::projects::ProjectDisplay]) -> Result<(), 
         "PROJECT", "SESSIONS", "TOOLS", "TOKENS", "COST"
     );
     for p in projects {
-        let name = if p.name.len() > 26 {
-            format!("{}…", &p.name[..25])
+        let name = if p.name.chars().count() > 26 {
+            let truncated: String = p.name.chars().take(25).collect();
+            format!("{truncated}…")
         } else {
             p.name.clone()
         };
@@ -239,8 +240,9 @@ fn show_project(db: &Db, name: &str) -> Result<(), String> {
         println!("  \x1b[1;36mRecent Sessions\x1b[0m");
         for s in sessions.iter().take(10) {
             let name_display = s.name.as_deref().unwrap_or("(untitled)");
-            let display = if name_display.len() > 50 {
-                format!("{}…", &name_display[..49])
+            let display = if name_display.chars().count() > 50 {
+                let truncated: String = name_display.chars().take(49).collect();
+                format!("{truncated}…")
             } else {
                 name_display.to_string()
             };
