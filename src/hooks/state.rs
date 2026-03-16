@@ -156,7 +156,10 @@ pub fn ensure_session(
     }
     let dir = sessions_dir(project_root);
     if !dir.parent().map(|p| p.exists()).unwrap_or(false) {
-        log_ensure(&format!("skip: parent dir missing for {}", dir.display()), session_id);
+        log_ensure(
+            &format!("skip: parent dir missing for {}", dir.display()),
+            session_id,
+        );
         return Ok(());
     }
     log_ensure(&format!("creating in {}", dir.display()), session_id);

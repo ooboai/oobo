@@ -168,10 +168,7 @@ fn stats_model(db: &Option<crate::db::Db>, session_id: &str, source: &str) -> Op
 }
 
 fn upload_share(cfg: &Config, json_body: &str, agent: bool) -> Result<(), String> {
-    let url = format!(
-        "{}/anchors/share",
-        cfg.server.url.trim_end_matches('/')
-    );
+    let url = format!("{}/anchors/share", cfg.server.url.trim_end_matches('/'));
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
