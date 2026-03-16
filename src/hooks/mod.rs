@@ -85,6 +85,8 @@ pub fn handle_event(
         }
         "before-submit-prompt" => {
             if let Some(sid) = session_id_field {
+                // Self-heal: create session file if sessionStart fired before git init.
+                let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
                 // Capture pre-agent state: any dirty files right now are
                 // human edits (the agent hasn't started its turn yet).
                 if !project_root.is_empty() {
@@ -94,6 +96,8 @@ pub fn handle_event(
         }
         "after-file-edit" => {
             if let Some(sid) = session_id_field {
+                // Self-heal: create session file if sessionStart fired before git init.
+                let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
                 if !project_root.is_empty() {
                     // Cursor: file_path at top level.
                     // Claude PostToolUse: file_path inside tool_input.
@@ -118,6 +122,8 @@ pub fn handle_event(
         }
         "stop" => {
             if let Some(sid) = session_id_field {
+                // Self-heal: create session file if sessionStart fired before git init.
+                let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
                 let transcript_path = event.extra.get("transcript_path").and_then(|v| v.as_str());
                 state::touch_session(&project_root, sid, transcript_path)?;
 
@@ -153,6 +159,7 @@ pub fn handle_event(
         }
         "subagent-stop" => {
             if let Some(sid) = session_id_field {
+                let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
                 state::touch_session(&project_root, sid, None)?;
 
                 // subagentStop payload may contain modified_files directly.

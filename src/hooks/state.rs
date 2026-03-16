@@ -137,6 +137,29 @@ pub fn write_session(
     Ok(())
 }
 
+/// Ensure a session state file exists. If `sessionStart` fired before
+/// `git init`, the file won't exist yet. This creates it so the session
+/// is tracked for subsequent commits.
+pub fn ensure_session(
+    project_root: &str,
+    session_id: &str,
+    agent: &str,
+    model: Option<&str>,
+) -> Result<()> {
+    if project_root.is_empty() {
+        return Ok(());
+    }
+    let path = session_path(project_root, session_id);
+    if path.exists() {
+        return Ok(());
+    }
+    let dir = sessions_dir(project_root);
+    if !dir.parent().map(|p| p.exists()).unwrap_or(false) {
+        return Ok(());
+    }
+    write_session(project_root, session_id, agent, model)
+}
+
 /// Update the timestamp on an existing session (turn ended, session continues).
 /// Also stores `transcript_path` if provided by the hook event.
 pub fn touch_session(
