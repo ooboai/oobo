@@ -196,7 +196,7 @@ oobo sessions export <id> --format json --out chat.json
 
 ```bash
 oobo sync                        # show current sync status
-oobo sync on                     # enable backend sync for this project
+oobo sync on                     # enable backend sync (global)
 oobo sync off                    # disable backend sync
 oobo sync --import               # import anchors from orphan branch into local DB
 oobo transparency                # show current per-repo transparency setting
