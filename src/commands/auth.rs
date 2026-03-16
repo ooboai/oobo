@@ -85,7 +85,7 @@ fn prompt_key() -> Result<String, String> {
 }
 
 fn verify_auth(cfg: &Config) -> Result<String, String> {
-    let url = format!("{}/api/v1/auth/me", cfg.server.url.trim_end_matches('/'));
+    let url = format!("{}/anchors/verify", cfg.server.url.trim_end_matches('/'));
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(10))

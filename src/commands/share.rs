@@ -86,47 +86,78 @@ pub fn run(
         oobo_version: env!("CARGO_PKG_VERSION").to_string(),
     };
 
-    let json_str = serde_json::to_string_pretty(&shared).map_err(|e| format!("serialize: {e}"))?;
-
     if let Some(ref path) = output {
-        std::fs::write(path, &json_str).map_err(|e| format!("write {path}: {e}"))?;
-        if !agent {
+        let is_json = path.ends_with(".json") || path.ends_with(".jsonl");
+        let content = if is_json {
+            serde_json::to_string_pretty(&shared).map_err(|e| format!("serialize: {e}"))?
+        } else {
+            render_markdown(&shared)
+        };
+        std::fs::write(path, &content).map_err(|e| format!("write {path}: {e}"))?;
+        if agent {
+            let resp = serde_json::json!({
+                "status": "saved",
+                "session_id": session.session_id,
+                "path": path,
+                "messages": shared.messages.len(),
+            });
+            crate::utils::print_json(&resp);
+        } else {
             eprintln!(
                 "shared session {} → {}",
                 &session.session_id[..session.session_id.len().min(8)],
                 path
             );
         }
+        return Ok(());
     }
 
-    if !cfg.server.api_key.is_empty() && output.is_none() {
-        return upload_share(cfg, &json_str, agent);
-    }
+    let json_str = serde_json::to_string_pretty(&shared).map_err(|e| format!("serialize: {e}"))?;
+    upload_share(cfg, &json_str, agent)
+}
 
-    if output.is_none() {
-        if agent {
-            println!("{json_str}");
-        } else {
-            eprintln!(
-                "session {} redacted and ready ({} messages)",
-                &session.session_id[..session.session_id.len().min(8)],
-                shared.messages.len()
-            );
-            eprintln!("use --out <file> to save, or configure auth to upload");
+fn render_markdown(shared: &SharedSession) -> String {
+    let mut md = String::new();
+    md.push_str(&format!("# Session {}\n\n", &shared.session_id));
+    md.push_str(&format!("**Source:** {}\n", shared.source));
+    if let Some(ref model) = shared.model {
+        md.push_str(&format!("**Model:** {}\n", model));
+    }
+    if let Some(ref stats) = shared.stats {
+        let mut parts = Vec::new();
+        if let Some(input) = stats.input_tokens {
+            parts.push(format!("{input} input tokens"));
+        }
+        if let Some(output) = stats.output_tokens {
+            parts.push(format!("{output} output tokens"));
+        }
+        if let Some(dur) = stats.duration_secs {
+            let mins = dur / 60;
+            let secs = dur % 60;
+            if mins > 0 {
+                parts.push(format!("{mins}m {secs}s"));
+            } else {
+                parts.push(format!("{secs}s"));
+            }
+        }
+        if !parts.is_empty() {
+            md.push_str(&format!("**Stats:** {}\n", parts.join(" · ")));
         }
     }
+    md.push_str(&format!("**Shared:** {}\n", shared.shared_at));
+    md.push_str(&format!("**oobo:** v{}\n", shared.oobo_version));
+    md.push_str("\n---\n\n");
 
-    if let (true, Some(out_path)) = (agent, &output) {
-        let resp = serde_json::json!({
-            "status": "saved",
-            "session_id": session.session_id,
-            "path": out_path,
-            "messages": shared.messages.len(),
-        });
-        crate::utils::print_json(&resp);
+    for msg in &shared.messages {
+        let label = match msg.role.as_str() {
+            "user" => "**User**",
+            "assistant" => "**Assistant**",
+            other => other,
+        };
+        md.push_str(&format!("### {label}\n\n{}\n\n", msg.text));
     }
 
-    Ok(())
+    md
 }
 
 fn stats_model(db: &Option<crate::db::Db>, session_id: &str, source: &str) -> Option<String> {
@@ -137,18 +168,26 @@ fn stats_model(db: &Option<crate::db::Db>, session_id: &str, source: &str) -> Op
 }
 
 fn upload_share(cfg: &Config, json_body: &str, agent: bool) -> Result<(), String> {
-    let url = format!("{}/api/v1/shares", cfg.server.url.trim_end_matches('/'));
+    let url = format!(
+        "{}/anchors/share",
+        cfg.server.url.trim_end_matches('/')
+    );
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("http client: {e}"))?;
 
-    let resp = client
+    let mut req = client
         .post(&url)
-        .header("Authorization", format!("Bearer {}", cfg.server.api_key))
         .header("Content-Type", "application/json")
-        .header("User-Agent", format!("oobo/{}", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", format!("oobo/{}", env!("CARGO_PKG_VERSION")));
+
+    if !cfg.server.api_key.is_empty() {
+        req = req.header("Authorization", format!("Bearer {}", cfg.server.api_key));
+    }
+
+    let resp = req
         .body(json_body.to_string())
         .send()
         .map_err(|e| format!("upload failed: {e}"))?;
@@ -340,5 +379,84 @@ mod tests {
     fn test_stats_model_returns_none_without_db() {
         let result = stats_model(&None, "some-id", "cursor");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_render_markdown_full() {
+        let shared = SharedSession {
+            session_id: "abc-123".into(),
+            source: "cursor".into(),
+            model: Some("claude-sonnet-4".into()),
+            messages: vec![
+                SharedMessage {
+                    role: "user".into(),
+                    text: "Fix the auth bug".into(),
+                },
+                SharedMessage {
+                    role: "assistant".into(),
+                    text: "I'll update the middleware...".into(),
+                },
+            ],
+            stats: Some(SharedStats {
+                input_tokens: Some(5000),
+                output_tokens: Some(12000),
+                duration_secs: Some(125),
+            }),
+            shared_at: "2026-03-15T12:00:00Z".into(),
+            oobo_version: "0.1.5".into(),
+        };
+        let md = render_markdown(&shared);
+        assert!(md.contains("# Session abc-123"));
+        assert!(md.contains("**Source:** cursor"));
+        assert!(md.contains("**Model:** claude-sonnet-4"));
+        assert!(md.contains("5000 input tokens"));
+        assert!(md.contains("12000 output tokens"));
+        assert!(md.contains("2m 5s"));
+        assert!(md.contains("### **User**"));
+        assert!(md.contains("Fix the auth bug"));
+        assert!(md.contains("### **Assistant**"));
+        assert!(md.contains("I'll update the middleware..."));
+    }
+
+    #[test]
+    fn test_render_markdown_minimal() {
+        let shared = SharedSession {
+            session_id: "min-id".into(),
+            source: "claude".into(),
+            model: None,
+            messages: vec![SharedMessage {
+                role: "user".into(),
+                text: "hello".into(),
+            }],
+            stats: None,
+            shared_at: "2026-01-01T00:00:00Z".into(),
+            oobo_version: "0.1.5".into(),
+        };
+        let md = render_markdown(&shared);
+        assert!(md.contains("# Session min-id"));
+        assert!(md.contains("**Source:** claude"));
+        assert!(!md.contains("**Model:**"));
+        assert!(!md.contains("**Stats:**"));
+        assert!(md.contains("hello"));
+    }
+
+    #[test]
+    fn test_render_markdown_short_duration() {
+        let shared = SharedSession {
+            session_id: "dur-test".into(),
+            source: "gemini".into(),
+            model: None,
+            messages: vec![],
+            stats: Some(SharedStats {
+                input_tokens: None,
+                output_tokens: None,
+                duration_secs: Some(42),
+            }),
+            shared_at: "2026-01-01T00:00:00Z".into(),
+            oobo_version: "0.1.5".into(),
+        };
+        let md = render_markdown(&shared);
+        assert!(md.contains("42s"));
+        assert!(!md.contains("0m"));
     }
 }

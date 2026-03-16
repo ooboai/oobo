@@ -1,23 +1,15 @@
-[![License](https://img.shields.io/badge/License-Apache_2.0_or_MIT-blue)](LICENSE-APACHE)
-[![CI](https://img.shields.io/github/actions/workflow/status/ooboai/oobo/ci.yml?label=CI)](https://github.com/ooboai/oobo/actions/workflows/ci.yml)
-[![Issues](https://img.shields.io/github/issues/ooboai/oobo)](https://github.com/ooboai/oobo/issues)
-![GitHub Release](https://img.shields.io/github/v/release/ooboai/oobo)
+[License](LICENSE-APACHE)
+[CI](https://github.com/ooboai/oobo/actions/workflows/ci.yml)
+[Issues](https://github.com/ooboai/oobo/issues)
+GitHub Release
 
-<h1 align="center">oobo</h1>
+# oobo
 
-<h3 align="center">Git for agents (and humans).</h3>
+### Git for agents (and humans).
 
-<p align="center">
-  A transparent git decorator that enriches every commit with AI context: sessions, tokens, and code attribution. Humans use it like normal git. Agents use <code>--agent</code> for structured JSON. Anchor metadata always syncs via git; transcripts stay local unless you turn transparency on.
-</p>
+A transparent git decorator that enriches every commit with AI context: sessions, tokens, and code attribution. Humans use it like normal git. Agents use `--agent` for structured JSON. Anchor metadata always syncs via git; transcripts stay local unless you turn transparency on.
 
-<p align="center">
-  <a href="#how-it-works">How It Works</a> ·
-  <a href="#installation">Install</a> ·
-  <a href="#quick-start">Quick Start</a> ·
-  <a href="#for-ai-agents">For AI Agents</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a>
-</p>
+[How It Works](#how-it-works) · [Install](#installation) · [Quick Start](#quick-start) · [For AI Agents](#for-ai-agents) · [Contributing](CONTRIBUTING.md)
 
 ---
 
@@ -41,7 +33,7 @@ You run:  oobo commit -m "fix auth middleware"
   3. Read AI sessions from local tool storage
   4. Build anchor: commit + sessions + tokens + attribution
   5. Write anchor to local DB + git orphan branch
-  6. Fire event to endpoint (if configured)
+  6. POST anchor to remote (if configured) → /anchors/ingest
   7. Return git's exit code unchanged
 ```
 
@@ -60,18 +52,20 @@ Each anchor records which AI sessions contributed, token counts, code attributio
 
 ### Supported tools
 
-| Tool | Sessions | Transcripts | Token Stats | Agent Hooks |
-|------|:--------:|:-----------:|:-----------:|:-----------:|
-| Cursor | ✓ | ✓ | ✓ | ✓ |
-| Claude Code | ✓ | ✓ | ✓ | ✓ |
-| Gemini CLI | ✓ | ✓ | ✓ | ✓ |
-| OpenCode | ✓ | ✓ | ✓ | ✓ |
-| Codex CLI | ✓ | ✓ | ✓ | — |
-| Aider | ✓ | ✓ | ✓ | — |
-| GitHub Copilot Chat | ✓ | ✓ | ✓ | — |
-| Windsurf | ✓ | ✓ | partial | — |
-| Zed | ✓ | ✓ | ✓ | — |
-| Trae | ✓ | ✓ | partial | — |
+
+| Tool                | Sessions | Transcripts | Token Stats | Agent Hooks |
+| ------------------- | -------- | ----------- | ----------- | ----------- |
+| Cursor              | ✓        | ✓           | ✓           | ✓           |
+| Claude Code         | ✓        | ✓           | ✓           | ✓           |
+| Gemini CLI          | ✓        | ✓           | ✓           | ✓           |
+| OpenCode            | ✓        | ✓           | ✓           | ✓           |
+| Codex CLI           | ✓        | ✓           | ✓           | —           |
+| Aider               | ✓        | ✓           | ✓           | —           |
+| GitHub Copilot Chat | ✓        | ✓           | ✓           | —           |
+| Windsurf            | ✓        | ✓           | partial     | —           |
+| Zed                 | ✓        | ✓           | ✓           | —           |
+| Trae                | ✓        | ✓           | partial     | —           |
+
 
 All tools are read-only — oobo never writes to AI tool data directories.
 
@@ -111,14 +105,17 @@ cargo build --release
 ## Quick Start
 
 ```bash
-# 1. Run the setup wizard (detects your tools, configures endpoint)
+# 1. Run the setup wizard (detects your tools, configures remote)
 oobo setup
 
-# 2. Use oobo wherever you'd use git — everything passes through
+# 2. (Optional) Log in for cloud sync — free at oobo.ai
+oobo auth login --key <your_key>
+
+# 3. Use oobo wherever you'd use git — everything passes through
 oobo commit -m "fix auth middleware"
 oobo push origin main
 
-# 3. See what happened
+# 4. See what happened
 oobo anchors       # enriched commit history with AI context
 oobo sessions      # browse your AI chat sessions
 oobo stats         # token usage, attribution
@@ -182,19 +179,15 @@ oobo card                        # generate your developer stats card (PNG)
 oobo card --format svg           # SVG output
 oobo card --format md            # markdown output
 oobo card --out dev.png          # save to a custom path
-```
-
-<p align="center">
-  <img src=".github/oobo-card.png" alt="oobo card" width="720" />
-</p>
+```![oobo card](.github/oobo-card.png)
 
 Generates an overview of your AI tool usage — sessions, tokens, models, AI code percentage, commit profile — and saves it as a shareable file. No project names or private data included.
 
 ### Sharing & exporting
 
 ```bash
-oobo share <session_id>                # preview a redacted session
-oobo share <session_id> --out s.json   # save redacted session to file
+oobo share <session_id>                # share a redacted session (uploads to server)
+oobo share <session_id> --out chat.md  # save redacted session as markdown
 oobo sessions export <id> --format md  # export full session as markdown
 oobo sessions export <id> --format json --out chat.json
 ```
@@ -215,7 +208,7 @@ oobo transparency reset          # clear per-repo override, use global default
 ### Auth
 
 ```bash
-oobo auth login                  # log in to oobo.dev (or self-hosted)
+oobo auth login                  # log in to api.oobo.ai (free) or self-hosted
 oobo auth login --key <key>      # authenticate with an API key
 oobo auth status                 # show auth state + configured tool keys
 oobo auth logout                 # remove credentials
@@ -316,7 +309,7 @@ For tools that support it (Cursor, Claude Code, Gemini CLI, OpenCode), oobo inst
 
 ```toml
 [server]
-url = "https://your-endpoint.example.com"
+url = "https://api.oobo.ai"   # default — or your own server
 api_key = "sk_..."
 
 [transparency]
@@ -337,10 +330,55 @@ Full list: `cursor`, `claude`, `gemini`, `windsurf`, `aider`, `copilot`, `zed`, 
 
 ---
 
+## Remote & Self-Hosting
+
+By default, oobo points at **`api.oobo.ai`** — our free hosted backend. Create a free account at [oobo.ai](https://oobo.ai), grab an API key, and run:
+
+```bash
+oobo auth login --key <your_key>
+```
+
+If you prefer to run your own server, point oobo at it:
+
+```bash
+oobo auth set-remote https://oobo.mycompany.com
+```
+
+Your backend implements endpoints under `/anchors`. Only **ingest** is required — the rest are optional:
+
+| Endpoint           | Method | Auth            | Required | Purpose                          |
+| ------------------ | ------ | --------------- | -------- | -------------------------------- |
+| `/anchors/ingest`  | POST   | Bearer token    | **Yes**  | Accept anchor data from commits  |
+| `/anchors/verify`  | GET    | Bearer token    | No       | Verify an API key is valid       |
+| `/anchors/health`  | GET    | None            | No       | Health check (connectivity test) |
+| `/anchors/share`   | POST   | Bearer optional | No       | Accept shared sessions           |
+
+### Backend implementation
+
+**`POST /anchors/ingest`** (required) — receives anchor data on every commit. The request body is JSON with the full anchor payload (commit metadata, AI attribution, linked sessions, and optionally redacted transcripts). Respond `200`/`202` on success. Return `409` for duplicate anchors (same `commit_hash` + `git_remote`). The CLI treats `409` as success silently.
+
+**`GET /anchors/verify`** (optional) — validates the API key in the `Authorization: Bearer <key>` header. Return `200` with a JSON body (optionally including `{"email": "..."}`) on success, or `401` on failure. Called during `oobo auth login`.
+
+**`GET /anchors/health`** (optional) — no auth required. Return any `2xx` response. Called by `oobo dash` to check connectivity.
+
+**`POST /anchors/share`** (optional) — accepts a redacted session for sharing. Bearer token is optional — if present, the share is associated with the user's account; if absent, the share is anonymous. Return `200`/`201` with a `{"url": "..."}` body so the CLI can print the share link.
+
+All authenticated requests include:
+
+```
+Authorization: Bearer <api_key>
+User-Agent: oobo/<version>
+Content-Type: application/json
+```
+
+See the [anchor payload reference](#the-anchor) and `src/remote/payload.rs` for the full schema.
+
+---
+
 ## Privacy
 
 - **Read-only** — never writes to AI tool directories
-- **Local by default** — everything stays in `~/.oobo/`. Nothing leaves your machine unless you configure an endpoint
+- **Local by default** — everything stays in `~/.oobo/`. Nothing leaves your machine unless you configure a remote server
 - **Secret redaction** — sessions are scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before any sharing
 - **No telemetry** — oobo does not phone home
 - **Config protection** — API keys in config get `chmod 0600`

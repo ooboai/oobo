@@ -90,7 +90,7 @@ oobo is a Rust binary that acts as a transparent git decorator. Key modules:
 | `src/commands/` | CLI subcommands (17 commands) |
 | `src/analytics/` | Token computation, attribution, git activity |
 | `src/db/` | SQLite persistence and migrations |
-| `src/remote/` | Fire-and-forget event dispatch |
+| `src/remote/` | Anchor sync via `/anchors` API (ingest, verify, health) |
 | `src/session.rs` | Multi-source session dispatch |
 | `src/tui/` | Ratatui terminal UI for interactive commands |
 | `src/config.rs` | Configuration file management |

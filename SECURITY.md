@@ -44,7 +44,7 @@ This policy applies to:
 ## Security Design
 
 - **Read-only** — oobo reads local AI tool data but never writes to it
-- **Local by default** — no data leaves your machine unless you explicitly configure a remote endpoint
+- **Local by default** — no data leaves your machine unless you explicitly configure a remote server (`/anchors` API)
 - **No telemetry** — oobo does not phone home or collect usage data
 - **Secret redaction** — session content is scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before any sharing or sync
 - **Config protection** — files containing API keys are automatically set to `0600` permissions on Unix

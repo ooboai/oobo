@@ -137,7 +137,7 @@ pub fn ingest_anchor(
 
 /// Synchronous check: can we reach the API?
 pub fn check_connection(cfg: &Config) -> Result<String, String> {
-    let url = format!("{}/health", cfg.server.url.trim_end_matches('/'));
+    let url = format!("{}/anchors/health", cfg.server.url.trim_end_matches('/'));
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(5))

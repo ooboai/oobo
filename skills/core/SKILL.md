@@ -3,7 +3,7 @@ name: oobo
 description: AI development control plane. Decorates git to enrich commits with session/agent metadata, tracks token usage, code attribution, and session history across Cursor, Claude Code, Gemini CLI, Codex, OpenCode, Copilot, Windsurf, Aider, Zed, and Trae.
 metadata:
   author: oobo
-  version: "0.1.0"
+  version: "0.1.6"
 install:
   check: command -v oobo
   run: curl -fsSL https://oobo.ai/install.sh | bash -s -- --agent
@@ -88,8 +88,8 @@ oobo version --agent                               # Version info as JSON
 ### Share Sessions
 
 ```bash
-oobo share <session_id> --agent                    # Redacted session as JSON
-oobo share <session_id> --out session.json         # Save to file
+oobo share <session_id> --agent                    # Share + return JSON response
+oobo share <session_id> --out chat.md              # Save redacted session as markdown
 ```
 
 ### Backend Sync
@@ -105,14 +105,27 @@ When sync is on and `OOBO_SECRET_KEY` (env var) or `api_key` is configured, anch
 
 ### Auth & Remote
 
+The default remote is `api.oobo.ai` (free). Self-hosted servers are also supported.
+
 ```bash
-oobo auth login --key <api_key>                    # Authenticate with backend
+oobo auth login --key <api_key>                    # Authenticate (free account at oobo.ai)
 oobo auth logout                                   # Remove credentials
 oobo auth status                                   # Show auth state + tool keys
-oobo auth set-remote https://oobo.example.com      # Self-hosted server
+oobo auth set-remote https://oobo.example.com      # Point to self-hosted server
 ```
 
 The `OOBO_SECRET_KEY` environment variable overrides the persisted `api_key` when set.
+
+### Remote API Surface
+
+Remotes implement endpoints under `/anchors`. Only ingest is required:
+
+| Endpoint | Method | Auth | Required | Purpose |
+|----------|--------|------|----------|---------|
+| `/anchors/ingest` | POST | Bearer | **Yes** | Accept anchor data on commit |
+| `/anchors/verify` | GET | Bearer | No | Validate API key |
+| `/anchors/health` | GET | None | No | Connectivity check |
+| `/anchors/share` | POST | Bearer optional | No | Share a redacted session |
 
 ### Agent Lifecycle Hooks
 
