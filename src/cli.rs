@@ -695,6 +695,23 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
                     if payload.trim().is_empty() {
                         payload = "{}".to_string();
                     }
+                    // Debug: log hook invocations to diagnose missed sessions.
+                    if let Some(home) = dirs::home_dir() {
+                        let log_dir = home.join(".oobo/logs");
+                        let _ = std::fs::create_dir_all(&log_dir);
+                        let line = format!(
+                            "{} event={} tool={:?} payload={}\n",
+                            chrono::Utc::now().to_rfc3339(),
+                            event,
+                            tool,
+                            payload.trim(),
+                        );
+                        let _ = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(log_dir.join("hooks-debug.log"))
+                            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+                    }
                     crate::hooks::handle_event(&event, &payload, tool.as_deref())
                         .map_err(|e| e.to_string())?;
                 }

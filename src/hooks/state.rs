@@ -147,6 +147,7 @@ pub fn ensure_session(
     model: Option<&str>,
 ) -> Result<()> {
     if project_root.is_empty() {
+        log_ensure("skip: empty project_root", session_id);
         return Ok(());
     }
     let path = session_path(project_root, session_id);
@@ -155,9 +156,27 @@ pub fn ensure_session(
     }
     let dir = sessions_dir(project_root);
     if !dir.parent().map(|p| p.exists()).unwrap_or(false) {
+        log_ensure(&format!("skip: parent dir missing for {}", dir.display()), session_id);
         return Ok(());
     }
+    log_ensure(&format!("creating in {}", dir.display()), session_id);
     write_session(project_root, session_id, agent, model)
+}
+
+fn log_ensure(msg: &str, session_id: &str) {
+    if let Some(home) = dirs::home_dir() {
+        let line = format!(
+            "{} ensure_session: {} sid={}\n",
+            chrono::Utc::now().to_rfc3339(),
+            msg,
+            session_id,
+        );
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(home.join(".oobo/logs/hooks-debug.log"))
+            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+    }
 }
 
 /// Update the timestamp on an existing session (turn ended, session continues).

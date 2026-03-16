@@ -10,7 +10,7 @@ pub struct HookEvent {
     pub event: String,
     #[serde(default)]
     pub session_id: Option<String>,
-    #[serde(default, alias = "conversation_id")]
+    #[serde(default)]
     pub cwd: Option<String>,
     #[serde(default)]
     pub agent: Option<String>,

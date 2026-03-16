@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-03-16
+
+### Fixed
+
+- **Critical: Cursor session tracking** — removed erroneous `alias = "conversation_id"` on the `cwd` serde field in `HookEvent`. This alias silently consumed Cursor's `conversation_id` (used as session identifier), making it invisible to the session ID resolver. All `ensure_session` and session file creation calls were skipped, causing no session files to be created in `.git/oobo-sessions/` for Cursor sessions. Other tools (Claude Code, Gemini CLI, etc.) that send `session_id` directly were unaffected.
+
+### Added
+
+- Debug logging in `ensure_session` for diagnosing session file creation failures
+
 ## [0.1.6] - 2026-03-16
 
 ### Changed
