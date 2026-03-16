@@ -120,12 +120,28 @@ fn enrich_commit(
     let parent_commit_epoch = parent_commit_timestamp(cfg);
 
     let all_sessions = hooks::state::active_sessions_for_worktree(project_root);
-    let active_sessions = filter_relevant_sessions(
+    let mut active_sessions = filter_relevant_sessions(
         &all_sessions,
         project_root,
         &files_changed,
         parent_commit_epoch,
     );
+
+    // Fallback: when hooks didn't register any sessions (e.g. new project
+    // where sessionStart fired before git init), discover sessions directly
+    // from each tool's native storage, then apply the same file-overlap and
+    // recency filters so we only link sessions that actually contributed.
+    if active_sessions.is_empty() && !project_root.is_empty() {
+        let fallback = discover_sessions_from_tools(cfg, project_root, parent_commit_epoch);
+        if !fallback.is_empty() {
+            active_sessions = filter_relevant_sessions(
+                &fallback,
+                project_root,
+                &files_changed,
+                parent_commit_epoch,
+            );
+        }
+    }
 
     let ai_files_touched =
         collect_ai_files_touched(cfg, project_root, &active_sessions, parent_commit_epoch);
@@ -734,6 +750,60 @@ fn filter_by_recency(
         .filter(|s| now - s.updated_at < 1800)
         .cloned()
         .collect()
+}
+
+/// Fallback session discovery: scan each enabled tool's native storage for
+/// recent sessions in this project. Used when `.git/oobo-sessions/` has no
+/// matching state files (e.g. hooks fired before `git init`, or hooks weren't
+/// installed for this project).
+///
+/// Only returns sessions updated after `since_epoch` (the parent commit time)
+/// and within the last 2 hours — we don't want to link stale sessions.
+fn discover_sessions_from_tools(
+    cfg: &crate::config::Config,
+    project_root: &str,
+    since_epoch: i64,
+) -> Vec<crate::hooks::state::ActiveSession> {
+    let now = chrono::Utc::now().timestamp();
+    let max_age = 7200; // 2 hours
+    let cutoff = std::cmp::max(since_epoch, now - max_age);
+
+    let registry = crate::tools::registry();
+    let mut discovered: Vec<crate::hooks::state::ActiveSession> = Vec::new();
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for tool in registry.enabled(cfg) {
+        let sessions = match tool.sessions_for_project(project_root) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        for session in sessions {
+            let updated = session.updated_at.or(session.created_at).unwrap_or(0);
+            if updated <= cutoff {
+                continue;
+            }
+            if seen_ids.contains(&session.session_id) {
+                continue;
+            }
+            seen_ids.insert(session.session_id.clone());
+
+            discovered.push(crate::hooks::state::ActiveSession {
+                session_id: session.session_id,
+                agent: session.source.clone(),
+                model: None,
+                worktree: Some(project_root.to_string()),
+                transcript_path: None,
+                pre_agent_snapshots: None,
+                file_snapshots: None,
+                edited_files: None,
+                started_at: session.created_at.unwrap_or(updated),
+                updated_at: updated,
+            });
+        }
+    }
+
+    discovered
 }
 
 /// Match a session's agent name to a tool's canonical name.
