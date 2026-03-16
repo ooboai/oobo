@@ -89,12 +89,12 @@ get_latest_version() {
         curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
             | grep '"tag_name"' \
             | head -1 \
-            | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/'
+            | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/'
     elif command -v wget &>/dev/null; then
         wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" \
             | grep '"tag_name"' \
             | head -1 \
-            | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/'
+            | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/'
     else
         error "Neither curl nor wget found. Install one and retry."
     fi
