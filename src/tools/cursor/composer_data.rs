@@ -149,7 +149,10 @@ pub fn preload_bubble_data_for(
                 json_extract(value, '$.text') AS btext,
                 json_extract(value, '$.tokenCount.inputTokens') AS inp,
                 json_extract(value, '$.tokenCount.outputTokens') AS outp,
-                json_extract(value, '$.createdAt') AS created
+                json_extract(value, '$.createdAt') AS created,
+                json_extract(value, '$.thinking.text') AS thinking,
+                json_extract(value, '$.toolFormerData.name') AS tool_name,
+                json_extract(value, '$.toolFormerData.result') AS tool_result
          FROM cursorDiskKV
          WHERE key >= ?1 AND key < ?2",
     ) {
@@ -168,6 +171,9 @@ pub fn preload_bubble_data_for(
                 row.get::<_, i64>(3).unwrap_or(0),
                 row.get::<_, i64>(4).unwrap_or(0),
                 row.get::<_, Option<String>>(5).unwrap_or(None),
+                row.get::<_, Option<String>>(6).unwrap_or(None),
+                row.get::<_, Option<String>>(7).unwrap_or(None),
+                row.get::<_, Option<String>>(8).unwrap_or(None),
             ))
         }) {
             Ok(r) => r,
@@ -175,12 +181,14 @@ pub fn preload_bubble_data_for(
         };
 
         let mut entry = BubbleSession::default();
+        let mut bubble_count = 0u32;
 
         for row in rows {
-            let (btype, text_opt, inp, outp, created) = match row {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
+            let (btype, text_opt, inp, outp, created, thinking_opt, tool_name_opt, tool_result_opt) =
+                match row {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
 
             let role = match btype {
                 1 => "user",
@@ -188,25 +196,52 @@ pub fn preload_bubble_data_for(
                 _ => continue,
             };
 
+            bubble_count += 1;
+
             let text = text_opt.unwrap_or_default();
+            let thinking_text = thinking_opt.unwrap_or_default();
+            let tool_result = tool_result_opt.unwrap_or_default();
             let timestamp_ms = created
                 .as_deref()
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|dt| dt.timestamp_millis());
 
-            if !text.is_empty() {
+            // Combine visible text + thinking block for assistant output estimation.
+            let combined = if !text.is_empty() && !thinking_text.is_empty() {
+                format!("{text}\n{thinking_text}")
+            } else if !thinking_text.is_empty() {
+                thinking_text
+            } else {
+                text
+            };
+
+            if !combined.is_empty() {
                 entry.messages.push(Message {
                     role: role.to_string(),
-                    text,
+                    text: combined,
                     timestamp_ms,
                 });
+            }
+
+            // Tool results (file contents, terminal output, etc.) are fed back to
+            // the model as context — count them as input tokens via "user" role.
+            if !tool_result.is_empty() {
+                entry.messages.push(Message {
+                    role: "user".to_string(),
+                    text: tool_result,
+                    timestamp_ms,
+                });
+            }
+
+            if tool_name_opt.is_some() {
+                entry.tool_call_count += 1;
             }
 
             entry.total_input_tokens += inp as u64;
             entry.total_output_tokens += outp as u64;
         }
 
-        if !entry.messages.is_empty() {
+        if !entry.messages.is_empty() || bubble_count > 0 {
             map.insert(session_id.clone(), entry);
         }
     }

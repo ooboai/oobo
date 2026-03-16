@@ -416,12 +416,14 @@ fn index_sessions_inner(
         };
 
         let (mut native, cached_messages) = if row.source == "composer" {
-            if let Some(bs) = bubble_cache
-                .get(&row.id)
-                .filter(|bs| !bs.messages.is_empty())
-            {
+            if let Some(bs) = bubble_cache.get(&row.id) {
                 let ns = crate::tools::cursor::composer_data::native_stats_from_bubble(bs);
-                (Some(ns), Some(bs.messages.clone()))
+                let msgs = if bs.messages.is_empty() {
+                    None
+                } else {
+                    Some(bs.messages.clone())
+                };
+                (Some(ns), msgs)
             } else if let Some(cs) = composer_cache
                 .get(&row.id)
                 .filter(|cs| !cs.messages.is_empty())
@@ -429,7 +431,7 @@ fn index_sessions_inner(
                 let ns = crate::tools::cursor::composer_data::native_stats_from_session(cs);
                 (Some(ns), Some(cs.messages.clone()))
             } else {
-                (None, Some(Vec::new()))
+                (None, None)
             }
         } else {
             let ns = extract_native_stats(
