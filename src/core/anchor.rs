@@ -160,6 +160,25 @@ pub struct SessionLink {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files_touched: Option<Vec<String>>,
 
+    /// Tool usage breakdown by tool name (e.g. {"Bash": 12, "Edit": 8}).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_usage: Option<std::collections::HashMap<String, u32>>,
+    /// Number of failed tool calls during this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_failures: Option<u32>,
+    /// Number of subagents spawned during this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_count: Option<u32>,
+    /// Recent bash commands executed by the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bash_commands: Option<Vec<String>>,
+    /// Accumulated thinking/reasoning time in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_duration_ms: Option<u64>,
+    /// Number of context compaction events during this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_count: Option<u32>,
+
     #[serde(default)]
     pub is_subagent: bool,
     #[serde(default)]
@@ -301,6 +320,12 @@ mod tests {
             duration_secs: None,
             tool_calls: None,
             files_touched: None,
+            tool_usage: None,
+            tool_failures: None,
+            subagent_count: None,
+            bash_commands: None,
+            thinking_duration_ms: None,
+            compact_count: None,
             is_subagent: false,
             is_estimated: false,
         };

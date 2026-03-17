@@ -36,14 +36,29 @@ fn install_cursor_hooks() -> Option<String> {
             "beforeSubmitPrompt": [
                 { "command": "oobo hooks agent before-submit-prompt --tool cursor" }
             ],
-            "afterFileEdit": [
-                { "command": "oobo hooks agent after-file-edit --tool cursor" }
+            "postToolUse": [
+                { "command": "oobo hooks agent after-tool-use --tool cursor" }
             ],
-            "stop": [
-                { "command": "oobo hooks agent stop --tool cursor" }
+            "postToolUseFailure": [
+                { "command": "oobo hooks agent tool-use-failure --tool cursor" }
+            ],
+            "subagentStart": [
+                { "command": "oobo hooks agent subagent-start --tool cursor" }
             ],
             "subagentStop": [
                 { "command": "oobo hooks agent subagent-stop --tool cursor" }
+            ],
+            "afterAgentThought": [
+                { "command": "oobo hooks agent after-agent-thought --tool cursor" }
+            ],
+            "afterAgentResponse": [
+                { "command": "oobo hooks agent after-agent-response --tool cursor" }
+            ],
+            "preCompact": [
+                { "command": "oobo hooks agent pre-compact --tool cursor" }
+            ],
+            "stop": [
+                { "command": "oobo hooks agent stop --tool cursor" }
             ],
             "sessionEnd": [
                 { "command": "oobo hooks agent session-end --tool cursor" }
@@ -68,8 +83,13 @@ fn install_claude_hooks() -> Option<String> {
                 "hooks": [{"type": "command", "command": "oobo hooks agent before-submit-prompt --tool claude"}]
             }],
             "PostToolUse": [{
-                "matcher": "^(Write|Edit)$",
-                "hooks": [{"type": "command", "command": "oobo hooks agent after-file-edit --tool claude"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent after-tool-use --tool claude"}]
+            }],
+            "PostToolUseFailure": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent tool-use-failure --tool claude"}]
+            }],
+            "SubagentStart": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent subagent-start --tool claude"}]
             }],
             "SubagentStop": [{
                 "hooks": [{"type": "command", "command": "oobo hooks agent subagent-stop --tool claude"}]

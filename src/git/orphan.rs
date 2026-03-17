@@ -623,6 +623,12 @@ mod tests {
             duration_secs: Some(120),
             tool_calls: Some(5),
             files_touched: Some(vec!["src/widget.rs".into()]),
+            tool_usage: None,
+            tool_failures: None,
+            subagent_count: None,
+            bash_commands: None,
+            thinking_duration_ms: None,
+            compact_count: None,
             is_subagent: false,
             is_estimated: false,
         };

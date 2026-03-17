@@ -121,6 +121,213 @@ pub fn parse_messages(path: &Path) -> Vec<Message> {
     messages
 }
 
+/// Parse Claude JSONL transcript lines into rich structured messages.
+/// This is the canonical implementation — used by both file-based parsing
+/// and inline string-based parsing in the interceptor.
+pub fn parse_rich_transcript_lines<'a>(
+    lines: impl Iterator<Item = &'a str>,
+) -> Vec<crate::remote::payload::TranscriptMessage> {
+    use crate::remote::payload::{ToolCallMessage, ToolResultMessage, TranscriptMessage};
+    use crate::utils::{summarize_tool_input, truncate_str};
+
+    let mut messages = Vec::new();
+    // Maps tool_use_id → tool name so we can populate ToolResultMessage.name.
+    let mut tool_name_map: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let entry: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let entry_type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let ts = super::parse_timestamp(&entry);
+
+        match entry_type {
+            "user" => {
+                // Extract text from user messages.
+                if let Some(text) = extract_user_text(&entry) {
+                    if !text.is_empty() {
+                        messages.push(TranscriptMessage {
+                            role: "user".to_string(),
+                            text: Some(text),
+                            thinking: None,
+                            tool_call: None,
+                            tool_result: None,
+                            timestamp_ms: ts,
+                        });
+                    }
+                }
+
+                // In Claude's JSONL, tool_result blocks appear in user entries.
+                if let Some(content) = entry
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array())
+                {
+                    for part in content {
+                        if part.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+                            continue;
+                        }
+                        let tool_use_id = part
+                            .get("tool_use_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let is_error = part
+                            .get("is_error")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let output = extract_tool_result_output(part).map(|s| truncate_str(&s, 500));
+                        let name = tool_name_map
+                            .get(&tool_use_id)
+                            .cloned()
+                            .unwrap_or_default();
+
+                        messages.push(TranscriptMessage {
+                            role: "tool".to_string(),
+                            text: None,
+                            thinking: None,
+                            tool_call: None,
+                            tool_result: Some(ToolResultMessage {
+                                tool_use_id,
+                                name,
+                                success: !is_error,
+                                output_summary: output,
+                            }),
+                            timestamp_ms: ts,
+                        });
+                    }
+                }
+            }
+            "assistant" => {
+                if let Some(content) = entry
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array())
+                {
+                    // Accumulate all parts first, then emit in correct order:
+                    // thinking → text → tool_calls.
+                    let mut text_parts = Vec::new();
+                    let mut thinking_parts = Vec::new();
+                    let mut tool_calls = Vec::new();
+
+                    for part in content {
+                        let pt = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                        match pt {
+                            "text" => {
+                                if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+                                    text_parts.push(t);
+                                }
+                            }
+                            "thinking" => {
+                                if let Some(t) = part.get("thinking").and_then(|v| v.as_str()) {
+                                    thinking_parts.push(t);
+                                }
+                            }
+                            "tool_use" => {
+                                let tool_use_id = part
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let name = part
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let input_summary = summarize_tool_input(
+                                    &name,
+                                    part.get("input"),
+                                    300,
+                                )
+                                .unwrap_or_default();
+
+                                if !name.is_empty() {
+                                    tool_name_map
+                                        .insert(tool_use_id.clone(), name.clone());
+                                    tool_calls.push(TranscriptMessage {
+                                        role: "assistant".to_string(),
+                                        text: None,
+                                        thinking: None,
+                                        tool_call: Some(ToolCallMessage {
+                                            tool_use_id,
+                                            name,
+                                            input_summary,
+                                        }),
+                                        tool_result: None,
+                                        timestamp_ms: ts,
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Emit in correct order: thinking → text → tool_calls.
+                    if !thinking_parts.is_empty() {
+                        let thinking = thinking_parts.join("\n");
+                        messages.push(TranscriptMessage {
+                            role: "assistant".to_string(),
+                            text: None,
+                            thinking: Some(truncate_str(&thinking, 2000)),
+                            tool_call: None,
+                            tool_result: None,
+                            timestamp_ms: ts,
+                        });
+                    }
+                    if !text_parts.is_empty() {
+                        let text = text_parts.join("\n").trim_end().to_string();
+                        if !text.is_empty() {
+                            messages.push(TranscriptMessage {
+                                role: "assistant".to_string(),
+                                text: Some(text),
+                                thinking: None,
+                                tool_call: None,
+                                tool_result: None,
+                                timestamp_ms: ts,
+                            });
+                        }
+                    }
+                    messages.extend(tool_calls);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    messages
+}
+
+fn extract_tool_result_output(part: &serde_json::Value) -> Option<String> {
+    let content = part.get("content")?;
+    if let Some(s) = content.as_str() {
+        return Some(s.to_string());
+    }
+    if let Some(arr) = content.as_array() {
+        let texts: Vec<&str> = arr
+            .iter()
+            .filter_map(|p| {
+                if p.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    p.get("text").and_then(|t| t.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !texts.is_empty() {
+            return Some(texts.join("\n"));
+        }
+    }
+    None
+}
+
 /// Read a Claude transcript as formatted text.
 pub fn read_transcript(path: &Path, max_messages: u32) -> String {
     let messages = parse_messages(path);
@@ -285,8 +492,11 @@ pub fn extract_stats(path: &Path) -> Option<crate::remote::payload::SessionStats
     })
 }
 
+/// Convenience wrapper for callers that have (project_path, session_id)
+/// instead of a direct file path. Kept for API consistency with other
+/// tool modules (codex, gemini, copilot, opencode).
 #[allow(dead_code)]
-pub fn stats_for_session(
+pub(crate) fn stats_for_session(
     project_path: &str,
     session_id: &str,
 ) -> Option<crate::remote::payload::SessionStats> {
@@ -446,5 +656,75 @@ mod tests {
 
         let text = read_transcript(&path, 3);
         assert!(text.contains("truncated at 3"));
+    }
+
+    #[test]
+    fn test_parse_rich_transcript_lines() {
+        let jsonl = [
+            r#"{"type":"user","message":{"content":"Fix the bug"},"timestamp":"2025-01-15T10:00:00Z"}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Let me analyze the code..."},{"type":"text","text":"I found the issue."},{"type":"tool_use","id":"tu_1","name":"Read","input":{"file_path":"/src/main.rs"}}]},"timestamp":"2025-01-15T10:00:01Z"}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_1","content":"fn main() {}"}]},"timestamp":"2025-01-15T10:00:02Z"}"#,
+        ];
+        let text = jsonl.join("\n");
+        let msgs = parse_rich_transcript_lines(text.lines());
+
+        // user text → thinking → assistant text → tool_call → tool_result
+        assert_eq!(msgs.len(), 5);
+
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[0].text.as_deref(), Some("Fix the bug"));
+
+        assert_eq!(msgs[1].role, "assistant");
+        assert!(msgs[1].thinking.is_some());
+        assert!(msgs[1].thinking.as_deref().unwrap().contains("analyze"));
+
+        assert_eq!(msgs[2].role, "assistant");
+        assert_eq!(msgs[2].text.as_deref(), Some("I found the issue."));
+
+        assert_eq!(msgs[3].role, "assistant");
+        let tc = msgs[3].tool_call.as_ref().unwrap();
+        assert_eq!(tc.tool_use_id, "tu_1");
+        assert_eq!(tc.name, "Read");
+        assert_eq!(tc.input_summary, "/src/main.rs");
+
+        assert_eq!(msgs[4].role, "tool");
+        let tr = msgs[4].tool_result.as_ref().unwrap();
+        assert_eq!(tr.tool_use_id, "tu_1");
+        assert_eq!(tr.name, "Read"); // populated via ID→name map
+        assert!(tr.success);
+        assert_eq!(tr.output_summary.as_deref(), Some("fn main() {}"));
+    }
+
+    #[test]
+    fn test_rich_transcript_unicode_truncation() {
+        let long_thinking = "思考".repeat(1500); // 3000 chars, well over 2000
+        let jsonl = format!(
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"thinking","thinking":"{long_thinking}"}}]}}}}"#
+        );
+        let msgs = parse_rich_transcript_lines(jsonl.lines());
+        assert_eq!(msgs.len(), 1);
+        let thinking = msgs[0].thinking.as_ref().unwrap();
+        assert!(thinking.ends_with("..."));
+        assert!(thinking.chars().count() <= 2004); // 2000 + "..."
+    }
+
+    #[test]
+    fn test_rich_transcript_empty_input() {
+        let msgs = parse_rich_transcript_lines("".lines());
+        assert!(msgs.is_empty());
+    }
+
+    #[test]
+    fn test_rich_transcript_message_ordering() {
+        let jsonl = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"step1"},{"type":"text","text":"result"},{"type":"tool_use","id":"tu_x","name":"Bash","input":{"command":"ls"}}]}}"#;
+        let msgs = parse_rich_transcript_lines(jsonl.lines());
+
+        assert_eq!(msgs.len(), 3);
+        // thinking comes first
+        assert!(msgs[0].thinking.is_some());
+        // then text
+        assert!(msgs[1].text.is_some());
+        // then tool_call
+        assert!(msgs[2].tool_call.is_some());
     }
 }

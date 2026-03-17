@@ -3,7 +3,7 @@ name: oobo
 description: AI development control plane. Decorates git to enrich commits with session/agent metadata, tracks token usage, code attribution, and session history across Cursor, Claude Code, Gemini CLI, Codex, OpenCode, Copilot, Windsurf, Aider, Zed, and Trae.
 metadata:
   author: oobo
-  version: "0.1.7"
+  version: "0.1.8"
 install:
   check: command -v oobo
   run: curl -fsSL https://oobo.ai/install.sh | bash -s -- --agent
@@ -132,6 +132,11 @@ Remotes implement endpoints under `/anchors`. Only ingest is required:
 ```bash
 # Internal plumbing — called by tool integrations, not typed by users
 echo '{"session_id":"<id>","agent":"cursor","model":"claude-opus-4"}' | oobo hooks agent session-start
+echo '{"session_id":"<id>","tool_name":"Read","file_path":"/src/main.rs"}' | oobo hooks agent after-tool-use --tool cursor
+echo '{"session_id":"<id>","tool_name":"Edit"}' | oobo hooks agent tool-use-failure --tool claude
+echo '{"session_id":"<id>","subagent_id":"sub-1","subagent_type":"explore"}' | oobo hooks agent subagent-start --tool cursor
+echo '{"session_id":"<id>","duration_ms":1500}' | oobo hooks agent after-agent-thought --tool cursor
+echo '{"session_id":"<id>"}' | oobo hooks agent pre-compact --tool cursor
 echo '{"session_id":"<id>"}' | oobo hooks agent stop
 echo '{"session_id":"<id>"}' | oobo hooks agent session-end
 ```

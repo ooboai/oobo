@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-03-17
+
+### Added
+
+- **Rich hook telemetry** — expanded from 4 hook events to 11 for Cursor and 8 for Claude Code. New events: `after-tool-use` (replaces `after-file-edit`), `tool-use-failure`, `subagent-start`, `after-agent-thought`, `after-agent-response`, `pre-compact`
+- **Session state tracking** — 6 new fields on `ActiveSession`: `tool_usage` (per-tool call counts), `tool_failures`, `bash_commands` (capped at 50), `subagent_runs`, `thinking_duration_ms`, `compact_count`
+- **Structured transcript parsing** — Claude JSONL transcripts now parse into rich `TranscriptMessage` with `thinking`, `tool_call`, `tool_result`, and `timestamp_ms` fields alongside text
+- **SessionLink enrichment** — anchors now carry `tool_usage`, `tool_failures`, `subagent_count`, `bash_commands`, `thinking_duration_ms`, `compact_count`
+- **Shared utilities** — `truncate_str()` (UTF-8 safe) and `summarize_tool_input()` in `utils.rs`, used by hooks, transcript parser, and interceptor
+- 10 new unit tests covering state mutations, JSONL transcript parsing, unicode truncation, and message ordering
+
+### Fixed
+
+- **Unicode truncation panic** — all string truncation now uses char-boundary-safe `truncate_str()` instead of byte-offset slicing
+- **Tool results missing from transcripts** — `tool_result` blocks are now correctly parsed from user entries in Claude JSONL (where Claude actually places them)
+- **ToolResultMessage.name always empty** — parser now maintains a `tool_use_id → name` map to populate the name field
+- **Transcript message ordering** — messages now emit in correct order: thinking → text → tool_calls (was tool_calls first)
+- **bash_commands not redacted** — commands in `SessionLink` now run through `redact()` before backend payload
+- **Stale doc comment** — `record_edited_file` now references `after-tool-use` instead of removed `after-file-edit`
+
+### Changed
+
+- **`TranscriptMessage.text`** changed from `String` to `Option<String>` — messages with only thinking/tool_call/tool_result omit the text field. Backends using `serde(default)` handle this transparently.
+- **Claude `PostToolUse` matcher removed** — hook now fires for all tool types, not just Write/Edit
+- **Deduplicated transcript parsing** — single canonical `parse_rich_transcript_lines()` replaces ~200 lines of duplicated code across `transcript.rs` and `interceptor.rs`
+- **`summarize_tool_input`** consolidated from 3 divergent implementations into one shared function with Cursor-specific tool name support (`StrReplace`, `codebase_search`, `SemanticSearch`, etc.)
+
 ## [0.1.7] - 2026-03-16
 
 ### Fixed

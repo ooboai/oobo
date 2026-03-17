@@ -208,6 +208,18 @@ fn enrich_commit(
                 } else {
                     Some(touched)
                 },
+                tool_usage: s.tool_usage.clone(),
+                tool_failures: s.tool_failures,
+                subagent_count: s
+                    .subagent_runs
+                    .as_ref()
+                    .map(|r| r.len() as u32)
+                    .filter(|&c| c > 0),
+                bash_commands: s.bash_commands.as_ref().map(|cmds| {
+                    cmds.iter().map(|c| redact::redact(c)).collect()
+                }),
+                thinking_duration_ms: s.thinking_duration_ms,
+                compact_count: s.compact_count,
                 is_subagent: false,
                 is_estimated: false,
             }
@@ -797,6 +809,12 @@ fn discover_sessions_from_tools(
                 pre_agent_snapshots: None,
                 file_snapshots: None,
                 edited_files: None,
+                tool_usage: None,
+                tool_failures: None,
+                bash_commands: None,
+                subagent_runs: None,
+                thinking_duration_ms: None,
+                compact_count: None,
                 started_at: session.created_at.unwrap_or(updated),
                 updated_at: updated,
             });
@@ -873,6 +891,21 @@ fn resolve_git_remote(cfg: &Config) -> Option<String> {
 }
 
 fn parse_transcript_messages(text: &str) -> Vec<payload::TranscriptMessage> {
+    // Detect Claude JSONL format: entries have both "type" and "message" top-level keys.
+    // Checking for both prevents false positives from non-Claude transcripts.
+    let is_claude_jsonl = text
+        .lines()
+        .take(5)
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .any(|v| {
+            let ty = v.get("type").and_then(|t| t.as_str());
+            matches!(ty, Some("user" | "assistant")) && v.get("message").is_some()
+        });
+
+    if is_claude_jsonl {
+        return parse_claude_jsonl_transcript(text);
+    }
+
     text.lines()
         .filter_map(|line| {
             let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
@@ -891,9 +924,21 @@ fn parse_transcript_messages(text: &str) -> Vec<payload::TranscriptMessage> {
             if text.is_empty() {
                 return None;
             }
-            Some(payload::TranscriptMessage { role, text })
+            Some(payload::TranscriptMessage {
+                role,
+                text: Some(text),
+                thinking: None,
+                tool_call: None,
+                tool_result: None,
+                timestamp_ms: None,
+            })
         })
         .collect()
+}
+
+/// Delegates to the canonical Claude JSONL parser in `tools::claude::transcript`.
+fn parse_claude_jsonl_transcript(text: &str) -> Vec<payload::TranscriptMessage> {
+    crate::tools::claude::transcript::parse_rich_transcript_lines(text.lines())
 }
 
 struct GitContext {

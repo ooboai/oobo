@@ -792,6 +792,12 @@ fn test_event_payload_roundtrip() {
         duration_secs: Some(120),
         tool_calls: Some(5),
         files_touched: Some(vec!["src/auth.rs".into()]),
+        tool_usage: None,
+        tool_failures: None,
+        subagent_count: None,
+        bash_commands: None,
+        thinking_duration_ms: None,
+        compact_count: None,
         is_subagent: false,
         is_estimated: false,
     }];
@@ -808,11 +814,19 @@ fn test_event_payload_roundtrip() {
         transcript: vec![
             TranscriptMessage {
                 role: "user".into(),
-                text: "Fix auth".into(),
+                text: Some("Fix auth".into()),
+                thinking: None,
+                tool_call: None,
+                tool_result: None,
+                timestamp_ms: None,
             },
             TranscriptMessage {
                 role: "assistant".into(),
-                text: "I'll fix the auth module...".into(),
+                text: Some("I'll fix the auth module...".into()),
+                thinking: None,
+                tool_call: None,
+                tool_result: None,
+                timestamp_ms: None,
             },
         ],
     };

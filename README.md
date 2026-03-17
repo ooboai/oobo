@@ -299,7 +299,7 @@ oobo agent
 
 ### Agent lifecycle hooks
 
-For tools that support it (Cursor, Claude Code, Gemini CLI, OpenCode), oobo installs hooks that track when agent sessions start and end. This enables real-time session linking during commits, rather than relying on time-window correlation.
+For tools that support it (Cursor, Claude Code, Gemini CLI, OpenCode), oobo installs hooks that track agent activity in real time: session start/end, every tool call and failure, subagent spawns, thinking events, and context compaction. This enables precise session linking and rich telemetry — tool usage breakdowns, bash command history, and thinking duration — attached to every commit anchor.
 
 ---
 

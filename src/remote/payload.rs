@@ -36,10 +36,39 @@ pub struct AnchorPayload {
     pub sessions: Vec<SessionLink>,
 }
 
+/// A tool invocation within a transcript.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallMessage {
+    pub tool_use_id: String,
+    pub name: String,
+    pub input_summary: String,
+}
+
+/// The result of a tool invocation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResultMessage {
+    pub tool_use_id: String,
+    pub name: String,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_summary: Option<String>,
+}
+
+/// A single transcript message. All optional fields are additive — older
+/// backends that only read `role` + `text` continue to work unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptMessage {
     pub role: String,
-    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call: Option<ToolCallMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_result: Option<ToolResultMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp_ms: Option<i64>,
 }
 
 /// SessionStats is still used internally by the analytics pipeline
@@ -162,6 +191,12 @@ mod tests {
             duration_secs: Some(120),
             tool_calls: Some(5),
             files_touched: Some(vec!["auth.js".into()]),
+            tool_usage: None,
+            tool_failures: None,
+            subagent_count: None,
+            bash_commands: None,
+            thinking_duration_ms: None,
+            compact_count: None,
             is_subagent: false,
             is_estimated: false,
         }];
@@ -181,11 +216,19 @@ mod tests {
             transcript: vec![
                 TranscriptMessage {
                     role: "user".into(),
-                    text: "Add auth flow".into(),
+                    text: Some("Add auth flow".into()),
+                    thinking: None,
+                    tool_call: None,
+                    tool_result: None,
+                    timestamp_ms: None,
                 },
                 TranscriptMessage {
                     role: "assistant".into(),
-                    text: "I'll create the auth module...".into(),
+                    text: Some("I'll create the auth module...".into()),
+                    thinking: None,
+                    tool_call: None,
+                    tool_result: None,
+                    timestamp_ms: None,
                 },
             ],
         };

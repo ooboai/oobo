@@ -85,52 +85,133 @@ pub fn handle_event(
         }
         "before-submit-prompt" => {
             if let Some(sid) = session_id_field {
-                // Self-heal: create session file if sessionStart fired before git init.
                 let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
-                // Capture pre-agent state: any dirty files right now are
-                // human edits (the agent hasn't started its turn yet).
                 if !project_root.is_empty() {
                     let _ = state::snapshot_pre_agent_state(&project_root, sid);
                 }
             }
         }
-        "after-file-edit" => {
+        "after-tool-use" | "after-file-edit" => {
             if let Some(sid) = session_id_field {
-                // Self-heal: create session file if sessionStart fired before git init.
                 let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
                 if !project_root.is_empty() {
-                    // Cursor: file_path at top level.
-                    // Claude PostToolUse: file_path inside tool_input.
-                    let file_path = event
+                    let tool_name = event
                         .extra
-                        .get("file_path")
+                        .get("tool_name")
                         .and_then(|v| v.as_str())
-                        .or_else(|| {
-                            event
-                                .extra
-                                .get("tool_input")
-                                .and_then(|ti| ti.get("file_path"))
-                                .and_then(|v| v.as_str())
-                        });
+                        .unwrap_or("");
 
-                    if let Some(abs_path) = file_path {
-                        let rel = make_relative(abs_path, &project_root);
-                        let _ = state::record_edited_file(&project_root, sid, &rel);
+                    let tool_input = event.extra.get("tool_input");
+
+                    // Record tool usage count by tool name.
+                    if !tool_name.is_empty() {
+                        let input_summary = summarize_tool_input_hook(tool_name, tool_input);
+                        let _ = state::record_tool_use(
+                            &project_root,
+                            sid,
+                            tool_name,
+                            input_summary.as_deref(),
+                        );
+                    }
+
+                    // Track edited files for file-modifying tools.
+                    if tool_name == "Write"
+                        || tool_name == "Edit"
+                        || tool_name == "MultiEdit"
+                        || tool_name == "Delete"
+                        || tool_name.is_empty()
+                    {
+                        // Cursor: file_path at top level.
+                        // Claude PostToolUse: file_path inside tool_input.
+                        let file_path = event
+                            .extra
+                            .get("file_path")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| {
+                                tool_input
+                                    .and_then(|ti| ti.get("file_path"))
+                                    .and_then(|v| v.as_str())
+                            });
+
+                        if let Some(abs_path) = file_path {
+                            let rel = make_relative(abs_path, &project_root);
+                            let _ = state::record_edited_file(&project_root, sid, &rel);
+                        }
                     }
                 }
             }
         }
+        "tool-use-failure" => {
+            if let Some(sid) = session_id_field {
+                let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
+                if !project_root.is_empty() {
+                    let tool_name = event
+                        .extra
+                        .get("tool_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let _ = state::record_tool_failure(&project_root, sid, tool_name);
+                }
+            }
+        }
+        "subagent-start" => {
+            if let Some(sid) = session_id_field {
+                let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
+                // Claude uses agent_id, Cursor uses subagent_id.
+                let agent_id = event
+                    .extra
+                    .get("agent_id")
+                    .or_else(|| event.extra.get("subagent_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                // Claude uses agent_type, Cursor uses subagent_type.
+                let agent_type = event
+                    .extra
+                    .get("agent_type")
+                    .or_else(|| event.extra.get("subagent_type"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                if !agent_id.is_empty() {
+                    let _ =
+                        state::record_subagent_start(&project_root, sid, agent_id, agent_type);
+                }
+            }
+        }
+        "after-agent-thought" => {
+            if let Some(sid) = session_id_field {
+                let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
+                let duration_ms = event
+                    .extra
+                    .get("duration_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                if duration_ms > 0 {
+                    let _ = state::record_thinking(&project_root, sid, duration_ms);
+                }
+            }
+        }
+        "after-agent-response" => {
+            if let Some(sid) = session_id_field {
+                let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
+                // Swallow errors — this fires on every response so a transient IO
+                // failure shouldn't surface as a hook error to the user.
+                let _ = state::touch_session(&project_root, sid, None);
+            }
+        }
+        "pre-compact" => {
+            if let Some(sid) = session_id_field {
+                let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
+                let _ = state::record_compact(&project_root, sid);
+            }
+        }
         "stop" => {
             if let Some(sid) = session_id_field {
-                // Self-heal: create session file if sessionStart fired before git init.
                 let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
                 let transcript_path = event.extra.get("transcript_path").and_then(|v| v.as_str());
                 state::touch_session(&project_root, sid, transcript_path)?;
 
                 if !project_root.is_empty() {
                     let files = if is_cursor_agent(agent) {
-                        // Cursor: composerData (bubble DB) is the primary source.
-                        // Fall back to per-edit tracking if DB is unavailable.
                         let db_files = crate::tools::cursor::composer_data::files_edited_in_session(
                             sid,
                             &project_root,
@@ -142,8 +223,6 @@ pub fn handle_event(
                             db_files
                         }
                     } else {
-                        // Non-Cursor: per-edit tracking is the primary source.
-                        // Fall back to dirty worktree scan if no edits were tracked.
                         let tracked = state::get_edited_files(&project_root, sid);
                         if tracked.is_empty() {
                             dirty_worktree_files(&project_root)
@@ -162,7 +241,16 @@ pub fn handle_event(
                 let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
                 state::touch_session(&project_root, sid, None)?;
 
-                // subagentStop payload may contain modified_files directly.
+                let agent_id = event
+                    .extra
+                    .get("agent_id")
+                    .or_else(|| event.extra.get("subagent_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !agent_id.is_empty() {
+                    let _ = state::record_subagent_end(&project_root, sid, agent_id);
+                }
+
                 if !project_root.is_empty() {
                     if let Some(files_val) = event.extra.get("modified_files") {
                         if let Some(files_arr) = files_val.as_array() {
@@ -182,6 +270,13 @@ pub fn handle_event(
     }
 
     Ok(())
+}
+
+fn summarize_tool_input_hook(
+    tool_name: &str,
+    tool_input: Option<&serde_json::Value>,
+) -> Option<String> {
+    crate::utils::summarize_tool_input(tool_name, tool_input, 200)
 }
 
 fn dirty_worktree_files(project_root: &str) -> Vec<String> {

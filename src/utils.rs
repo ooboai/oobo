@@ -297,3 +297,88 @@ mod tests {
         assert_eq!(to_epoch_secs(1_000_000_000_000_000), 1_000_000_000);
     }
 }
+
+/// Truncate a string to `max` characters at a safe UTF-8 boundary.
+/// Appends "..." if truncation occurs.
+pub fn truncate_str(s: &str, max: usize) -> String {
+    let mut chars = s.chars();
+    let truncated: String = chars.by_ref().take(max).collect();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
+/// Extract a short summary from a tool's input JSON.
+/// Picks the most relevant field per tool type and truncates to `max_len`.
+pub fn summarize_tool_input(
+    tool_name: &str,
+    tool_input: Option<&serde_json::Value>,
+    max_len: usize,
+) -> Option<String> {
+    let ti = tool_input?;
+    let raw = match tool_name {
+        "Bash" | "Shell" => ti.get("command").and_then(|v| v.as_str()),
+        "Write" | "Read" | "Edit" | "MultiEdit" | "Delete" | "StrReplace"
+        | "ReadNotebook" | "EditNotebook" => {
+            ti.get("file_path")
+                .or_else(|| ti.get("path"))
+                .and_then(|v| v.as_str())
+        }
+        "Grep" | "Glob" | "codebase_search" | "file_search" | "SemanticSearch" => {
+            ti.get("pattern")
+                .or_else(|| ti.get("query"))
+                .and_then(|v| v.as_str())
+        }
+        "WebFetch" => ti.get("url").and_then(|v| v.as_str()),
+        "WebSearch" => ti.get("query").and_then(|v| v.as_str()),
+        "Agent" | "Task" => ti
+            .get("description")
+            .or_else(|| ti.get("task"))
+            .or_else(|| ti.get("prompt"))
+            .and_then(|v| v.as_str()),
+        _ => ti
+            .get("command")
+            .or_else(|| ti.get("file_path"))
+            .or_else(|| ti.get("path"))
+            .or_else(|| ti.get("pattern"))
+            .or_else(|| ti.get("query"))
+            .and_then(|v| v.as_str()),
+    }?;
+    Some(truncate_str(raw, max_len))
+}
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_str_short() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_exact() {
+        assert_eq!(truncate_str("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_long() {
+        assert_eq!(truncate_str("hello world", 5), "hello...");
+    }
+
+    #[test]
+    fn test_truncate_str_unicode() {
+        let s = "こんにちは世界"; // 7 chars
+        let result = truncate_str(s, 3);
+        assert_eq!(result, "こんに...");
+    }
+
+    #[test]
+    fn test_truncate_str_emoji() {
+        let s = "hello 🌍🌎🌏 world";
+        let result = truncate_str(s, 8);
+        assert_eq!(result, "hello 🌍🌎...");
+    }
+}
