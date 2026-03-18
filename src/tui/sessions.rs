@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::mpsc;
 
 use crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Layout};
@@ -32,7 +33,7 @@ enum View {
 pub fn run_list(sessions: Vec<Session>, show_all: bool) -> Result<(), String> {
     let stats_map = load_stats_map(&sessions);
 
-    let rows: Vec<SessionRow> = sessions
+    let mut rows: Vec<SessionRow> = sessions
         .into_iter()
         .map(|s| {
             let msg_count = session::count_messages(&s);
@@ -51,12 +52,55 @@ pub fn run_list(sessions: Vec<Session>, show_all: bool) -> Result<(), String> {
         return Ok(());
     }
 
+    let needs_indexing: Vec<(String, String, String)> = rows
+        .iter()
+        .filter(|r| r.stats.is_none())
+        .map(|r| {
+            (
+                r.session.session_id.clone(),
+                r.session.source.clone(),
+                r.session.project_path.clone(),
+            )
+        })
+        .collect();
+
+    let (tx, rx) = mpsc::channel();
+    let bg_count = needs_indexing.len();
+    if !needs_indexing.is_empty() {
+        std::thread::spawn(move || {
+            for (sid, source, project_path) in needs_indexing {
+                if project_path.is_empty() {
+                    continue;
+                }
+                let _ = crate::commands::index::index_single_session(
+                    &sid,
+                    &source,
+                    &project_path,
+                    None,
+                );
+                if let Ok(db) = Db::open() {
+                    if let Ok(Some(stats)) = db.get_stats(&sid, &source) {
+                        let _ = tx.send((sid, source, stats));
+                    }
+                }
+            }
+        });
+    }
+
     let mut terminal = crate::tui::init().map_err(|e| e.to_string())?;
     let mut table_state = TableState::default();
     table_state.select(Some(0));
     let mut view = View::List;
 
-    let result = run_loop(&mut terminal, &rows, &mut table_state, &mut view, show_all);
+    let result = run_loop(
+        &mut terminal,
+        &mut rows,
+        &mut table_state,
+        &mut view,
+        show_all,
+        &rx,
+        bg_count,
+    );
     crate::tui::restore();
     result
 }
@@ -113,15 +157,40 @@ fn load_stats_map(sessions: &[Session]) -> HashMap<(String, String), StatsRow> {
 
 fn run_loop(
     terminal: &mut ratatui::DefaultTerminal,
-    rows: &[SessionRow],
+    rows: &mut [SessionRow],
     table_state: &mut TableState,
     view: &mut View,
     show_all: bool,
+    bg_rx: &mpsc::Receiver<(String, String, StatsRow)>,
+    bg_total: usize,
 ) -> Result<(), String> {
     let mut search_query = String::new();
     let mut filtered_indices: Vec<usize> = (0..rows.len()).collect();
+    let mut bg_finished = bg_total == 0;
 
     loop {
+        // Drain background indexing results and update rows in place.
+        if !bg_finished {
+            loop {
+                match bg_rx.try_recv() {
+                    Ok((sid, source, stats)) => {
+                        if let Some(row) = rows
+                            .iter_mut()
+                            .find(|r| r.session.session_id == sid && r.session.source == source)
+                        {
+                            row.stats = Some(stats);
+                        }
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        bg_finished = true;
+                        break;
+                    }
+                }
+            }
+        }
+        let indexing = !bg_finished;
+
         match view {
             View::List => {
                 let display_rows: Vec<&SessionRow> =
@@ -132,7 +201,9 @@ fn run_loop(
                     Some(search_query.as_str())
                 };
                 terminal
-                    .draw(|f| render_list(f, &display_rows, table_state, show_all, filter_text))
+                    .draw(|f| {
+                        render_list(f, &display_rows, table_state, show_all, filter_text, indexing)
+                    })
                     .map_err(|e| e.to_string())?;
 
                 if let Some(code) =
@@ -202,7 +273,7 @@ fn run_loop(
                 let filter_text = Some(search_query.as_str());
                 terminal
                     .draw(|f| {
-                        render_list(f, &display_rows, table_state, show_all, filter_text);
+                        render_list(f, &display_rows, table_state, show_all, filter_text, indexing);
                         let area = f.area();
                         let search_area = ratatui::layout::Rect {
                             x: 0,
@@ -318,6 +389,7 @@ fn render_list(
     state: &mut TableState,
     show_all: bool,
     filter: Option<&str>,
+    indexing: bool,
 ) {
     let area = f.area();
     let chunks = Layout::vertical([
@@ -349,6 +421,12 @@ fn render_list(
             ));
         }
     }
+    if indexing {
+        title_spans.push(Span::styled(
+            " indexing...",
+            Style::default().fg(Color::Magenta),
+        ));
+    }
     f.render_widget(Paragraph::new(Line::from(title_spans)), chunks[0]);
 
     let header = Row::new(vec![
@@ -379,12 +457,15 @@ fn render_list(
                 "—".into()
             };
 
+            let has_stats = r.stats.is_some();
+            let placeholder = if indexing && !has_stats { "..." } else { "—" };
+
             let model = r
                 .stats
                 .as_ref()
                 .and_then(|st| st.model.as_deref())
                 .map(shorten_model)
-                .unwrap_or_else(|| "—".into());
+                .unwrap_or_else(|| placeholder.into());
 
             let tokens = r
                 .stats
@@ -401,14 +482,14 @@ fn render_list(
                         format_tokens(total)
                     }
                 })
-                .unwrap_or_else(|| "—".into());
+                .unwrap_or_else(|| placeholder.into());
 
             let dur = r
                 .stats
                 .as_ref()
                 .and_then(|st| st.duration_secs)
                 .map(format_duration)
-                .unwrap_or_else(|| "—".into());
+                .unwrap_or_else(|| placeholder.into());
 
             let name = if s.name.is_empty() {
                 "(untitled)".to_string()
@@ -425,12 +506,18 @@ fn render_list(
 
             let short_id = s.short_id();
 
+            let token_style = if indexing && !has_stats {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::Yellow)
+            };
+
             Row::new(vec![
                 Cell::from(short_id).style(Style::default().fg(Color::DarkGray)),
                 Cell::from(src),
                 Cell::from(updated),
                 Cell::from(model),
-                Cell::from(tokens).style(Style::default().fg(Color::Yellow)),
+                Cell::from(tokens).style(token_style),
                 Cell::from(dur),
                 Cell::from(name),
             ])

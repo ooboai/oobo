@@ -40,7 +40,22 @@ pub fn on_write_op(cfg: &Config, args: &[&str]) -> Result<(), String> {
 
     if op == "commit" || op == "merge" {
         match enrich_commit(cfg, &project_root, &branch, &git_context) {
-            Ok(data) => anchor_data = data,
+            Ok(data) => {
+                // Proactively compute stats for linked sessions so they're
+                // available immediately without requiring `oobo scan`.
+                // Spawned on a detached thread to avoid adding latency to git commit.
+                if let Some((_, ref links, _)) = data {
+                    let index_links: Vec<_> = links
+                        .iter()
+                        .map(|l| (l.session_id.clone(), l.agent.clone()))
+                        .collect();
+                    let pr = project_root.to_string();
+                    std::thread::spawn(move || {
+                        index_linked_sessions_bg(&index_links, &pr);
+                    });
+                }
+                anchor_data = data;
+            }
             Err(e) => eprintln!("oobo: warning: could not enrich commit: {e}"),
         }
     }
@@ -822,6 +837,26 @@ fn discover_sessions_from_tools(
     }
 
     discovered
+}
+
+/// Proactively index linked sessions on a background thread so stats are
+/// available immediately in `oobo sessions` without waiting for `oobo scan`.
+fn index_linked_sessions_bg(links: &[(String, String)], project_root: &str) {
+    for (session_id, agent) in links {
+        let source = crate::core::tool::normalize_source(agent);
+        let state = hooks::state::read_session(project_root, session_id);
+        if let Err(e) = crate::commands::index::index_single_session(
+            session_id,
+            source,
+            project_root,
+            state.as_ref(),
+        ) {
+            eprintln!(
+                "oobo: warning: could not index session {}: {e}",
+                &session_id[..session_id.len().min(8)]
+            );
+        }
+    }
 }
 
 /// Match a session's agent name to a tool's canonical name.

@@ -80,6 +80,22 @@ pub fn handle_event(
         }
         "session-end" => {
             if let Some(sid) = session_id_field {
+                // Read the session state BEFORE deleting to compute stats proactively.
+                if !project_root.is_empty() {
+                    let active = state::read_session(&project_root, sid);
+                    let source = crate::core::tool::normalize_source(agent);
+                    if let Err(e) = crate::commands::index::index_single_session(
+                        sid,
+                        source,
+                        &project_root,
+                        active.as_ref(),
+                    ) {
+                        eprintln!(
+                            "oobo: warning: could not index session {}: {e}",
+                            &sid[..sid.len().min(8)]
+                        );
+                    }
+                }
                 state::remove_session(&project_root, sid);
             }
         }

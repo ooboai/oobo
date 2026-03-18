@@ -301,6 +301,8 @@ oobo agent
 
 For tools that support it (Cursor, Claude Code, Gemini CLI, OpenCode), oobo installs hooks that track agent activity in real time: session start/end, every tool call and failure, subagent spawns, thinking events, and context compaction. This enables precise session linking and rich telemetry — tool usage breakdowns, bash command history, and thinking duration — attached to every commit anchor.
 
+Session stats (tokens, model, duration) are computed proactively at session-end and commit time, so `oobo sessions` shows complete data immediately without requiring a manual `oobo scan`.
+
 ---
 
 ## Configuration

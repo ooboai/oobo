@@ -79,7 +79,10 @@ pub fn full_scan(db: &Db, cfg: &Config) -> Result<ScanResult, String> {
             } else {
                 Some(session.mode.clone())
             },
-            model: None,
+            model: crate::hooks::state::read_session_model(
+                &session.project_path,
+                &session.session_id,
+            ),
             created_at: session.created_at,
             updated_at: session.updated_at,
             message_count: 0,
@@ -149,7 +152,10 @@ pub fn scan_project(db: &Db, cfg: &Config, project_path: &str) -> Result<ScanRes
             } else {
                 Some(session.mode.clone())
             },
-            model: None,
+            model: crate::hooks::state::read_session_model(
+                project_path,
+                &session.session_id,
+            ),
             created_at: session.created_at,
             updated_at: session.updated_at,
             message_count: 0,

@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-03-18
+
+### Added
+
+- **Proactive session indexing** — session stats (tokens, model, duration) are computed automatically at session-end and commit time, eliminating the need to run `oobo scan` before `oobo sessions` shows data
+- **Background indexing in TUI** — `oobo sessions` shows the table immediately with `...` placeholders for unindexed sessions, filling them in the background as stats are computed
+- **Inline indexing for JSON/search** — `oobo sessions --json` and `oobo sessions search` index up to 20 unindexed sessions inline so output is complete
+- **Model enrichment from hook state** — session model info recorded by hooks is now used during scanning and indexing, fixing the "model missing" issue for Cursor sessions
+- **`normalize_source()` helper** — centralized agent-to-source mapping in `core/tool.rs`, replacing duplicated inline conditionals
+- **`read_session()` / `read_session_model()`** — new functions in `hooks/state.rs` for reading session state files
+- 11 new unit tests covering `read_session`, `read_session_model`, `merge_native_stats`, state enrichment, and inline indexing
+
+### Fixed
+
+- **`upsert_session` NULL clobber** — `name` and `mode` columns now use `COALESCE` in the upsert SQL, preventing proactive indexing from overwriting existing values with NULL
+- **TUI "indexing..." indicator stuck forever** — replaced count-based progress tracking with `TryRecvError::Disconnected` detection so the indicator disappears when the background thread completes
+- **Commit-time indexing latency** — session indexing at commit time now runs on a detached background thread instead of blocking the git commit path
+- **Double Cursor data loads** — `index_single_session` now loads bubble/composer data once via `load_cursor_messages_and_enrich()` instead of loading it separately for messages and native stats
+- **Redundant model file reads** — `index_sessions_inner` now checks `row.model` before falling back to reading the hook state file, avoiding double I/O during the scan → index pipeline
+
+### Changed
+
+- **Proactive indexing errors are now logged** — `eprintln!("oobo: warning: ...")` at session-end, commit-time, and inline indexing call sites (TUI background thread stays silent to avoid corrupting the terminal)
+
 ## [0.1.8] - 2026-03-17
 
 ### Added

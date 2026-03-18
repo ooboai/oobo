@@ -3,7 +3,7 @@ name: oobo
 description: AI development control plane. Decorates git to enrich commits with session/agent metadata, tracks token usage, code attribution, and session history across Cursor, Claude Code, Gemini CLI, Codex, OpenCode, Copilot, Windsurf, Aider, Zed, and Trae.
 metadata:
   author: oobo
-  version: "0.1.8"
+  version: "0.1.9"
 install:
   check: command -v oobo
   run: curl -fsSL https://oobo.ai/install.sh | bash -s -- --agent
@@ -225,7 +225,7 @@ Oobo operates in two layers:
 
 - Token counts with `is_estimated: true` are tiktoken estimates. `false` means native from the tool.
 - Session IDs support prefix matching (e.g. `2c97` matches `2c97dced-3950-...`).
-- Run `oobo scan` then `oobo index` if data seems stale.
+- Stats are computed proactively at session-end and commit time. Run `oobo scan` then `oobo index` only if data seems stale after an upgrade.
 - All data is local SQLite at `~/.oobo/db/oobo.db`.
 - Anchor metadata is stored per-commit and visible via `oobo anchors --agent`.
 - `git log` passes through to git normally; `oobo anchors` is the enriched alternative.

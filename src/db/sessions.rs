@@ -24,8 +24,8 @@ impl Db {
                 "INSERT INTO sessions (id, source, project_id, name, mode, model, created_at, updated_at, message_count, first_message, indexed_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(id, source) DO UPDATE SET
-                     name = excluded.name,
-                     mode = excluded.mode,
+                     name = COALESCE(excluded.name, sessions.name),
+                     mode = COALESCE(excluded.mode, sessions.mode),
                      model = COALESCE(excluded.model, sessions.model),
                      updated_at = COALESCE(excluded.updated_at, sessions.updated_at),
                      message_count = excluded.message_count,

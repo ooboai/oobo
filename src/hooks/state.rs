@@ -450,6 +450,20 @@ pub fn get_edited_files(project_root: &str, session_id: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Read and deserialize the active session state file, if it exists.
+pub fn read_session(project_root: &str, session_id: &str) -> Option<ActiveSession> {
+    let path = session_path(project_root, session_id);
+    let content = fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// Read the model field from a session state file.
+/// Deserializes the full `ActiveSession`; consider caching if called in a loop.
+pub fn read_session_model(project_root: &str, session_id: &str) -> Option<String> {
+    let state = read_session(project_root, session_id)?;
+    state.model
+}
+
 /// Remove a session state file (session ended).
 pub fn remove_session(project_root: &str, session_id: &str) {
     let path = session_path(project_root, session_id);
@@ -999,5 +1013,80 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
 
         assert_eq!(state.compact_count, Some(3));
+    }
+
+    #[test]
+    fn test_read_session_returns_active_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        write_session(root_str, "read-test", "claude", Some("claude-opus-4")).unwrap();
+
+        let session = read_session(root_str, "read-test");
+        assert!(session.is_some());
+        let session = session.unwrap();
+        assert_eq!(session.session_id, "read-test");
+        assert_eq!(session.agent, "claude");
+        assert_eq!(session.model.as_deref(), Some("claude-opus-4"));
+    }
+
+    #[test]
+    fn test_read_session_returns_none_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        assert!(read_session(root_str, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_read_session_model_extracts_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        write_session(root_str, "model-test", "cursor", Some("gpt-4o")).unwrap();
+        assert_eq!(
+            read_session_model(root_str, "model-test").as_deref(),
+            Some("gpt-4o")
+        );
+    }
+
+    #[test]
+    fn test_read_session_model_returns_none_when_no_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        write_session(root_str, "no-model", "cursor", None).unwrap();
+        assert!(read_session_model(root_str, "no-model").is_none());
+    }
+
+    #[test]
+    fn test_read_session_preserves_accumulated_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        write_session(root_str, "rich-sess", "claude", Some("sonnet")).unwrap();
+        record_tool_use(root_str, "rich-sess", "Bash", Some("ls -la")).unwrap();
+        record_tool_use(root_str, "rich-sess", "Edit", Some("main.rs")).unwrap();
+        record_tool_use(root_str, "rich-sess", "Bash", Some("cargo build")).unwrap();
+        record_tool_failure(root_str, "rich-sess", "Write").unwrap();
+        record_thinking(root_str, "rich-sess", 500).unwrap();
+
+        let session = read_session(root_str, "rich-sess").unwrap();
+        let usage = session.tool_usage.unwrap();
+        assert_eq!(usage.get("Bash"), Some(&2));
+        assert_eq!(usage.get("Edit"), Some(&1));
+        assert_eq!(session.tool_failures, Some(1));
+        assert_eq!(session.thinking_duration_ms, Some(500));
+        assert_eq!(session.bash_commands.as_ref().map(|c| c.len()), Some(2));
     }
 }

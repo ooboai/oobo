@@ -84,6 +84,16 @@ pub fn is_cursor_agent(agent: &str) -> bool {
     )
 }
 
+/// Normalize an agent name to its canonical source identifier for DB storage.
+/// Cursor's various mode names ("agent", "ask", "edit", etc.) all map to "composer".
+pub fn normalize_source(agent: &str) -> &str {
+    if is_cursor_agent(agent) {
+        "composer"
+    } else {
+        agent
+    }
+}
+
 /// Central registry of all supported AI tools.
 pub struct ToolRegistry {
     tools: Vec<Box<dyn Tool>>,

@@ -77,14 +77,18 @@ fn list_json(
     }
 
     let db = Db::open().ok();
-    let stats_map = db.as_ref().and_then(|d| d.get_stats_bulk(&[]).ok());
+    let mut stats_map = db
+        .as_ref()
+        .and_then(|d| d.get_stats_bulk(&[]).ok())
+        .unwrap_or_default();
+
+    // Index sessions without stats inline so the output is complete.
+    index_missing_sessions(&sessions, &mut stats_map);
 
     let items: Vec<serde_json::Value> = sessions
         .iter()
         .map(|s| {
-            let st = stats_map
-                .as_ref()
-                .and_then(|m| m.get(&(s.session_id.clone(), s.source.clone())));
+            let st = stats_map.get(&(s.session_id.clone(), s.source.clone()));
 
             let mut obj = serde_json::json!({
                 "session_id": s.session_id,
@@ -129,7 +133,12 @@ fn search(query: &str, cfg: &Config, all: bool, agent: bool, limit: usize) -> Re
 
     let lower_query = query.to_lowercase();
     let db = Db::open().ok();
-    let stats_map = db.as_ref().and_then(|d| d.get_stats_bulk(&[]).ok());
+    let mut stats_map = db
+        .as_ref()
+        .and_then(|d| d.get_stats_bulk(&[]).ok())
+        .unwrap_or_default();
+
+    index_missing_sessions(&sessions, &mut stats_map);
 
     let mut matches: Vec<(
         &crate::tools::cursor::Session,
@@ -138,9 +147,7 @@ fn search(query: &str, cfg: &Config, all: bool, agent: bool, limit: usize) -> Re
     )> = Vec::new();
 
     for s in &sessions {
-        let st = stats_map
-            .as_ref()
-            .and_then(|m| m.get(&(s.session_id.clone(), s.source.clone())));
+        let st = stats_map.get(&(s.session_id.clone(), s.source.clone()));
 
         if s.name.to_lowercase().contains(&lower_query)
             || s.session_id.to_lowercase().contains(&lower_query)
@@ -349,4 +356,106 @@ fn export(id: &str, format: &str, out: Option<&str>) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Index sessions that have no stats yet (blocking).
+/// Capped at 20 to avoid blocking JSON/agent output for too long.
+const INLINE_INDEX_CAP: usize = 20;
+
+fn index_missing_sessions(
+    sessions: &[crate::tools::cursor::Session],
+    stats_map: &mut std::collections::HashMap<
+        (String, String),
+        crate::db::stats::StatsRow,
+    >,
+) {
+    let missing: Vec<_> = sessions
+        .iter()
+        .filter(|s| {
+            !s.project_path.is_empty()
+                && !stats_map.contains_key(&(s.session_id.clone(), s.source.clone()))
+        })
+        .take(INLINE_INDEX_CAP)
+        .collect();
+
+    if missing.is_empty() {
+        return;
+    }
+
+    for s in &missing {
+        if let Err(e) = crate::commands::index::index_single_session(
+            &s.session_id,
+            &s.source,
+            &s.project_path,
+            None,
+        ) {
+            eprintln!(
+                "oobo: warning: could not index session {}: {e}",
+                &s.session_id[..s.session_id.len().min(8)]
+            );
+        }
+    }
+
+    // Reload stats for the newly indexed sessions.
+    if let Ok(db) = Db::open() {
+        if let Ok(fresh) = db.get_stats_bulk(&[]) {
+            for (key, val) in fresh {
+                stats_map.entry(key).or_insert(val);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_index_missing_sessions_skips_when_all_present() {
+        let sessions = vec![crate::tools::cursor::Session {
+            session_id: "s1".to_string(),
+            name: "test".to_string(),
+            mode: "agent".to_string(),
+            created_at: Some(1000),
+            updated_at: Some(2000),
+            project_path: "/test".to_string(),
+            workspace_dir: String::new(),
+            source: "composer".to_string(),
+        }];
+
+        let mut stats_map = std::collections::HashMap::new();
+        stats_map.insert(
+            ("s1".to_string(), "composer".to_string()),
+            crate::db::stats::StatsRow {
+                session_id: "s1".to_string(),
+                source: "composer".to_string(),
+                model: Some("claude-opus-4".to_string()),
+                input_tokens: Some(1000),
+                output_tokens: Some(2000),
+                ..Default::default()
+            },
+        );
+
+        let initial_len = stats_map.len();
+        index_missing_sessions(&sessions, &mut stats_map);
+        assert_eq!(stats_map.len(), initial_len);
+    }
+
+    #[test]
+    fn test_index_missing_sessions_skips_empty_project_path() {
+        let sessions = vec![crate::tools::cursor::Session {
+            session_id: "s2".to_string(),
+            name: "orphan".to_string(),
+            mode: "agent".to_string(),
+            created_at: Some(1000),
+            updated_at: Some(2000),
+            project_path: String::new(),
+            workspace_dir: String::new(),
+            source: "composer".to_string(),
+        }];
+
+        let mut stats_map = std::collections::HashMap::new();
+        index_missing_sessions(&sessions, &mut stats_map);
+        // Should not crash or add anything for empty project_path sessions.
+    }
 }
