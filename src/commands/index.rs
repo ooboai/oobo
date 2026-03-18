@@ -886,11 +886,7 @@ mod tests {
             transcript_path: None,
             pre_agent_snapshots: None,
             file_snapshots: None,
-            edited_files: Some(
-                ["src/main.rs".to_string()]
-                    .into_iter()
-                    .collect(),
-            ),
+            edited_files: Some(["src/main.rs".to_string()].into_iter().collect()),
             tool_usage: Some(
                 [("Bash".to_string(), 3), ("Edit".to_string(), 2)]
                     .into_iter()

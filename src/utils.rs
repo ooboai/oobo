@@ -320,17 +320,15 @@ pub fn summarize_tool_input(
     let ti = tool_input?;
     let raw = match tool_name {
         "Bash" | "Shell" => ti.get("command").and_then(|v| v.as_str()),
-        "Write" | "Read" | "Edit" | "MultiEdit" | "Delete" | "StrReplace"
-        | "ReadNotebook" | "EditNotebook" => {
-            ti.get("file_path")
-                .or_else(|| ti.get("path"))
-                .and_then(|v| v.as_str())
-        }
-        "Grep" | "Glob" | "codebase_search" | "file_search" | "SemanticSearch" => {
-            ti.get("pattern")
-                .or_else(|| ti.get("query"))
-                .and_then(|v| v.as_str())
-        }
+        "Write" | "Read" | "Edit" | "MultiEdit" | "Delete" | "StrReplace" | "ReadNotebook"
+        | "EditNotebook" => ti
+            .get("file_path")
+            .or_else(|| ti.get("path"))
+            .and_then(|v| v.as_str()),
+        "Grep" | "Glob" | "codebase_search" | "file_search" | "SemanticSearch" => ti
+            .get("pattern")
+            .or_else(|| ti.get("query"))
+            .and_then(|v| v.as_str()),
         "WebFetch" => ti.get("url").and_then(|v| v.as_str()),
         "WebSearch" => ti.get("query").and_then(|v| v.as_str()),
         "Agent" | "Task" => ti

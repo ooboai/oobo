@@ -202,7 +202,14 @@ fn run_loop(
                 };
                 terminal
                     .draw(|f| {
-                        render_list(f, &display_rows, table_state, show_all, filter_text, indexing)
+                        render_list(
+                            f,
+                            &display_rows,
+                            table_state,
+                            show_all,
+                            filter_text,
+                            indexing,
+                        )
                     })
                     .map_err(|e| e.to_string())?;
 
@@ -273,7 +280,14 @@ fn run_loop(
                 let filter_text = Some(search_query.as_str());
                 terminal
                     .draw(|f| {
-                        render_list(f, &display_rows, table_state, show_all, filter_text, indexing);
+                        render_list(
+                            f,
+                            &display_rows,
+                            table_state,
+                            show_all,
+                            filter_text,
+                            indexing,
+                        );
                         let area = f.area();
                         let search_area = ratatui::layout::Rect {
                             x: 0,

@@ -230,9 +230,10 @@ fn enrich_commit(
                     .as_ref()
                     .map(|r| r.len() as u32)
                     .filter(|&c| c > 0),
-                bash_commands: s.bash_commands.as_ref().map(|cmds| {
-                    cmds.iter().map(|c| redact::redact(c)).collect()
-                }),
+                bash_commands: s
+                    .bash_commands
+                    .as_ref()
+                    .map(|cmds| cmds.iter().map(|c| redact::redact(c)).collect()),
                 thinking_duration_ms: s.thinking_duration_ms,
                 compact_count: s.compact_count,
                 is_subagent: false,

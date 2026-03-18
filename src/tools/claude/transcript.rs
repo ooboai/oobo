@@ -184,11 +184,9 @@ pub fn parse_rich_transcript_lines<'a>(
                             .get("is_error")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
-                        let output = extract_tool_result_output(part).map(|s| truncate_str(&s, 500));
-                        let name = tool_name_map
-                            .get(&tool_use_id)
-                            .cloned()
-                            .unwrap_or_default();
+                        let output =
+                            extract_tool_result_output(part).map(|s| truncate_str(&s, 500));
+                        let name = tool_name_map.get(&tool_use_id).cloned().unwrap_or_default();
 
                         messages.push(TranscriptMessage {
                             role: "tool".to_string(),
@@ -242,16 +240,12 @@ pub fn parse_rich_transcript_lines<'a>(
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("")
                                     .to_string();
-                                let input_summary = summarize_tool_input(
-                                    &name,
-                                    part.get("input"),
-                                    300,
-                                )
-                                .unwrap_or_default();
+                                let input_summary =
+                                    summarize_tool_input(&name, part.get("input"), 300)
+                                        .unwrap_or_default();
 
                                 if !name.is_empty() {
-                                    tool_name_map
-                                        .insert(tool_use_id.clone(), name.clone());
+                                    tool_name_map.insert(tool_use_id.clone(), name.clone());
                                     tool_calls.push(TranscriptMessage {
                                         role: "assistant".to_string(),
                                         text: None,

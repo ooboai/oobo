@@ -360,11 +360,7 @@ pub fn record_subagent_start(
 }
 
 /// Record a subagent completing by setting its ended_at timestamp.
-pub fn record_subagent_end(
-    project_root: &str,
-    session_id: &str,
-    agent_id: &str,
-) -> Result<()> {
+pub fn record_subagent_end(project_root: &str, session_id: &str, agent_id: &str) -> Result<()> {
     let path = session_path(project_root, session_id);
     if !path.exists() {
         return Ok(());
@@ -390,11 +386,7 @@ pub fn record_subagent_end(
 }
 
 /// Record thinking duration from an afterAgentThought hook.
-pub fn record_thinking(
-    project_root: &str,
-    session_id: &str,
-    duration_ms: u64,
-) -> Result<()> {
+pub fn record_thinking(project_root: &str, session_id: &str, duration_ms: u64) -> Result<()> {
     let path = session_path(project_root, session_id);
     if !path.exists() {
         return Ok(());

@@ -188,8 +188,7 @@ pub fn handle_event(
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
                 if !agent_id.is_empty() {
-                    let _ =
-                        state::record_subagent_start(&project_root, sid, agent_id, agent_type);
+                    let _ = state::record_subagent_start(&project_root, sid, agent_id, agent_type);
                 }
             }
         }

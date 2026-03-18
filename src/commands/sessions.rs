@@ -364,10 +364,7 @@ const INLINE_INDEX_CAP: usize = 20;
 
 fn index_missing_sessions(
     sessions: &[crate::tools::cursor::Session],
-    stats_map: &mut std::collections::HashMap<
-        (String, String),
-        crate::db::stats::StatsRow,
-    >,
+    stats_map: &mut std::collections::HashMap<(String, String), crate::db::stats::StatsRow>,
 ) {
     let missing: Vec<_> = sessions
         .iter()
