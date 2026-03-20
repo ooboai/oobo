@@ -284,8 +284,7 @@ fn rand_jitter_ms(max: u64) -> u64 {
 /// Fetch the orphan branch from origin and reconcile diverged branches.
 /// Working tree and HEAD are never touched.
 pub fn fetch_and_reconcile(project_root: &str) -> Result<(), String> {
-    reconcile_with_remote(project_root)
-        .map_err(|e| format!("fetch/reconcile failed: {e}"))
+    reconcile_with_remote(project_root).map_err(|e| format!("fetch/reconcile failed: {e}"))
 }
 
 const NULL_OID: &str = "0000000000000000000000000000000000000000";
@@ -372,11 +371,7 @@ fn reconcile_local_with(project_root: &str, remote_tip: &str) -> Result<(), Stri
 
 /// Builds a merged commit before moving the branch ref — if any step
 /// fails, the branch is untouched.
-fn replay_local_files(
-    project_root: &str,
-    local_tip: &str,
-    remote_tip: &str,
-) -> Result<(), String> {
+fn replay_local_files(project_root: &str, local_tip: &str, remote_tip: &str) -> Result<(), String> {
     let local_tree = git_in(project_root, &["ls-tree", "-r", "--name-only", local_tip])?;
     let remote_tree = git_in(project_root, &["ls-tree", "-r", "--name-only", remote_tip])?;
 
@@ -964,7 +959,11 @@ mod tests {
         let base = git_in(&repo, &["rev-parse", BRANCH]).unwrap();
 
         // Build local branch: base + local file
-        write_to_branch(&repo, &[("aa/bb/metadata.json".into(), r#"{"a":1}"#.into())]).unwrap();
+        write_to_branch(
+            &repo,
+            &[("aa/bb/metadata.json".into(), r#"{"a":1}"#.into())],
+        )
+        .unwrap();
         let local_tip = git_in(&repo, &["rev-parse", BRANCH]).unwrap();
 
         // Build remote branch: reset to base, add different file
@@ -973,7 +972,11 @@ mod tests {
             &["update-ref", &format!("refs/heads/{BRANCH}"), &base],
         )
         .unwrap();
-        write_to_branch(&repo, &[("cc/dd/metadata.json".into(), r#"{"b":2}"#.into())]).unwrap();
+        write_to_branch(
+            &repo,
+            &[("cc/dd/metadata.json".into(), r#"{"b":2}"#.into())],
+        )
+        .unwrap();
         let remote_tip = git_in(&repo, &["rev-parse", BRANCH]).unwrap();
 
         // Set branch back to local_tip (replay expects branch at local_tip)
@@ -1036,28 +1039,24 @@ mod tests {
             let leftover: Vec<_> = std::fs::read_dir(&git_dir)
                 .unwrap()
                 .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.file_name()
-                        .to_string_lossy()
-                        .starts_with("oobo-index-")
-                })
+                .filter(|e| e.file_name().to_string_lossy().starts_with("oobo-index-"))
                 .collect();
             assert!(leftover.is_empty(), "{label}: found {:?}", leftover);
         };
 
         // Success path: full pipeline runs, temp index cleaned up.
-        let _ = build_commit_on(&repo, &parent, &[("test.txt".into(), "data".into())], "test");
+        let _ = build_commit_on(
+            &repo,
+            &parent,
+            &[("test.txt".into(), "data".into())],
+            "test",
+        );
         assert_no_leftover("after successful build");
 
         // Error path: read-tree succeeds (temp index created on disk),
         // then update-index rejects the empty path → closure returns Err,
         // cleanup removes the temp file.
-        let result = build_commit_on(
-            &repo,
-            &parent,
-            &[("".into(), "data".into())],
-            "should fail",
-        );
+        let result = build_commit_on(&repo, &parent, &[("".into(), "data".into())], "should fail");
         assert!(result.is_err(), "empty path should fail in update-index");
         assert_no_leftover("after mid-pipeline error");
     }

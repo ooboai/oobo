@@ -242,4 +242,3 @@ pub fn auto_hydrate(project_root: &str) {
         Err(e) => eprintln!("oobo: warning: hydration failed: {e}"),
     }
 }
-
