@@ -157,7 +157,7 @@ fn post_clone(_cfg: &Config, args: &[&str]) {
         return;
     }
 
-    if let Err(e) = crate::git::orphan::fetch(&root) {
+    if let Err(e) = crate::git::orphan::fetch_and_reconcile(&root) {
         eprintln!("oobo: could not fetch anchor metadata: {e}");
         return;
     }

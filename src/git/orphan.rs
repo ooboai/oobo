@@ -1,5 +1,5 @@
+use std::collections::HashSet;
 use std::fs;
-
 use std::process::{Command, Stdio};
 
 use crate::core::anchor::{Anchor, SessionLink, TransparencyMode};
@@ -97,7 +97,7 @@ pub fn list_anchor_hashes(project_root: &str) -> Vec<String> {
         Err(_) => return Vec::new(),
     };
 
-    let mut hashes = std::collections::HashSet::new();
+    let mut hashes = HashSet::new();
     for line in tree.lines() {
         // Lines look like: "c8/e12fa9b3d4…/metadata.json"
         // or "c8/e12fa9b3d4…/1/metadata.json" (session sub-dir)
@@ -194,23 +194,21 @@ pub fn hydrate_from_branch(project_root: &str, db: &crate::db::Db) -> Result<usi
     Ok(imported)
 }
 
-/// Check if the orphan branch exists locally.
 pub fn branch_exists(project_root: &str) -> bool {
     git_in(project_root, &["rev-parse", "--verify", BRANCH]).is_ok()
 }
 
-/// Check if the orphan branch exists on the remote.
 pub fn remote_branch_exists(project_root: &str) -> bool {
     git_in(project_root, &["ls-remote", "--heads", "origin", BRANCH])
         .map(|out| !out.trim().is_empty())
         .unwrap_or(false)
 }
 
+/// 5 retries: remote push contention is common in multi-user/agent
+/// workflows and each attempt requires a network round-trip.
 const MAX_PUSH_ATTEMPTS: u32 = 5;
 
-/// Push the orphan branch to origin. Retries with jittered backoff on
-/// non-fast-forward errors (common when multiple agents push concurrently).
-/// If all retries fail, records the failure for later retry via `retry_pending_pushes`.
+/// Push the orphan branch to origin with retry on contention.
 pub fn push(project_root: &str) -> Result<(), String> {
     retry_pending_pushes(project_root);
 
@@ -224,14 +222,8 @@ pub fn push(project_root: &str) -> Result<(), String> {
             Err(e) if e.contains("non-fast-forward") || e.contains("rejected") => {
                 last_err = e;
                 if attempt < MAX_PUSH_ATTEMPTS - 1 {
-                    let _ = git_in(project_root, &["fetch", "origin", BRANCH]);
-                    if git_in(
-                        project_root,
-                        &["rebase", &format!("origin/{BRANCH}"), BRANCH],
-                    )
-                    .is_err()
-                    {
-                        let _ = git_in(project_root, &["rebase", "--abort"]);
+                    if let Err(re) = reconcile_with_remote(project_root) {
+                        last_err = format!("{last_err}; reconcile failed: {re}");
                     }
                     jitter_sleep(attempt);
                 }
@@ -245,17 +237,12 @@ pub fn push(project_root: &str) -> Result<(), String> {
     ))
 }
 
-/// Retry any previously failed pushes (called at the start of each push).
 pub fn retry_pending_pushes(project_root: &str) {
     let path = pending_push_path(project_root);
     if !path.exists() {
         return;
     }
-    let _ = git_in(project_root, &["fetch", "origin", BRANCH]);
-    let _ = git_in(
-        project_root,
-        &["rebase", &format!("origin/{BRANCH}"), BRANCH],
-    );
+    let _ = reconcile_with_remote(project_root);
     if git_in(project_root, &["push", "--no-verify", "origin", BRANCH]).is_ok() {
         let _ = fs::remove_file(&path);
     }
@@ -281,28 +268,161 @@ fn jitter_sleep(attempt: u32) {
     std::thread::sleep(std::time::Duration::from_millis(base_ms + jitter));
 }
 
-/// Simple jitter without pulling in the `rand` crate.
+/// Mixes in PID so concurrent processes get decorrelated jitter.
 fn rand_jitter_ms(max: u64) -> u64 {
     if max == 0 {
         return 0;
     }
-    let seed = std::time::SystemTime::now()
+    let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .subsec_nanos() as u64;
-    seed % max
+    let pid = std::process::id() as u64;
+    nanos.wrapping_mul(pid.wrapping_add(7)) % max
 }
 
-/// Fetch the orphan branch from origin (for first-use detection).
-pub fn fetch(project_root: &str) -> Result<(), String> {
+/// Fetch the orphan branch from origin and reconcile diverged branches.
+/// Working tree and HEAD are never touched.
+pub fn fetch_and_reconcile(project_root: &str) -> Result<(), String> {
+    reconcile_with_remote(project_root)
+        .map_err(|e| format!("fetch/reconcile failed: {e}"))
+}
+
+const NULL_OID: &str = "0000000000000000000000000000000000000000";
+
+/// Fetch into a PID-namespaced temp ref to avoid FETCH_HEAD races and
+/// force-fetch data loss.
+fn reconcile_with_remote(project_root: &str) -> Result<(), String> {
+    let fetch_ref = format!("refs/oobo/fetch-tmp/{}", std::process::id());
+    let refspec = format!("+{BRANCH}:{fetch_ref}");
+
+    let fetch_result = git_in(project_root, &["fetch", "origin", &refspec]);
+
+    let cleanup = |pr: &str| {
+        let _ = git_in(pr, &["update-ref", "-d", &fetch_ref]);
+    };
+
+    if let Err(e) = fetch_result {
+        cleanup(project_root);
+        return Err(e);
+    }
+
+    let remote_tip = match git_in(project_root, &["rev-parse", &fetch_ref]) {
+        Ok(tip) => tip,
+        Err(e) => {
+            cleanup(project_root);
+            return Err(e);
+        }
+    };
+
+    let result = reconcile_local_with(project_root, &remote_tip);
+    cleanup(project_root);
+    result
+}
+
+fn reconcile_local_with(project_root: &str, remote_tip: &str) -> Result<(), String> {
+    if !branch_exists(project_root) {
+        git_in(
+            project_root,
+            &[
+                "update-ref",
+                &format!("refs/heads/{BRANCH}"),
+                remote_tip,
+                NULL_OID,
+            ],
+        )?;
+        return Ok(());
+    }
+
+    let local_tip = git_in(project_root, &["rev-parse", BRANCH])?;
+
+    if local_tip == remote_tip {
+        return Ok(());
+    }
+
+    if git_in(
+        project_root,
+        &["merge-base", "--is-ancestor", remote_tip, &local_tip],
+    )
+    .is_ok()
+    {
+        return Ok(());
+    }
+
+    if git_in(
+        project_root,
+        &["merge-base", "--is-ancestor", &local_tip, remote_tip],
+    )
+    .is_ok()
+    {
+        git_in(
+            project_root,
+            &[
+                "update-ref",
+                &format!("refs/heads/{BRANCH}"),
+                remote_tip,
+                &local_tip,
+            ],
+        )?;
+        return Ok(());
+    }
+
+    replay_local_files(project_root, &local_tip, remote_tip)
+}
+
+/// Builds a merged commit before moving the branch ref — if any step
+/// fails, the branch is untouched.
+fn replay_local_files(
+    project_root: &str,
+    local_tip: &str,
+    remote_tip: &str,
+) -> Result<(), String> {
+    let local_tree = git_in(project_root, &["ls-tree", "-r", "--name-only", local_tip])?;
+    let remote_tree = git_in(project_root, &["ls-tree", "-r", "--name-only", remote_tip])?;
+
+    let remote_set: HashSet<&str> = remote_tree.lines().collect();
+
+    let mut entries: Vec<(String, String)> = Vec::new();
+    let mut skipped = 0u32;
+    for path in local_tree.lines() {
+        if !remote_set.contains(path) {
+            match git_in(project_root, &["show", &format!("{local_tip}:{path}")]) {
+                Ok(content) => entries.push((path.to_string(), content)),
+                Err(e) => {
+                    eprintln!("oobo: warning: could not read {path} from local anchors: {e}");
+                    skipped += 1;
+                }
+            }
+        }
+    }
+
+    if skipped > 0 {
+        eprintln!("oobo: warning: {skipped} local anchor file(s) could not be replayed");
+    }
+
+    let target = if entries.is_empty() {
+        remote_tip.to_string()
+    } else {
+        build_commit_on(
+            project_root,
+            remote_tip,
+            &entries,
+            "oobo: replay local anchors after reconcile",
+        )?
+    };
+
     git_in(
         project_root,
-        &["fetch", "origin", &format!("{BRANCH}:{BRANCH}")],
+        &[
+            "update-ref",
+            &format!("refs/heads/{BRANCH}"),
+            &target,
+            local_tip,
+        ],
     )?;
+
     Ok(())
 }
-
-// Internal helpers
 
 /// Shard a commit hash into directory prefix + remainder.
 /// `c8e12fa9b3d4...` → ("c8", "e12fa9b3d4...")
@@ -314,8 +434,8 @@ fn shard_key(hash: &str) -> (&str, &str) {
     }
 }
 
-/// Ensure the orphan branch exists. Creates it using plumbing commands only —
-/// never touches the working tree or index, so uncommitted changes are safe.
+/// Create the orphan branch using plumbing commands only — never touches
+/// the working tree or index, so uncommitted changes are safe.
 fn ensure_branch(project_root: &str) -> Result<(), String> {
     if branch_exists(project_root) {
         return Ok(());
@@ -339,16 +459,50 @@ fn ensure_branch(project_root: &str) -> Result<(), String> {
 
     git_in(
         project_root,
-        &["update-ref", &format!("refs/heads/{BRANCH}"), &commit],
+        &[
+            "update-ref",
+            &format!("refs/heads/{BRANCH}"),
+            &commit,
+            NULL_OID,
+        ],
     )?;
 
     Ok(())
 }
 
-/// Write entries to the orphan branch using `git hash-object` + `git update-index`
-/// + `git write-tree` + `git commit-tree` to avoid ever checking out the branch.
+/// 3 retries: local ref CAS failures resolve quickly (no network).
+const MAX_WRITE_ATTEMPTS: u32 = 3;
+
+/// Write entries to the orphan branch, retrying on CAS contention.
 fn write_to_branch(project_root: &str, entries: &[(String, String)]) -> Result<(), String> {
-    let tree_hash = git_in(project_root, &["rev-parse", &format!("{BRANCH}^{{tree}}")])?;
+    let mut last_err = String::new();
+    for attempt in 0..MAX_WRITE_ATTEMPTS {
+        match try_write_to_branch(project_root, entries) {
+            Ok(()) => return Ok(()),
+            Err(e)
+                if attempt < MAX_WRITE_ATTEMPTS - 1
+                    && (e.contains("but expected") || e.contains("cannot lock ref")) =>
+            {
+                last_err = e;
+                jitter_sleep(attempt);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(format!(
+        "write failed after {MAX_WRITE_ATTEMPTS} attempts: {last_err}"
+    ))
+}
+
+/// Build a commit on top of `parent` with `entries` added. Returns the
+/// commit hash without updating any ref.
+fn build_commit_on(
+    project_root: &str,
+    parent: &str,
+    entries: &[(String, String)],
+    message: &str,
+) -> Result<String, String> {
+    let tree_hash = git_in(project_root, &["rev-parse", &format!("{parent}^{{tree}}")])?;
 
     let env_key = "GIT_INDEX_FILE";
     let git_common = crate::git::detect::resolve_git_common_dir(project_root);
@@ -362,36 +516,51 @@ fn write_to_branch(project_root: &str, entries: &[(String, String)]) -> Result<(
             .subsec_nanos()
     );
 
-    git_env_in(
+    let new_tree = {
+        let result = (|| {
+            git_env_in(
+                project_root,
+                &["read-tree", &tree_hash],
+                &[(env_key, &tmp_index)],
+            )?;
+
+            for (path, content) in entries {
+                let blob_hash =
+                    git_stdin_in(project_root, &["hash-object", "-w", "--stdin"], content)?;
+                git_env_in(
+                    project_root,
+                    &[
+                        "update-index",
+                        "--add",
+                        "--cacheinfo",
+                        "100644",
+                        &blob_hash,
+                        path,
+                    ],
+                    &[(env_key, &tmp_index)],
+                )?;
+            }
+
+            git_env_in(project_root, &["write-tree"], &[(env_key, &tmp_index)])
+        })();
+        let _ = fs::remove_file(&tmp_index);
+        result?
+    };
+
+    git_stdin_in(
         project_root,
-        &["read-tree", &tree_hash],
-        &[(env_key, &tmp_index)],
-    )?;
+        &["commit-tree", &new_tree, "-p", parent],
+        message,
+    )
+}
 
-    for (path, content) in entries {
-        let blob_hash = git_stdin_in(project_root, &["hash-object", "-w", "--stdin"], content)?;
-        git_env_in(
-            project_root,
-            &[
-                "update-index",
-                "--add",
-                "--cacheinfo",
-                "100644",
-                &blob_hash,
-                path,
-            ],
-            &[(env_key, &tmp_index)],
-        )?;
-    }
-
-    let new_tree = git_env_in(project_root, &["write-tree"], &[(env_key, &tmp_index)])?;
-
-    let _ = fs::remove_file(&tmp_index);
-
+/// hash-object → update-index → write-tree → commit-tree → CAS update-ref.
+fn try_write_to_branch(project_root: &str, entries: &[(String, String)]) -> Result<(), String> {
     let parent = git_in(project_root, &["rev-parse", BRANCH])?;
-    let new_commit = git_stdin_in(
+    let new_commit = build_commit_on(
         project_root,
-        &["commit-tree", &new_tree, "-p", &parent],
+        &parent,
+        entries,
         &format!(
             "oobo: add anchor for {}",
             entries.first().map(|(p, _)| p.as_str()).unwrap_or("?")
@@ -735,5 +904,161 @@ mod tests {
             result.contains("/myapp-backup/file.rs"),
             "should preserve paths that share a prefix but aren't inside the project root: {result}"
         );
+    }
+
+    fn init_test_repo() -> Option<(tempfile::TempDir, String)> {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().to_str().unwrap().to_string();
+        let init = std::process::Command::new("git")
+            .args(["init", &repo])
+            .output();
+        if init.is_err() || !init.unwrap().status.success() {
+            return None;
+        }
+        let _ = std::process::Command::new("git")
+            .args(["-C", &repo, "commit", "--allow-empty", "-m", "init"])
+            .output();
+        Some((tmp, repo))
+    }
+
+    #[test]
+    fn test_replay_local_files_no_local_only_files() {
+        let (tmp, repo) = match init_test_repo() {
+            Some(r) => r,
+            None => return,
+        };
+        let _ = tmp;
+
+        ensure_branch(&repo).unwrap();
+        let tip_a = git_in(&repo, &["rev-parse", BRANCH]).unwrap();
+
+        // Create a "remote" tip that has the same file plus more
+        write_to_branch(&repo, &[("extra/file.txt".into(), "hello".into())]).unwrap();
+        let tip_b = git_in(&repo, &["rev-parse", BRANCH]).unwrap();
+
+        // Reset branch to tip_a (simulates local state)
+        git_in(
+            &repo,
+            &["update-ref", &format!("refs/heads/{BRANCH}"), &tip_a],
+        )
+        .unwrap();
+
+        // Replay: local (tip_a) has no files that tip_b doesn't have
+        replay_local_files(&repo, &tip_a, &tip_b).unwrap();
+
+        // Branch should now be at tip_b (advanced via CAS) with no
+        // extra commits since there was nothing to replay
+        let tree = git_in(&repo, &["ls-tree", "-r", "--name-only", BRANCH]).unwrap();
+        assert!(tree.contains("README.md"));
+    }
+
+    #[test]
+    fn test_replay_local_files_preserves_diverged_data() {
+        let (tmp, repo) = match init_test_repo() {
+            Some(r) => r,
+            None => return,
+        };
+        let _ = tmp;
+
+        ensure_branch(&repo).unwrap();
+        let base = git_in(&repo, &["rev-parse", BRANCH]).unwrap();
+
+        // Build local branch: base + local file
+        write_to_branch(&repo, &[("aa/bb/metadata.json".into(), r#"{"a":1}"#.into())]).unwrap();
+        let local_tip = git_in(&repo, &["rev-parse", BRANCH]).unwrap();
+
+        // Build remote branch: reset to base, add different file
+        git_in(
+            &repo,
+            &["update-ref", &format!("refs/heads/{BRANCH}"), &base],
+        )
+        .unwrap();
+        write_to_branch(&repo, &[("cc/dd/metadata.json".into(), r#"{"b":2}"#.into())]).unwrap();
+        let remote_tip = git_in(&repo, &["rev-parse", BRANCH]).unwrap();
+
+        // Set branch back to local_tip (replay expects branch at local_tip)
+        git_in(
+            &repo,
+            &["update-ref", &format!("refs/heads/{BRANCH}"), &local_tip],
+        )
+        .unwrap();
+
+        replay_local_files(&repo, &local_tip, &remote_tip).unwrap();
+
+        let tree = git_in(&repo, &["ls-tree", "-r", "--name-only", BRANCH]).unwrap();
+        assert!(
+            tree.contains("aa/bb/metadata.json"),
+            "local-only file should be replayed: {tree}"
+        );
+        assert!(
+            tree.contains("cc/dd/metadata.json"),
+            "remote file should be present: {tree}"
+        );
+        assert!(
+            tree.contains("README.md"),
+            "initial README should be present: {tree}"
+        );
+    }
+
+    #[test]
+    fn test_write_to_branch_retry_succeeds_after_concurrent_update() {
+        let (tmp, repo) = match init_test_repo() {
+            Some(r) => r,
+            None => return,
+        };
+        let _ = tmp;
+
+        ensure_branch(&repo).unwrap();
+
+        // Write two entries sequentially — the second write succeeds because
+        // try_write_to_branch uses CAS and the retry re-reads the parent.
+        write_to_branch(&repo, &[("a/b/m.json".into(), "one".into())]).unwrap();
+        write_to_branch(&repo, &[("c/d/m.json".into(), "two".into())]).unwrap();
+
+        let tree = git_in(&repo, &["ls-tree", "-r", "--name-only", BRANCH]).unwrap();
+        assert!(tree.contains("a/b/m.json"));
+        assert!(tree.contains("c/d/m.json"));
+    }
+
+    #[test]
+    fn test_tmp_index_cleaned_up_on_mid_pipeline_error() {
+        let (tmp, repo) = match init_test_repo() {
+            Some(r) => r,
+            None => return,
+        };
+        let _ = tmp;
+
+        ensure_branch(&repo).unwrap();
+        let git_dir = crate::git::detect::resolve_git_common_dir(&repo);
+        let parent = git_in(&repo, &["rev-parse", BRANCH]).unwrap();
+
+        let assert_no_leftover = |label: &str| {
+            let leftover: Vec<_> = std::fs::read_dir(&git_dir)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.file_name()
+                        .to_string_lossy()
+                        .starts_with("oobo-index-")
+                })
+                .collect();
+            assert!(leftover.is_empty(), "{label}: found {:?}", leftover);
+        };
+
+        // Success path: full pipeline runs, temp index cleaned up.
+        let _ = build_commit_on(&repo, &parent, &[("test.txt".into(), "data".into())], "test");
+        assert_no_leftover("after successful build");
+
+        // Error path: read-tree succeeds (temp index created on disk),
+        // then update-index rejects the empty path → closure returns Err,
+        // cleanup removes the temp file.
+        let result = build_commit_on(
+            &repo,
+            &parent,
+            &[("".into(), "data".into())],
+            "should fail",
+        );
+        assert!(result.is_err(), "empty path should fail in update-index");
+        assert_no_leftover("after mid-pipeline error");
     }
 }

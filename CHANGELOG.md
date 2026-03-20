@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-03-20
+
+### Fixed
+
+- **Multi-writer anchor branch race conditions** — replaced force-fetch reconciliation with PID-namespaced temp refs and CAS (compare-and-swap) `update-ref` operations, eliminating data loss when multiple users or agents push concurrently
+- **Atomic replay in `replay_local_files`** — local-only files are now committed on top of the remote state *before* moving the branch ref, so a failure mid-replay never leaves the branch in a partially-updated state
+- **FETCH_HEAD race** — concurrent fetches (IDE background refresh, other hooks) can no longer corrupt the reconciliation by overwriting the shared `FETCH_HEAD` file
+- **Temp index file leak** — `build_commit_on` now cleans up its temporary index file on all code paths, including mid-pipeline errors
+- **Push error message clobbering** — reconciliation errors are now chained with the original push failure instead of overwriting it
+- **First-use branch creation TOCTOU** — `ensure_branch` and `reconcile_local_with` now use null-OID CAS to prevent concurrent branch creation from silently overwriting data
+
+### Changed
+
+- Renamed `orphan::fetch()` to `orphan::fetch_and_reconcile()` to accurately reflect its side effects
+- Removed duplicate `fetch_remote_branch` from `sync.rs` in favor of centralized `orphan::fetch_and_reconcile`
+- Improved jitter quality for retry backoff by mixing in the process ID to decorrelate concurrent retries
+
 ## [0.1.9] - 2026-03-18
 
 ### Added

@@ -196,7 +196,7 @@ pub fn run_import(cfg: &Config) -> Result<(), String> {
 
     eprintln!("syncing anchors from orphan branch…");
 
-    if let Err(e) = fetch_remote_branch(&root) {
+    if let Err(e) = crate::git::orphan::fetch_and_reconcile(&root) {
         eprintln!("warning: could not fetch from remote: {e}");
     }
 
@@ -225,7 +225,7 @@ pub fn auto_hydrate(project_root: &str) {
     }
 
     if !crate::git::orphan::branch_exists(project_root) {
-        let _ = fetch_remote_branch(project_root);
+        let _ = crate::git::orphan::fetch_and_reconcile(project_root);
         if !crate::git::orphan::branch_exists(project_root) {
             let _ = db.mark_hydrated(project_root, 0);
             return;
@@ -243,26 +243,3 @@ pub fn auto_hydrate(project_root: &str) {
     }
 }
 
-fn fetch_remote_branch(project_root: &str) -> Result<(), String> {
-    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let status = std::process::Command::new(git)
-        .args(["fetch", "origin", "oobo/anchors/v1:oobo/anchors/v1"])
-        .current_dir(project_root)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
-        .status()
-        .map_err(|e| format!("failed to run git fetch: {e}"))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "git fetch exited with code {}",
-            status.code().unwrap_or(-1)
-        ))
-    }
-}

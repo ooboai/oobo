@@ -53,7 +53,7 @@ pub fn check_first_use(cfg: &Config, project_root: &str) {
         eprintln!("  This repo has anchor metadata on the remote. Pulling…");
     }
 
-    match orphan::fetch(project_root) {
+    match orphan::fetch_and_reconcile(project_root) {
         Ok(()) => {
             if crate::git::detect::is_interactive() {
                 eprintln!("  \x1b[32m✓\x1b[0m Anchor metadata pulled.");
