@@ -642,7 +642,7 @@ mod tests {
             .any(|r| r.session_id == "s2" && r.role == FileRole::Reader));
         assert_eq!(peers.get("s1").unwrap(), &vec!["s2".to_string()]);
         assert_eq!(peers.get("s2").unwrap(), &vec!["s1".to_string()]);
-        assert!(peers.get("s3").is_none());
+        assert!(!peers.contains_key("s3"));
     }
 
     #[test]

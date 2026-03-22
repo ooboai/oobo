@@ -93,11 +93,11 @@ fn list_agent(
         let model = st.and_then(|st| st.model.as_deref()).unwrap_or("");
         let in_tok = st
             .and_then(|st| st.input_tokens)
-            .map(|v| crate::tui::format_tokens(v))
+            .map(crate::tui::format_tokens)
             .unwrap_or_default();
         let out_tok = st
             .and_then(|st| st.output_tokens)
-            .map(|v| crate::tui::format_tokens(v))
+            .map(crate::tui::format_tokens)
             .unwrap_or_default();
         let name = crate::utils::sanitize_pipe(&crate::utils::truncate_name(&s.name, 60));
         println!(
@@ -201,7 +201,13 @@ fn list_json(
     Ok(())
 }
 
-fn search(query: &str, cfg: &Config, all: bool, mode: OutputMode, limit: usize) -> Result<(), String> {
+fn search(
+    query: &str,
+    cfg: &Config,
+    all: bool,
+    mode: OutputMode,
+    limit: usize,
+) -> Result<(), String> {
     let (sessions, scope_all) = if all {
         (session::all_sessions(cfg), true)
     } else {
@@ -579,7 +585,7 @@ fn compute_peer_map(
 
     let mut all_peers: HashMap<String, Vec<String>> = HashMap::new();
 
-    for (_proj, group) in &by_project {
+    for group in by_project.values() {
         if group.len() < 2 {
             continue;
         }

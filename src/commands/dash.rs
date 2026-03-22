@@ -64,10 +64,7 @@ fn run_agent(cfg: &Config) {
     let d = gather_dash(cfg);
 
     println!("version: {}", env!("CARGO_PKG_VERSION"));
-    println!(
-        "config: {}",
-        crate::config::Config::config_path().display()
-    );
+    println!("config: {}", crate::config::Config::config_path().display());
     println!("data: {}", crate::paths::oobo_home().display());
     println!("server: {}", cfg.server.url);
     println!("tools: {}", d.tools_enabled.join(", "));

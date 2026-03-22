@@ -35,14 +35,7 @@ pub fn run(cfg: &Config, limit: usize, mode: OutputMode) -> Result<(), String> {
             };
             println!(
                 "{} | {} | {} | {} | {} | {} | {} | {}",
-                hash_short,
-                message,
-                author,
-                date,
-                sess_count,
-                ai_pct,
-                entry.added,
-                entry.deleted,
+                hash_short, message, author, date, sess_count, ai_pct, entry.added, entry.deleted,
             );
         }
         return Ok(());

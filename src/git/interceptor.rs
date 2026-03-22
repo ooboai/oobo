@@ -1495,7 +1495,7 @@ mod tests {
 
     #[test]
     fn test_detect_file_interactions_refs_uses_active_session_data() {
-        let sessions = vec![
+        let sessions = [
             make_session("s1", vec!["a.rs"], vec![]),
             make_session("s2", vec!["a.rs"], vec![]),
         ];
@@ -1509,7 +1509,7 @@ mod tests {
 
     #[test]
     fn test_detect_file_interactions_refs_no_overlap() {
-        let sessions = vec![
+        let sessions = [
             make_session("s1", vec!["a.rs"], vec![]),
             make_session("s2", vec!["b.rs"], vec![]),
         ];
@@ -1521,7 +1521,7 @@ mod tests {
 
     #[test]
     fn test_detect_file_interactions_refs_single_session() {
-        let sessions = vec![make_session("s1", vec!["a.rs"], vec!["b.rs"])];
+        let sessions = [make_session("s1", vec!["a.rs"], vec!["b.rs"])];
         let refs: Vec<&_> = sessions.iter().collect();
         let (interactions, _) = detect_file_interactions_refs(&refs, "/tmp");
         assert!(interactions.is_empty());

@@ -479,7 +479,10 @@ fn test_agent_compact_format() {
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "oobo version --agent should succeed");
+    assert!(
+        output.status.success(),
+        "oobo version --agent should succeed"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("version: "),
@@ -507,7 +510,10 @@ fn test_agent_sources_pipe_format() {
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "oobo sources --agent should succeed");
+    assert!(
+        output.status.success(),
+        "oobo sources --agent should succeed"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.starts_with("# tool | "),
@@ -541,7 +547,10 @@ fn test_agent_sessions_list_scope() {
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "oobo sessions list --agent should succeed");
+    assert!(
+        output.status.success(),
+        "oobo sessions list --agent should succeed"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("# scope: "),
@@ -560,10 +569,14 @@ fn test_json_sessions_list_bare_array() {
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "oobo sessions list --json should succeed");
+    assert!(
+        output.status.success(),
+        "oobo sessions list --json should succeed"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("sessions list --json should produce valid JSON: {e}, got: {stdout}"));
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!("sessions list --json should produce valid JSON: {e}, got: {stdout}")
+    });
     assert!(
         parsed.is_array(),
         "JSON output should be a bare array, got: {stdout}"

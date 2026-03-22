@@ -120,7 +120,10 @@ mod tests {
 
     #[test]
     fn test_sanitize_pipe_with_pipes() {
-        assert_eq!(sanitize_pipe("fix: handle X | Y case"), "fix: handle X / Y case");
+        assert_eq!(
+            sanitize_pipe("fix: handle X | Y case"),
+            "fix: handle X / Y case"
+        );
     }
 
     #[test]
