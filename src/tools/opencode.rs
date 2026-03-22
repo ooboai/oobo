@@ -68,13 +68,27 @@ fn detect_schema(conn: &rusqlite::Connection) -> DbSchema {
 // Modern schema (v1.2+)
 
 fn sessions_from_modern_db(conn: &rusqlite::Connection, db_path: &Path) -> Vec<Session> {
-    let mut stmt = match conn.prepare(
+    // OpenCode uses `parent_id` in modern schema, `parent_session_id` in legacy.
+    let has_parent_col = conn
+        .prepare("SELECT parent_id FROM session LIMIT 0")
+        .is_ok();
+
+    let query = if has_parent_col {
+        "SELECT s.id, s.title, s.directory, s.time_created, s.time_updated, p.worktree, \
+                s.parent_id \
+         FROM session s \
+         LEFT JOIN project p ON s.project_id = p.id \
+         WHERE s.time_archived IS NULL \
+         ORDER BY s.time_updated DESC"
+    } else {
         "SELECT s.id, s.title, s.directory, s.time_created, s.time_updated, p.worktree \
          FROM session s \
          LEFT JOIN project p ON s.project_id = p.id \
          WHERE s.time_archived IS NULL \
-         ORDER BY s.time_updated DESC",
-    ) {
+         ORDER BY s.time_updated DESC"
+    };
+
+    let mut stmt = match conn.prepare(query) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -86,7 +100,12 @@ fn sessions_from_modern_db(conn: &rusqlite::Connection, db_path: &Path) -> Vec<S
         let time_created: i64 = row.get(3)?;
         let time_updated: i64 = row.get(4)?;
         let worktree: Option<String> = row.get(5)?;
-        Ok((id, title, directory, time_created, time_updated, worktree))
+        let parent_session_id: Option<String> = if has_parent_col {
+            row.get(6).ok().flatten()
+        } else {
+            None
+        };
+        Ok((id, title, directory, time_created, time_updated, worktree, parent_session_id))
     }) {
         Ok(r) => r,
         Err(_) => return Vec::new(),
@@ -94,7 +113,7 @@ fn sessions_from_modern_db(conn: &rusqlite::Connection, db_path: &Path) -> Vec<S
 
     let mut sessions = Vec::new();
     for row in rows.flatten() {
-        let (id, title, directory, time_created, time_updated, worktree) = row;
+        let (id, title, directory, time_created, time_updated, worktree, parent_session_id) = row;
 
         let project_path = if !directory.is_empty() && directory != "/" {
             directory
@@ -123,6 +142,8 @@ fn sessions_from_modern_db(conn: &rusqlite::Connection, db_path: &Path) -> Vec<S
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default(),
             source: "opencode".to_string(),
+            parent_session_id,
+            subagent_type: None,
         });
     }
 
@@ -302,11 +323,21 @@ fn sessions_from_legacy_db(
     conn: &rusqlite::Connection,
     db_path: &Path,
 ) -> Vec<(Session, SessionMeta)> {
-    let mut stmt = match conn.prepare(
+    let has_parent_col = conn
+        .prepare("SELECT parent_session_id FROM session LIMIT 0")
+        .is_ok();
+
+    let query = if has_parent_col {
         "SELECT id, title, message_count, prompt_tokens, completion_tokens, \
-         cost, created_at, updated_at, parent_session_id, summary \
-         FROM session ORDER BY updated_at DESC",
-    ) {
+         cost, created_at, updated_at, parent_session_id \
+         FROM session ORDER BY updated_at DESC"
+    } else {
+        "SELECT id, title, message_count, prompt_tokens, completion_tokens, \
+         cost, created_at, updated_at \
+         FROM session ORDER BY updated_at DESC"
+    };
+
+    let mut stmt = match conn.prepare(query) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -320,6 +351,11 @@ fn sessions_from_legacy_db(
         let cost: f64 = row.get(5)?;
         let created_at: i64 = row.get(6)?;
         let updated_at: i64 = row.get(7)?;
+        let parent_session_id: Option<String> = if has_parent_col {
+            row.get(8).ok().flatten()
+        } else {
+            None
+        };
         Ok((
             id,
             title,
@@ -329,6 +365,7 @@ fn sessions_from_legacy_db(
             cost,
             created_at,
             updated_at,
+            parent_session_id,
         ))
     });
 
@@ -348,6 +385,7 @@ fn sessions_from_legacy_db(
             cost,
             created_at,
             updated_at,
+            parent_session_id,
         ) = row;
 
         let name = if title.is_empty() {
@@ -379,6 +417,8 @@ fn sessions_from_legacy_db(
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_default(),
                 source: "opencode".to_string(),
+                parent_session_id,
+                subagent_type: None,
             },
             meta,
         ));
@@ -894,6 +934,7 @@ mod tests {
             CREATE TABLE session (
                 id TEXT PRIMARY KEY,
                 project_id TEXT NOT NULL,
+                parent_id TEXT,
                 slug TEXT NOT NULL DEFAULT '',
                 directory TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
@@ -968,6 +1009,41 @@ mod tests {
         assert_eq!(sessions[0].session_id, "ses1");
         assert_eq!(sessions[0].name, "Fix auth");
         assert_eq!(sessions[0].project_path, "/Users/dev/myapp");
+        assert!(sessions[0].parent_session_id.is_none());
+    }
+
+    #[test]
+    fn test_modern_parent_id_propagation() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("opencode.db");
+        create_modern_test_db(&db_path);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO project (id, worktree, time_created, time_updated) VALUES ('p1', '/dev/app', 1000, 1000)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO session (id, project_id, title, time_created, time_updated) \
+             VALUES ('parent-1', 'p1', 'Main session', 1772701435000, 1772701472000)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated) \
+             VALUES ('child-1', 'p1', 'parent-1', 'Subagent task', 1772701440000, 1772701460000)",
+            [],
+        ).unwrap();
+
+        let sessions = sessions_from_modern_db(&conn, &db_path);
+        assert_eq!(sessions.len(), 2);
+
+        let parent = sessions.iter().find(|s| s.session_id == "parent-1").unwrap();
+        assert!(parent.parent_session_id.is_none());
+        assert!(!parent.is_subagent());
+
+        let child = sessions.iter().find(|s| s.session_id == "child-1").unwrap();
+        assert_eq!(child.parent_session_id.as_deref(), Some("parent-1"));
+        assert!(child.is_subagent());
     }
 
     #[test]

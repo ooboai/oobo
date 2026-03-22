@@ -18,11 +18,11 @@ const BRANCH: &str = "oobo/anchors/v1";
 ///
 /// Uses low-level git commands to update the orphan branch without
 /// checking it out (so the user's working tree is never touched).
-pub fn write_anchor(
+pub(super) fn write_anchor(
     project_root: &str,
     anchor: &Anchor,
     session_links: &[SessionLink],
-    transcripts: &[(String, String)],
+    transcripts: &[super::interceptor::CollectedTranscript],
 ) -> Result<(), String> {
     ensure_branch(project_root)?;
 
@@ -38,18 +38,29 @@ pub fn write_anchor(
     for (i, link) in session_links.iter().enumerate() {
         let link_json = serde_json::to_string_pretty(link)
             .map_err(|e| format!("serialize session link: {e}"))?;
-        entries.push((
-            format!("{base_path}/{}/{}", i + 1, "metadata.json"),
-            link_json,
-        ));
+        let session_path = format!("{base_path}/{}", i + 1);
+        entries.push((format!("{session_path}/metadata.json"), link_json));
 
         if anchor.transparency_mode == TransparencyMode::On {
-            if let Some((_, transcript_text)) =
-                transcripts.iter().find(|(sid, _)| sid == &link.session_id)
-            {
-                let redacted = crate::redact::redact(transcript_text);
+            if let Some(ct) = transcripts.iter().find(|ct| ct.session_id == link.session_id) {
+                let redacted = crate::redact::redact(&ct.content);
                 let sanitized = strip_absolute_paths(&redacted, project_root);
-                entries.push((format!("{base_path}/{}/transcript.json", i + 1), sanitized));
+                entries.push((format!("{session_path}/transcript.json"), sanitized));
+            }
+
+            // Write subagent transcripts nested under the parent session.
+            let mut sub_idx = 0u32;
+            for ct in transcripts
+                .iter()
+                .filter(|ct| ct.parent_session_id.as_deref() == Some(&link.session_id))
+            {
+                sub_idx += 1;
+                let redacted = crate::redact::redact(&ct.content);
+                let sanitized = strip_absolute_paths(&redacted, project_root);
+                entries.push((
+                    format!("{session_path}/subagents/{}/transcript.json", sub_idx),
+                    sanitized,
+                ));
             }
         }
     }
@@ -185,6 +196,8 @@ pub fn hydrate_from_branch(project_root: &str, db: &crate::db::Db) -> Result<usi
                 link.duration_secs,
                 link.tool_calls,
                 link.is_subagent,
+                link.parent_session_id.as_deref(),
+                link.subagent_type.as_deref(),
             )?;
         }
 
@@ -794,6 +807,8 @@ mod tests {
             thinking_duration_ms: None,
             compact_count: None,
             is_subagent: false,
+            parent_session_id: None,
+            subagent_type: None,
             is_estimated: false,
         };
 

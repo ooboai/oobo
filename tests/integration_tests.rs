@@ -799,6 +799,8 @@ fn test_event_payload_roundtrip() {
         thinking_duration_ms: None,
         compact_count: None,
         is_subagent: false,
+        parent_session_id: None,
+        subagent_type: None,
         is_estimated: false,
     }];
 
@@ -829,6 +831,7 @@ fn test_event_payload_roundtrip() {
                 timestamp_ms: None,
             },
         ],
+        session_transcripts: Vec::new(),
     };
 
     let json = serde_json::to_string(&payload).unwrap();

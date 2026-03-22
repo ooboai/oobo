@@ -9,8 +9,16 @@ use crate::redact;
 use crate::remote;
 use crate::remote::payload;
 
-/// Anchor + linked sessions + raw transcript texts (session_id, content).
-type EnrichResult = (Anchor, Vec<SessionLink>, Vec<(String, String)>);
+/// A collected transcript with optional parent linkage for subagent sessions.
+pub(super) struct CollectedTranscript {
+    pub session_id: String,
+    pub content: String,
+    pub parent_session_id: Option<String>,
+    pub subagent_type: Option<String>,
+}
+
+/// Anchor + linked sessions + collected transcripts.
+type EnrichResult = (Anchor, Vec<SessionLink>, Vec<CollectedTranscript>);
 
 /// Called after a write operation succeeds.
 /// Logs event locally, creates anchor metadata, and optionally sends to cloud.
@@ -67,30 +75,44 @@ pub fn on_write_op(cfg: &Config, args: &[&str]) -> Result<(), String> {
     if should_sync && anchor_data.is_some() {
         let git_remote = resolve_git_remote(cfg).or_else(|| Some(String::new()));
 
-        let (anchor_payload, transcript) = if let Some((anchor, links, transcripts)) = anchor_data {
-            let transcript_messages =
-                if anchor.transparency_mode == TransparencyMode::On && !transcripts.is_empty() {
-                    transcripts
-                        .into_iter()
-                        .flat_map(|(_session_id, text)| {
-                            let redacted = redact::redact(&text);
-                            parse_transcript_messages(&redacted)
-                        })
-                        .collect()
+        let (anchor_payload, transcript, session_transcripts) =
+            if let Some((anchor, links, transcripts)) = anchor_data {
+                let is_transparent =
+                    anchor.transparency_mode == TransparencyMode::On && !transcripts.is_empty();
+
+                let (flat_messages, structured) = if is_transparent {
+                    let mut structured = Vec::new();
+                    for ct in &transcripts {
+                        let redacted = redact::redact(&ct.content);
+                        let msgs = parse_transcript_messages(&redacted);
+
+                        structured.push(payload::SessionTranscript {
+                            session_id: ct.session_id.clone(),
+                            parent_session_id: ct.parent_session_id.clone(),
+                            subagent_type: ct.subagent_type.clone(),
+                            messages: msgs,
+                        });
+                    }
+                    let flat: Vec<_> = structured
+                        .iter()
+                        .flat_map(|st| st.messages.iter().cloned())
+                        .collect();
+                    (flat, structured)
                 } else {
-                    Vec::new()
+                    (Vec::new(), Vec::new())
                 };
 
-            (
-                Some(payload::AnchorPayload {
-                    anchor,
-                    sessions: links,
-                }),
-                transcript_messages,
-            )
-        } else {
-            (None, Vec::new())
-        };
+                (
+                    Some(payload::AnchorPayload {
+                        anchor,
+                        sessions: links,
+                    }),
+                    flat_messages,
+                    structured,
+                )
+            } else {
+                (None, Vec::new(), Vec::new())
+            };
 
         let payload = payload::EventPayload {
             event: format!("git.{op}"),
@@ -102,6 +124,7 @@ pub fn on_write_op(cfg: &Config, args: &[&str]) -> Result<(), String> {
             },
             anchor: anchor_payload,
             transcript,
+            session_transcripts,
         };
 
         let handle = remote::send_event(cfg, &payload, Some(&effective_key));
@@ -237,6 +260,8 @@ fn enrich_commit(
                 thinking_duration_ms: s.thinking_duration_ms,
                 compact_count: s.compact_count,
                 is_subagent: false,
+                parent_session_id: None,
+                subagent_type: None,
                 is_estimated: false,
             }
         })
@@ -396,6 +421,8 @@ fn enrich_commit(
                 link.duration_secs,
                 link.tool_calls,
                 link.is_subagent,
+                link.parent_session_id.as_deref(),
+                link.subagent_type.as_deref(),
             ) {
                 eprintln!("oobo: warning: could not save session link: {e}");
             }
@@ -792,9 +819,9 @@ fn discover_sessions_from_tools(
     project_root: &str,
     since_epoch: i64,
 ) -> Vec<crate::hooks::state::ActiveSession> {
-    let now = chrono::Utc::now().timestamp();
-    let max_age = 7200; // 2 hours
-    let cutoff = std::cmp::max(since_epoch, now - max_age);
+    let now_secs = chrono::Utc::now().timestamp();
+    let max_age_secs: i64 = 7200; // 2 hours
+    let cutoff_secs = std::cmp::max(since_epoch, now_secs - max_age_secs);
 
     let registry = crate::tools::registry();
     let mut discovered: Vec<crate::hooks::state::ActiveSession> = Vec::new();
@@ -807,14 +834,23 @@ fn discover_sessions_from_tools(
         };
 
         for session in sessions {
-            let updated = session.updated_at.or(session.created_at).unwrap_or(0);
-            if updated <= cutoff {
+            if session.is_subagent() {
+                continue;
+            }
+
+            let updated_ms = session.updated_at.or(session.created_at).unwrap_or(0);
+            // Tool sessions store timestamps in milliseconds; normalize to
+            // seconds to match hook-based ActiveSession conventions.
+            let updated_secs = ms_to_secs(updated_ms);
+            if updated_secs <= cutoff_secs {
                 continue;
             }
             if seen_ids.contains(&session.session_id) {
                 continue;
             }
             seen_ids.insert(session.session_id.clone());
+
+            let created_secs = session.created_at.map(ms_to_secs).unwrap_or(updated_secs);
 
             discovered.push(crate::hooks::state::ActiveSession {
                 session_id: session.session_id,
@@ -831,13 +867,17 @@ fn discover_sessions_from_tools(
                 subagent_runs: None,
                 thinking_duration_ms: None,
                 compact_count: None,
-                started_at: session.created_at.unwrap_or(updated),
-                updated_at: updated,
+                started_at: created_secs,
+                updated_at: updated_secs,
             });
         }
     }
 
     discovered
+}
+
+fn ms_to_secs(ms: i64) -> i64 {
+    if ms > 1_000_000_000_000 { ms / 1000 } else { ms }
 }
 
 /// Proactively index linked sessions on a background thread so stats are
@@ -1036,52 +1076,170 @@ fn parse_shortstat(stat: &str, ctx: &mut GitContext) {
 /// 1. Cursor's bubbleId: DB — includes thinking, tool calls, timestamps, tokens
 /// 2. transcript_path from the stop hook payload
 /// 3. Tool registry's find_transcript (JSONL/text file)
+///
+/// Also collects subagent transcripts from the `subagents/` directory
+/// alongside the parent session's transcript.
 fn collect_session_transcripts(
     sessions: &[crate::hooks::state::ActiveSession],
     project_root: &str,
-) -> Vec<(String, String)> {
+) -> Vec<CollectedTranscript> {
     let mut transcripts = Vec::new();
 
     for session in sessions {
+        // 1. Collect the parent session's transcript.
+        let mut found_parent = false;
+
         if is_cursor_session(&session.agent) {
             if let Some(rich) =
                 crate::tools::cursor::composer_data::build_rich_transcript(&session.session_id)
             {
-                transcripts.push((session.session_id.clone(), rich));
-                continue;
+                transcripts.push(CollectedTranscript {
+                    session_id: session.session_id.clone(),
+                    content: rich,
+                    parent_session_id: None,
+                    subagent_type: None,
+                });
+                found_parent = true;
             }
         }
 
-        let raw = session
-            .transcript_path
-            .as_deref()
-            .and_then(|tp| std::fs::read_to_string(tp).ok())
-            .filter(|c| !c.is_empty());
+        if !found_parent {
+            let raw = session
+                .transcript_path
+                .as_deref()
+                .and_then(|tp| std::fs::read_to_string(tp).ok())
+                .filter(|c| !c.is_empty());
 
-        if let Some(content) = raw {
-            transcripts.push((session.session_id.clone(), content));
-            continue;
+            if let Some(content) = raw {
+                transcripts.push(CollectedTranscript {
+                    session_id: session.session_id.clone(),
+                    content,
+                    parent_session_id: None,
+                    subagent_type: None,
+                });
+                found_parent = true;
+            }
         }
 
-        let registry = crate::tools::registry();
-        for tool in registry.all() {
-            if is_agent_tool_match(&session.agent, tool.name()) {
-                if let Some(path) = tool.find_transcript(project_root, &session.session_id) {
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        if !content.is_empty() {
-                            transcripts.push((session.session_id.clone(), content));
+        if !found_parent {
+            let registry = crate::tools::registry();
+            for tool in registry.all() {
+                if is_agent_tool_match(&session.agent, tool.name()) {
+                    if let Some(path) = tool.find_transcript(project_root, &session.session_id) {
+                        if let Ok(content) = std::fs::read_to_string(&path) {
+                            if !content.is_empty() {
+                                transcripts.push(CollectedTranscript {
+                                    session_id: session.session_id.clone(),
+                                    content,
+                                    parent_session_id: None,
+                                    subagent_type: None,
+                                });
+                            }
                         }
                     }
+                    break;
                 }
-                break;
             }
+        }
+
+        // 2. Always collect subagent transcripts for tools that support them.
+        if is_cursor_session(&session.agent) {
+            collect_cursor_subagent_transcripts(
+                project_root,
+                &session.session_id,
+                &mut transcripts,
+            );
+        } else if is_claude_session(&session.agent) {
+            collect_claude_subagent_transcripts(
+                project_root,
+                &session.session_id,
+                &mut transcripts,
+            );
         }
     }
     transcripts
 }
 
+/// Collect transcript files from the subagents/ directory for a Cursor session.
+fn collect_cursor_subagent_transcripts(
+    project_root: &str,
+    parent_session_id: &str,
+    transcripts: &mut Vec<CollectedTranscript>,
+) {
+    let subagents =
+        crate::tools::cursor::transcript::find_subagent_transcripts(project_root, parent_session_id);
+    if subagents.is_empty() {
+        return;
+    }
+
+    // Build subagent_type lookup from Cursor's session discovery.
+    let type_map: std::collections::HashMap<String, String> =
+        crate::tools::cursor::sessions_for_project(project_root)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|s| s.subagent_type.map(|t| (s.session_id, t)))
+            .collect();
+
+    for (subagent_id, path) in subagents {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if !content.is_empty() {
+                let stype = type_map.get(&subagent_id).cloned();
+                transcripts.push(CollectedTranscript {
+                    session_id: subagent_id,
+                    content,
+                    parent_session_id: Some(parent_session_id.to_string()),
+                    subagent_type: stype,
+                });
+            }
+        }
+    }
+}
+
+/// Collect transcript files from the subagents/ directory for a Claude Code session.
+fn collect_claude_subagent_transcripts(
+    project_root: &str,
+    parent_session_id: &str,
+    transcripts: &mut Vec<CollectedTranscript>,
+) {
+    let subagents =
+        crate::tools::claude::transcript::find_subagent_transcripts(project_root, parent_session_id);
+    for (subagent_id, path) in subagents {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if !content.is_empty() {
+                let stype = extract_claude_agent_id(&content);
+                transcripts.push(CollectedTranscript {
+                    session_id: subagent_id,
+                    content,
+                    parent_session_id: Some(parent_session_id.to_string()),
+                    subagent_type: stype,
+                });
+            }
+        }
+    }
+}
+
+/// Extract `agentId` from the first entry of a Claude subagent JSONL.
+fn extract_claude_agent_id(content: &str) -> Option<String> {
+    for line in content.lines().take(5) {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) {
+            if let Some(id) = entry.get("agentId").and_then(|v| v.as_str()) {
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn is_cursor_session(agent: &str) -> bool {
     crate::core::tool::is_cursor_agent(agent)
+}
+
+fn is_claude_session(agent: &str) -> bool {
+    agent == "claude"
 }
 
 /// Extract live session stats directly from the tool's data files at commit

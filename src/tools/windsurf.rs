@@ -113,6 +113,8 @@ fn build_sessions(cascade_sessions: Vec<CascadeSession>) -> Vec<Session> {
                 project_path,
                 workspace_dir: String::new(),
                 source: "windsurf".to_string(),
+                parent_session_id: None,
+                subagent_type: None,
             }
         })
         .collect()

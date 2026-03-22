@@ -17,8 +17,12 @@ pub struct EventPayload {
     pub project: ProjectInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor: Option<AnchorPayload>,
+    /// Flat transcript messages (backward compat — all sessions concatenated).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transcript: Vec<TranscriptMessage>,
+    /// Structured per-session transcripts with parent-child relationships.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_transcripts: Vec<SessionTranscript>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -69,6 +73,18 @@ pub struct TranscriptMessage {
     pub tool_result: Option<ToolResultMessage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp_ms: Option<i64>,
+}
+
+/// A session's transcript with parent-child relationship metadata.
+/// Used to represent the agent→subagent delegation tree.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionTranscript {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_type: Option<String>,
+    pub messages: Vec<TranscriptMessage>,
 }
 
 /// SessionStats is still used internally by the analytics pipeline
@@ -198,6 +214,8 @@ mod tests {
             thinking_duration_ms: None,
             compact_count: None,
             is_subagent: false,
+            parent_session_id: None,
+            subagent_type: None,
             is_estimated: false,
         }];
 
@@ -231,6 +249,7 @@ mod tests {
                     timestamp_ms: None,
                 },
             ],
+            session_transcripts: Vec::new(),
         };
 
         let json = serde_json::to_string_pretty(&payload).unwrap();
@@ -258,6 +277,7 @@ mod tests {
             },
             anchor: None,
             transcript: Vec::new(),
+            session_transcripts: Vec::new(),
         };
 
         let json = serde_json::to_string(&payload).unwrap();

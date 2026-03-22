@@ -149,6 +149,10 @@ struct SessionEntry {
     output_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     files_touched: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subagent_type: Option<String>,
 }
 
 fn recent_commits_with_anchors(
@@ -231,6 +235,8 @@ fn recent_commits_with_anchors(
                         input_tokens: None,
                         output_tokens: None,
                         files_touched: None,
+                        parent_session_id: None,
+                        subagent_type: None,
                     });
                 }
             }
@@ -258,7 +264,8 @@ fn load_anchor_from_db(db: &Db, commit_hash: &str) -> Option<crate::core::anchor
 fn load_session_link(db: &Db, commit_hash: &str, session_id: &str) -> Option<SessionEntry> {
     db.conn
         .query_row(
-            "SELECT agent, model, link_type, input_tokens, output_tokens, files_touched
+            "SELECT agent, model, link_type, input_tokens, output_tokens, files_touched,
+                    parent_session_id, subagent_type
              FROM anchor_sessions
              WHERE commit_hash = ?1 AND session_id = ?2",
             rusqlite::params![commit_hash, session_id],
@@ -274,6 +281,8 @@ fn load_session_link(db: &Db, commit_hash: &str, session_id: &str) -> Option<Ses
                     input_tokens: row.get(3)?,
                     output_tokens: row.get(4)?,
                     files_touched,
+                    parent_session_id: row.get(6)?,
+                    subagent_type: row.get(7)?,
                 })
             },
         )
@@ -342,6 +351,8 @@ mod tests {
             input_tokens: None,
             output_tokens: None,
             files_touched: Some(vec!["src/main.rs".into()]),
+            parent_session_id: None,
+            subagent_type: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("\"model\":null"));

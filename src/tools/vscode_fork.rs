@@ -182,6 +182,8 @@ fn try_extract_with_key(
             project_path: project_path.to_string(),
             workspace_dir: ws_dir.to_string_lossy().to_string(),
             source: source.to_string(),
+            parent_session_id: None,
+            subagent_type: None,
         });
     }
 

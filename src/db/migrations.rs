@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 
-const LATEST_VERSION: i32 = 7;
+const LATEST_VERSION: i32 = 8;
 
 pub fn run(conn: &Connection) -> Result<(), String> {
     ensure_schema_version_table(conn)?;
@@ -31,6 +31,9 @@ pub fn run(conn: &Connection) -> Result<(), String> {
     }
     if current < 7 {
         migrate_v7(conn)?;
+    }
+    if current < 8 {
+        migrate_v8(conn)?;
     }
 
     set_version(conn, LATEST_VERSION)?;
@@ -339,6 +342,17 @@ fn migrate_v7(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|e| format!("migration v7 failed: {e}"))?;
 
+    Ok(())
+}
+
+fn migrate_v8(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "
+        ALTER TABLE anchor_sessions ADD COLUMN parent_session_id TEXT;
+        ALTER TABLE anchor_sessions ADD COLUMN subagent_type TEXT;
+        ",
+    )
+    .map_err(|e| format!("migration v8 failed: {e}"))?;
     Ok(())
 }
 

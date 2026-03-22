@@ -100,6 +100,13 @@ fn list_json(
                 "updated_at": s.updated_at_iso(),
             });
 
+            if let Some(ref pid) = s.parent_session_id {
+                obj["parent_session_id"] = serde_json::json!(pid);
+            }
+            if let Some(ref stype) = s.subagent_type {
+                obj["subagent_type"] = serde_json::json!(stype);
+            }
+
             if let Some(st) = st {
                 obj["model"] = serde_json::json!(st.model);
                 obj["input_tokens"] = serde_json::json!(st.input_tokens);
@@ -193,6 +200,12 @@ fn search(query: &str, cfg: &Config, all: bool, agent: bool, limit: usize) -> Re
                     obj["input_tokens"] = serde_json::json!(st.input_tokens);
                     obj["output_tokens"] = serde_json::json!(st.output_tokens);
                 }
+                if let Some(ref pid) = s.parent_session_id {
+                    obj["parent_session_id"] = serde_json::json!(pid);
+                }
+                if let Some(ref stype) = s.subagent_type {
+                    obj["subagent_type"] = serde_json::json!(stype);
+                }
                 obj
             })
             .collect();
@@ -257,6 +270,13 @@ fn show_json(id: &str) -> Result<(), String> {
         "message_count": messages.len(),
         "messages": messages,
     });
+
+    if let Some(ref pid) = s.parent_session_id {
+        obj["parent_session_id"] = serde_json::json!(pid);
+    }
+    if let Some(ref stype) = s.subagent_type {
+        obj["subagent_type"] = serde_json::json!(stype);
+    }
 
     if let Some(st) = stats {
         obj["model"] = serde_json::json!(st.model);
@@ -418,6 +438,8 @@ mod tests {
             project_path: "/test".to_string(),
             workspace_dir: String::new(),
             source: "composer".to_string(),
+            parent_session_id: None,
+            subagent_type: None,
         }];
 
         let mut stats_map = std::collections::HashMap::new();
@@ -449,6 +471,8 @@ mod tests {
             project_path: String::new(),
             workspace_dir: String::new(),
             source: "composer".to_string(),
+            parent_session_id: None,
+            subagent_type: None,
         }];
 
         let mut stats_map = std::collections::HashMap::new();

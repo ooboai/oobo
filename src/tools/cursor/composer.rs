@@ -4,6 +4,22 @@ use super::Session;
 
 const COMPOSER_KEY: &str = "composer.composerData";
 
+/// Map Cursor's numeric subagent type IDs to human-readable names.
+/// These values come from Cursor's internal `SubagentType` enum in
+/// composer data (observed via state.vscdb inspection). IDs 2 and 3
+/// are both explore variants (quick/thorough) — collapsed to "explore".
+fn map_subagent_type(type_id: u64) -> String {
+    match type_id {
+        0 => "generalPurpose".to_string(),
+        1 => "shell".to_string(),
+        2 => "explore".to_string(),
+        3 => "explore".to_string(),
+        4 => "browser-use".to_string(),
+        5 => "best-of-n-runner".to_string(),
+        _ => format!("unknown-{type_id}"),
+    }
+}
+
 /// Extract sessions from a workspace's state.vscdb.
 pub fn extract_sessions(ws_dir: &Path, project_path: &str) -> Vec<Session> {
     let db_path = ws_dir.join("state.vscdb");
@@ -42,6 +58,18 @@ pub fn extract_sessions(ws_dir: &Path, project_path: &str) -> Vec<Session> {
             _ => continue,
         };
 
+        let (parent_id, subagent_tp) = c.get("subagentInfo")
+            .map(|info| {
+                let parent = info.get("parentComposerId")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let stype = info.get("subagentType")
+                    .and_then(|v| v.as_u64())
+                    .map(map_subagent_type);
+                (parent, stype)
+            })
+            .unwrap_or((None, None));
+
         sessions.push(Session {
             session_id: cid,
             name: c
@@ -59,6 +87,8 @@ pub fn extract_sessions(ws_dir: &Path, project_path: &str) -> Vec<Session> {
             project_path: project_path.to_string(),
             workspace_dir: ws_dir.to_string_lossy().to_string(),
             source: "composer".to_string(),
+            parent_session_id: parent_id,
+            subagent_type: subagent_tp,
         });
     }
 
@@ -147,5 +177,55 @@ mod tests {
         let sessions = extract_sessions(tmp.path(), "/tmp");
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, "valid-id");
+    }
+
+    #[test]
+    fn test_extract_subagent_info() {
+        let tmp = TempDir::new().unwrap();
+        let json = r#"{
+            "allComposers": [
+                {
+                    "composerId": "parent-uuid",
+                    "name": "Main session",
+                    "unifiedMode": "agent",
+                    "createdAt": 1700000000000
+                },
+                {
+                    "composerId": "child-uuid",
+                    "name": "Subtask",
+                    "unifiedMode": "agent",
+                    "createdAt": 1700000010000,
+                    "subagentInfo": {
+                        "parentComposerId": "parent-uuid",
+                        "subagentType": 2
+                    }
+                }
+            ]
+        }"#;
+        create_test_db(tmp.path(), json);
+
+        let sessions = extract_sessions(tmp.path(), "/tmp");
+        assert_eq!(sessions.len(), 2);
+
+        let parent = sessions.iter().find(|s| s.session_id == "parent-uuid").unwrap();
+        assert!(parent.parent_session_id.is_none());
+        assert!(parent.subagent_type.is_none());
+        assert!(!parent.is_subagent());
+
+        let child = sessions.iter().find(|s| s.session_id == "child-uuid").unwrap();
+        assert_eq!(child.parent_session_id.as_deref(), Some("parent-uuid"));
+        assert_eq!(child.subagent_type.as_deref(), Some("explore"));
+        assert!(child.is_subagent());
+    }
+
+    #[test]
+    fn test_map_subagent_type() {
+        assert_eq!(map_subagent_type(0), "generalPurpose");
+        assert_eq!(map_subagent_type(1), "shell");
+        assert_eq!(map_subagent_type(2), "explore");
+        assert_eq!(map_subagent_type(3), "explore");
+        assert_eq!(map_subagent_type(4), "browser-use");
+        assert_eq!(map_subagent_type(5), "best-of-n-runner");
+        assert_eq!(map_subagent_type(99), "unknown-99");
     }
 }

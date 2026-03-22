@@ -34,6 +34,67 @@ pub fn find_transcript_path(project_path: &str, session_id: &str) -> Option<Path
     None
 }
 
+/// Find subagent transcript files for a given parent Claude session.
+/// Returns (subagent_id, file_path) tuples.
+pub fn find_subagent_transcripts(project_path: &str, session_id: &str) -> Vec<(String, PathBuf)> {
+    let projects_dir = match super::claude_projects_dir() {
+        Some(d) => d,
+        None => return Vec::new(),
+    };
+    let slug = super::path_to_slug(project_path);
+    let project_dir = projects_dir.join(slug);
+
+    let mut result = Vec::new();
+
+    let session_dir = project_dir.join(session_id);
+    let subagents_dir = session_dir.join("subagents");
+    if subagents_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&subagents_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().is_some_and(|e| e == "jsonl") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        result.push((stem.to_string(), path));
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    // Fallback: prefix-match on session_id for directories.
+    if project_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&project_dir) {
+            let prefix = &session_id[..session_id.len().min(8)];
+            for entry in entries.flatten() {
+                let dir = entry.path();
+                if !dir.is_dir() {
+                    continue;
+                }
+                let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if !name.starts_with(prefix) {
+                    continue;
+                }
+                let sub_dir = dir.join("subagents");
+                if sub_dir.is_dir() {
+                    if let Ok(sub_entries) = fs::read_dir(&sub_dir) {
+                        for sub_entry in sub_entries.flatten() {
+                            let path = sub_entry.path();
+                            if path.is_file() && path.extension().is_some_and(|e| e == "jsonl") {
+                                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                                    result.push((stem.to_string(), path));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
 /// Count user/assistant messages in a Claude session file.
 pub fn count_messages(project_path: &str, session_id: &str) -> u32 {
     let path = match find_transcript_path(project_path, session_id) {

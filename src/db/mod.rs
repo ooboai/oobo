@@ -134,6 +134,8 @@ impl Db {
         duration_secs: Option<u64>,
         tool_calls: Option<u32>,
         is_subagent: bool,
+        parent_session_id: Option<&str>,
+        subagent_type: Option<&str>,
     ) -> Result<(), String> {
         let ft_json = files_touched.map(|ft| serde_json::to_string(ft).unwrap_or_default());
         self.conn
@@ -141,8 +143,8 @@ impl Db {
                 "INSERT OR REPLACE INTO anchor_sessions
                  (commit_hash, session_id, agent, model, link_type, files_touched,
                   input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                  duration_secs, tool_calls, is_subagent)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                  duration_secs, tool_calls, is_subagent, parent_session_id, subagent_type)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 rusqlite::params![
                     commit_hash,
                     session_id,
@@ -157,6 +159,8 @@ impl Db {
                     duration_secs.map(|v| v as i64),
                     tool_calls.map(|v| v as i64),
                     is_subagent as i64,
+                    parent_session_id,
+                    subagent_type,
                 ],
             )
             .map_err(|e| format!("insert anchor_session: {e}"))?;
@@ -246,6 +250,8 @@ mod tests {
             Some(120),
             Some(5),
             false,
+            None,
+            None,
         )
         .unwrap();
 
@@ -306,7 +312,7 @@ mod tests {
 
         db.insert_anchor_session(
             "def456", "sess-99", "claude", None, "inferred", None, None, None, None, None, None,
-            None, false,
+            None, false, None, None,
         )
         .unwrap();
 

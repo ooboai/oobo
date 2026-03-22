@@ -81,6 +81,8 @@ fn session_from_json(data: &serde_json::Value, path: &Path) -> Option<Session> {
         project_path: String::new(),
         workspace_dir: String::new(),
         source: "zed".to_string(),
+        parent_session_id: None,
+        subagent_type: None,
     })
 }
 

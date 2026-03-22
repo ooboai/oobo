@@ -195,6 +195,8 @@ mod tests {
             workspace_dir: String::new(),
             created_at: None,
             updated_at: None,
+            parent_session_id: None,
+            subagent_type: None,
         };
         assert_eq!(count_messages(&session), 0);
     }

@@ -129,6 +129,8 @@ fn session_from_rollout(path: &Path) -> Option<Session> {
         project_path,
         workspace_dir: String::new(),
         source: "codex".to_string(),
+        parent_session_id: None,
+        subagent_type: None,
     })
 }
 
@@ -234,6 +236,8 @@ fn sessions_from_sqlite() -> Result<Vec<Session>, String> {
                 project_path: cwd,
                 workspace_dir: String::new(),
                 source: "codex".to_string(),
+                parent_session_id: None,
+                subagent_type: None,
             })
         })
         .map_err(|e| format!("codex rows: {e}"))?;

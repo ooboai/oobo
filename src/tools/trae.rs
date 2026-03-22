@@ -84,6 +84,8 @@ fn sessions_from_workspaces() -> Vec<Session> {
                             project_path: folder_path.clone(),
                             workspace_dir: ws_dir.to_string_lossy().to_string(),
                             source: "trae".to_string(),
+                            parent_session_id: None,
+                            subagent_type: None,
                         });
                     }
                 }

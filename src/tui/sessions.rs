@@ -18,6 +18,8 @@ struct SessionRow {
     #[allow(dead_code)]
     msg_count: u32,
     stats: Option<StatsRow>,
+    /// Display depth: 0 = top-level, 1 = subagent.
+    depth: u8,
 }
 
 enum View {
@@ -39,13 +41,17 @@ pub fn run_list(sessions: Vec<Session>, show_all: bool) -> Result<(), String> {
             let msg_count = session::count_messages(&s);
             let key = (s.session_id.clone(), s.source.clone());
             let stats = stats_map.get(&key).cloned();
+            let depth = if s.is_subagent() { 1 } else { 0 };
             SessionRow {
                 session: s,
                 msg_count,
                 stats,
+                depth,
             }
         })
         .collect();
+
+    arrange_parent_child(&mut rows);
 
     if rows.is_empty() {
         eprintln!("No sessions found.");
@@ -397,6 +403,34 @@ fn apply_filter(rows: &[SessionRow], query: &str) -> Vec<usize> {
         .collect()
 }
 
+/// Reorder rows so subagent sessions appear immediately after their parent.
+fn arrange_parent_child(rows: &mut Vec<SessionRow>) {
+    let mut children: HashMap<String, Vec<SessionRow>> = HashMap::new();
+    let mut parents: Vec<SessionRow> = Vec::new();
+
+    for row in rows.drain(..) {
+        if let Some(ref parent_id) = row.session.parent_session_id {
+            children.entry(parent_id.clone()).or_default().push(row);
+        } else {
+            parents.push(row);
+        }
+    }
+
+    for parent in parents {
+        let pid = parent.session.session_id.clone();
+        rows.push(parent);
+        if let Some(mut kids) = children.remove(&pid) {
+            kids.sort_by_key(|r| std::cmp::Reverse(r.session.sort_key()));
+            rows.extend(kids);
+        }
+    }
+
+    // Orphan subagents whose parent wasn't in the list.
+    for (_, mut kids) in children {
+        rows.append(&mut kids);
+    }
+}
+
 fn render_list(
     f: &mut Frame,
     rows: &[&SessionRow],
@@ -505,7 +539,8 @@ fn render_list(
                 .map(format_duration)
                 .unwrap_or_else(|| placeholder.into());
 
-            let name = if s.name.is_empty() {
+            let is_sub = r.depth > 0;
+            let raw_name = if s.name.is_empty() {
                 "(untitled)".to_string()
             } else if show_all {
                 let proj = std::path::Path::new(&s.project_path)
@@ -515,6 +550,15 @@ fn render_list(
                 format!("{}  [{}]", s.name, proj)
             } else {
                 s.name.clone()
+            };
+            let name = if is_sub {
+                let stype = s
+                    .subagent_type
+                    .as_deref()
+                    .unwrap_or("sub");
+                format!("└─ [{stype}] {raw_name}")
+            } else {
+                raw_name
             };
             let src = source_label(&s.source);
 
@@ -526,6 +570,12 @@ fn render_list(
                 Style::default().fg(Color::Yellow)
             };
 
+            let row_style = if is_sub {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default()
+            };
+
             Row::new(vec![
                 Cell::from(short_id).style(Style::default().fg(Color::DarkGray)),
                 Cell::from(src),
@@ -535,6 +585,7 @@ fn render_list(
                 Cell::from(dur),
                 Cell::from(name),
             ])
+            .style(row_style)
         })
         .collect();
 

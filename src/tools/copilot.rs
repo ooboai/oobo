@@ -166,6 +166,8 @@ fn parse_session_file(path: &Path, project_path: &str, ws_dir: &str) -> Option<S
         project_path: project_path.to_string(),
         workspace_dir: ws_dir.to_string(),
         source: "copilot".to_string(),
+        parent_session_id: None,
+        subagent_type: None,
     })
 }
 

@@ -413,6 +413,8 @@ fn index_sessions_inner(
             project_path: project_path.clone(),
             workspace_dir: String::new(),
             source: row.source.clone(),
+            parent_session_id: None,
+            subagent_type: None,
         };
 
         let (mut native, cached_messages) = if row.source == "composer" {
@@ -648,6 +650,8 @@ pub fn index_single_session(
         project_path: project_path.to_string(),
         workspace_dir: String::new(),
         source: source.to_string(),
+        parent_session_id: None,
+        subagent_type: None,
     };
 
     let messages = if source == "composer" {
@@ -795,6 +799,8 @@ fn extract_native_stats(
         project_path: project_path.to_string(),
         workspace_dir: String::new(),
         source: source.to_string(),
+        parent_session_id: None,
+        subagent_type: None,
     };
     registry.by_name(source)?.extract_native_stats(&session)
 }
@@ -933,6 +939,8 @@ mod tests {
             project_path: "/nonexistent/path".to_string(),
             workspace_dir: String::new(),
             source: "claude".to_string(),
+            parent_session_id: None,
+            subagent_type: None,
         };
 
         let messages =

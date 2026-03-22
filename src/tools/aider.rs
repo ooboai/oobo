@@ -106,6 +106,8 @@ pub fn sessions_for_project(project_root: &str) -> Result<Vec<Session>, String> 
             project_path: project_root.to_string(),
             workspace_dir: project_root.to_string(),
             source: "aider".to_string(),
+            parent_session_id: None,
+            subagent_type: None,
         });
     }
 
@@ -136,6 +138,8 @@ fn build_session(
         project_path: project_root.to_string(),
         workspace_dir: project_root.to_string(),
         source: "aider".to_string(),
+        parent_session_id: None,
+        subagent_type: None,
     }
 }
 

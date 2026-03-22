@@ -11,6 +11,10 @@ pub struct Session {
     #[allow(dead_code)]
     pub workspace_dir: String,
     pub source: String,
+    /// Parent session ID if this is a subagent session.
+    pub parent_session_id: Option<String>,
+    /// Subagent type (e.g. "explore", "shell", "generalPurpose").
+    pub subagent_type: Option<String>,
 }
 
 impl Session {
@@ -24,6 +28,10 @@ impl Session {
         } else {
             &self.session_id
         }
+    }
+
+    pub fn is_subagent(&self) -> bool {
+        self.parent_session_id.is_some()
     }
 
     pub fn updated_at_iso(&self) -> String {
@@ -69,6 +77,8 @@ mod tests {
             project_path: "/tmp".into(),
             workspace_dir: "/tmp".into(),
             source: "composer".into(),
+            parent_session_id: None,
+            subagent_type: None,
         };
         assert_eq!(s.short_id(), "2c97dced");
     }

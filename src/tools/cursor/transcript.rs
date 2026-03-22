@@ -52,6 +52,55 @@ pub fn find_transcript_path(project_path: &str, session_id: &str) -> Option<Path
     None
 }
 
+/// Find all subagent transcript files for a parent session.
+/// Returns Vec<(subagent_id, path)>.
+pub fn find_subagent_transcripts(project_path: &str, session_id: &str) -> Vec<(String, PathBuf)> {
+    let projects_dir = match cursor_projects_dir() {
+        Some(d) => d,
+        None => return Vec::new(),
+    };
+    let slug = path_to_slug(project_path);
+    let transcripts_dir = projects_dir.join(slug).join("agent-transcripts");
+
+    let mut result = Vec::new();
+
+    let session_dir = transcripts_dir.join(session_id);
+    let subagents_dir = session_dir.join("subagents");
+    if !subagents_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&transcripts_dir) {
+            let prefix = &session_id[..session_id.len().min(8)];
+            for entry in entries.flatten() {
+                let name_str = entry.file_name().to_string_lossy().to_string();
+                if entry.path().is_dir() && name_str.starts_with(prefix) {
+                    let sub_dir = entry.path().join("subagents");
+                    if sub_dir.is_dir() {
+                        collect_subagent_files(&sub_dir, &mut result);
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    collect_subagent_files(&subagents_dir, &mut result);
+    result
+}
+
+fn collect_subagent_files(dir: &Path, result: &mut Vec<(String, PathBuf)>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension().is_some_and(|e| e == "jsonl") {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                result.push((stem.to_string(), path));
+            }
+        }
+    }
+}
+
 /// Count messages in a transcript file.
 pub fn count_messages(project_path: &str, session_id: &str) -> u32 {
     let path = match find_transcript_path(project_path, session_id) {

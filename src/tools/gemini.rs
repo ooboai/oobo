@@ -105,9 +105,8 @@ fn session_from_file(path: &Path, project_path: &str) -> Option<Session> {
     let content = fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&content).ok()?;
 
-    if v.get("kind").and_then(|k| k.as_str()) == Some("subagent") {
-        return None;
-    }
+    let kind = v.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+    let is_subagent = kind == "subagent";
 
     let session_id = v.get("sessionId")?.as_str()?.to_string();
     let start_time = v.get("startTime").and_then(|s| s.as_str()).unwrap_or("");
@@ -134,6 +133,22 @@ fn session_from_file(path: &Path, project_path: &str) -> Option<Session> {
     let created_at = crate::utils::parse_iso_timestamp(start_time);
     let updated_at = crate::utils::parse_iso_timestamp(last_updated);
 
+    let (parent_session_id, subagent_type) = if is_subagent {
+        let parent = v
+            .get("parentSessionId")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string());
+        let agent_name = v
+            .get("agentName")
+            .or_else(|| v.get("agentId"))
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| Some("unknown".to_string()));
+        (parent, agent_name)
+    } else {
+        (None, None)
+    };
+
     Some(Session {
         session_id,
         name,
@@ -143,6 +158,8 @@ fn session_from_file(path: &Path, project_path: &str) -> Option<Session> {
         project_path: project_path.to_string(),
         workspace_dir: String::new(),
         source: "gemini".to_string(),
+        parent_session_id,
+        subagent_type,
     })
 }
 
@@ -587,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn test_subagent_sessions_skipped() {
+    fn test_subagent_sessions_included_with_metadata() {
         let tmp = tempfile::TempDir::new().unwrap();
         let session_file = tmp.path().join("session-sub.json");
         fs::write(
@@ -598,6 +615,8 @@ mod tests {
   "startTime": "2026-03-05T10:00:00.000Z",
   "lastUpdated": "2026-03-05T10:00:30.000Z",
   "kind": "subagent",
+  "parentSessionId": "parent-5678",
+  "agentName": "code_reviewer",
   "messages": [
     {"id": "m1", "timestamp": "2026-03-05T10:00:01.000Z", "type": "user", "content": "do something"}
   ]
@@ -605,7 +624,38 @@ mod tests {
         )
         .unwrap();
 
-        assert!(session_from_file(&session_file, "/tmp").is_none());
+        let session = session_from_file(&session_file, "/tmp").unwrap();
+        assert_eq!(session.session_id, "sub-1234");
+        assert_eq!(
+            session.parent_session_id.as_deref(),
+            Some("parent-5678")
+        );
+        assert_eq!(session.subagent_type.as_deref(), Some("code_reviewer"));
+        assert!(session.is_subagent());
+    }
+
+    #[test]
+    fn test_subagent_without_parent_id() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let session_file = tmp.path().join("session-sub-orphan.json");
+        fs::write(
+            &session_file,
+            r#"{
+  "sessionId": "sub-orphan",
+  "projectHash": "test",
+  "startTime": "2026-03-05T10:00:00.000Z",
+  "lastUpdated": "2026-03-05T10:00:30.000Z",
+  "kind": "subagent",
+  "messages": [
+    {"id": "m1", "timestamp": "2026-03-05T10:00:01.000Z", "type": "user", "content": "task"}
+  ]
+}"#,
+        )
+        .unwrap();
+
+        let session = session_from_file(&session_file, "/tmp").unwrap();
+        assert!(session.parent_session_id.is_none());
+        assert_eq!(session.subagent_type.as_deref(), Some("unknown"));
     }
 
     #[test]

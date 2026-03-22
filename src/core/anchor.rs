@@ -181,6 +181,12 @@ pub struct SessionLink {
 
     #[serde(default)]
     pub is_subagent: bool,
+    /// Parent session ID if this is a subagent session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    /// Subagent type (e.g. "explore", "shell", "generalPurpose").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_type: Option<String>,
     #[serde(default)]
     pub is_estimated: bool,
 }
@@ -327,6 +333,8 @@ mod tests {
             thinking_duration_ms: None,
             compact_count: None,
             is_subagent: false,
+            parent_session_id: None,
+            subagent_type: None,
             is_estimated: false,
         };
         let json = serde_json::to_string(&link).unwrap();
