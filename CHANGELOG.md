@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.10] - 2026-03-20
+## [0.1.10] - 2026-03-22
+
+### Added
+
+- **Subagent session hierarchy tracking** — parent-child relationships between agent sessions and their spawned subagents are now detected and displayed. Cursor (`subagentInfo`), Claude Code (`subagents/agent-*.jsonl`), Gemini CLI (`parentSessionId`), and OpenCode (`parent_id`) are all supported. Subagent sessions appear nested under their parent in the TUI with `└─ [type]` prefix, and `parent_session_id`/`subagent_type` fields are included in JSON output. Subagent transcripts are written to the orphan branch under `subagents/` within the parent session directory.
+- **Multi-agent file interaction tracking** — when multiple AI sessions touch the same files in a project, oobo now detects and records these interactions. `read_files` are tracked via `after-tool-use` hooks for Read, Grep, Search, Glob, and similar tools. At commit time, `file_interactions` (with per-session Writer/Reader/Both roles) and `peer_session_ids` are computed and stored on anchors. The TUI shows interaction hints inline, and `peer_session_ids` appears in all `--agent` JSON output paths (list, show, search). A `timeline.json` file is generated on the orphan branch for commits with file interactions.
+- **`detect_interactions()` shared algorithm** — centralized file interaction detection in `core/anchor.rs`, used by the interceptor (commit time), `oobo sessions` CLI (display time), and the TUI, eliminating DRY violations
+- **`get_file_sets()`** — single-read function that returns both `edited_files` and `read_files` from session state, halving I/O for interaction detection
+- **DB migration v8** — added `parent_session_id` and `subagent_type` columns to the `anchor_sessions` table
 
 ### Fixed
 
