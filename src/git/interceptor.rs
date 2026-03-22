@@ -906,7 +906,11 @@ fn discover_sessions_from_tools(
 }
 
 fn ms_to_secs(ms: i64) -> i64 {
-    if ms > 1_000_000_000_000 { ms / 1000 } else { ms }
+    if ms > 1_000_000_000_000 {
+        ms / 1000
+    } else {
+        ms
+    }
 }
 
 /// Detect files touched by multiple sessions and return both file interactions
@@ -916,14 +920,23 @@ fn ms_to_secs(ms: i64) -> i64 {
 fn detect_file_interactions_refs(
     sessions: &[&crate::hooks::state::ActiveSession],
     project_root: &str,
-) -> (Vec<crate::core::anchor::FileInteraction>, std::collections::HashMap<String, Vec<String>>) {
+) -> (
+    Vec<crate::core::anchor::FileInteraction>,
+    std::collections::HashMap<String, Vec<String>>,
+) {
     let inputs: Vec<crate::core::anchor::SessionFiles> = sessions
         .iter()
         .map(|s| {
             let (edited, read) = if s.edited_files.is_some() || s.read_files.is_some() {
                 (
-                    s.edited_files.as_ref().map(|h| h.iter().cloned().collect()).unwrap_or_default(),
-                    s.read_files.as_ref().map(|h| h.iter().cloned().collect()).unwrap_or_default(),
+                    s.edited_files
+                        .as_ref()
+                        .map(|h| h.iter().cloned().collect())
+                        .unwrap_or_default(),
+                    s.read_files
+                        .as_ref()
+                        .map(|h| h.iter().cloned().collect())
+                        .unwrap_or_default(),
                 )
             } else {
                 hooks::state::get_file_sets(project_root, &s.session_id)
@@ -1225,8 +1238,10 @@ fn collect_cursor_subagent_transcripts(
     parent_session_id: &str,
     transcripts: &mut Vec<CollectedTranscript>,
 ) {
-    let subagents =
-        crate::tools::cursor::transcript::find_subagent_transcripts(project_root, parent_session_id);
+    let subagents = crate::tools::cursor::transcript::find_subagent_transcripts(
+        project_root,
+        parent_session_id,
+    );
     if subagents.is_empty() {
         return;
     }
@@ -1260,8 +1275,10 @@ fn collect_claude_subagent_transcripts(
     parent_session_id: &str,
     transcripts: &mut Vec<CollectedTranscript>,
 ) {
-    let subagents =
-        crate::tools::claude::transcript::find_subagent_transcripts(project_root, parent_session_id);
+    let subagents = crate::tools::claude::transcript::find_subagent_transcripts(
+        project_root,
+        parent_session_id,
+    );
     for (subagent_id, path) in subagents {
         if let Ok(content) = std::fs::read_to_string(&path) {
             if !content.is_empty() {
@@ -1441,7 +1458,11 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    fn make_session(id: &str, edited: Vec<&str>, read: Vec<&str>) -> crate::hooks::state::ActiveSession {
+    fn make_session(
+        id: &str,
+        edited: Vec<&str>,
+        read: Vec<&str>,
+    ) -> crate::hooks::state::ActiveSession {
         let now = chrono::Utc::now().timestamp();
         crate::hooks::state::ActiveSession {
             session_id: id.into(),

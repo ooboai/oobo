@@ -58,12 +58,15 @@ pub fn extract_sessions(ws_dir: &Path, project_path: &str) -> Vec<Session> {
             _ => continue,
         };
 
-        let (parent_id, subagent_tp) = c.get("subagentInfo")
+        let (parent_id, subagent_tp) = c
+            .get("subagentInfo")
             .map(|info| {
-                let parent = info.get("parentComposerId")
+                let parent = info
+                    .get("parentComposerId")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                let stype = info.get("subagentType")
+                let stype = info
+                    .get("subagentType")
                     .and_then(|v| v.as_u64())
                     .map(map_subagent_type);
                 (parent, stype)
@@ -207,12 +210,18 @@ mod tests {
         let sessions = extract_sessions(tmp.path(), "/tmp");
         assert_eq!(sessions.len(), 2);
 
-        let parent = sessions.iter().find(|s| s.session_id == "parent-uuid").unwrap();
+        let parent = sessions
+            .iter()
+            .find(|s| s.session_id == "parent-uuid")
+            .unwrap();
         assert!(parent.parent_session_id.is_none());
         assert!(parent.subagent_type.is_none());
         assert!(!parent.is_subagent());
 
-        let child = sessions.iter().find(|s| s.session_id == "child-uuid").unwrap();
+        let child = sessions
+            .iter()
+            .find(|s| s.session_id == "child-uuid")
+            .unwrap();
         assert_eq!(child.parent_session_id.as_deref(), Some("parent-uuid"));
         assert_eq!(child.subagent_type.as_deref(), Some("explore"));
         assert!(child.is_subagent());

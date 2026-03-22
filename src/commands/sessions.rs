@@ -446,7 +446,8 @@ fn compute_peer_map(
         let inputs: Vec<crate::core::anchor::SessionFiles> = group
             .iter()
             .map(|s| {
-                let (edited, read) = crate::hooks::state::get_file_sets(&s.project_path, &s.session_id);
+                let (edited, read) =
+                    crate::hooks::state::get_file_sets(&s.project_path, &s.session_id);
 
                 if edited.is_empty() && read.is_empty() {
                     if let Some(st) = stats_map.get(&(s.session_id.clone(), s.source.clone())) {

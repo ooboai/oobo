@@ -42,7 +42,10 @@ pub(super) fn write_anchor(
         entries.push((format!("{session_path}/metadata.json"), link_json));
 
         if anchor.transparency_mode == TransparencyMode::On {
-            if let Some(ct) = transcripts.iter().find(|ct| ct.session_id == link.session_id) {
+            if let Some(ct) = transcripts
+                .iter()
+                .find(|ct| ct.session_id == link.session_id)
+            {
                 let redacted = crate::redact::redact(&ct.content);
                 let sanitized = strip_absolute_paths(&redacted, project_root);
                 entries.push((format!("{session_path}/transcript.json"), sanitized));
@@ -1155,8 +1158,14 @@ mod tests {
         let interactions = vec![FileInteraction {
             path: "src/main.rs".into(),
             sessions: vec![
-                FileSessionRole { session_id: "s1".into(), role: FileRole::Writer },
-                FileSessionRole { session_id: "s2".into(), role: FileRole::Reader },
+                FileSessionRole {
+                    session_id: "s1".into(),
+                    role: FileRole::Writer,
+                },
+                FileSessionRole {
+                    session_id: "s2".into(),
+                    role: FileRole::Reader,
+                },
             ],
         }];
         anchor.file_interactions = Some(interactions.clone());
@@ -1219,6 +1228,12 @@ mod tests {
         assert_eq!(val["longest_session_ms"], 120_000);
         assert_eq!(val["file_interactions"].as_array().unwrap().len(), 1);
         assert_eq!(val["file_interactions"][0]["path"], "src/main.rs");
-        assert_eq!(val["file_interactions"][0]["sessions"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            val["file_interactions"][0]["sessions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 }

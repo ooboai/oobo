@@ -626,10 +626,7 @@ mod tests {
 
         let session = session_from_file(&session_file, "/tmp").unwrap();
         assert_eq!(session.session_id, "sub-1234");
-        assert_eq!(
-            session.parent_session_id.as_deref(),
-            Some("parent-5678")
-        );
+        assert_eq!(session.parent_session_id.as_deref(), Some("parent-5678"));
         assert_eq!(session.subagent_type.as_deref(), Some("code_reviewer"));
         assert!(session.is_subagent());
     }

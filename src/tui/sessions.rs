@@ -439,13 +439,11 @@ fn arrange_parent_child(rows: &mut Vec<SessionRow>) {
 /// annotate the last session in each interacting group with a hint.
 /// Falls back to `files_touched` from the stats DB when ephemeral state files
 /// are absent (i.e. completed sessions).
-fn annotate_interactions(
-    rows: &mut [SessionRow],
-    stats_map: &HashMap<(String, String), StatsRow>,
-) {
+fn annotate_interactions(rows: &mut [SessionRow], stats_map: &HashMap<(String, String), StatsRow>) {
     use std::collections::HashSet;
 
-    let mut by_project: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+    let mut by_project: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
     for (i, r) in rows.iter().enumerate() {
         if r.depth == 0 && !r.session.project_path.is_empty() {
             by_project
@@ -498,7 +496,10 @@ fn annotate_interactions(
 
         for fi in &interactions {
             for role in &fi.sessions {
-                if let Some(&idx) = indices.iter().find(|&&i| rows[i].session.session_id == role.session_id) {
+                if let Some(&idx) = indices
+                    .iter()
+                    .find(|&&i| rows[i].session.session_id == role.session_id)
+                {
                     participating.insert(idx);
                 }
             }
@@ -508,15 +509,19 @@ fn annotate_interactions(
         let file_list = if shared_files.len() <= 2 {
             shared_files.join(", ")
         } else {
-            format!("{}, {} (+{} more)", shared_files[0], shared_files[1], shared_files.len() - 2)
+            format!(
+                "{}, {} (+{} more)",
+                shared_files[0],
+                shared_files[1],
+                shared_files.len() - 2
+            )
         };
 
-        if let Some(&last_idx) = indices
-            .iter()
-            .rev()
-            .find(|i| participating.contains(i))
-        {
-            hints.push((last_idx, format!("↳ {count} sessions interacted via {file_list}")));
+        if let Some(&last_idx) = indices.iter().rev().find(|i| participating.contains(i)) {
+            hints.push((
+                last_idx,
+                format!("↳ {count} sessions interacted via {file_list}"),
+            ));
         }
     }
 
@@ -646,10 +651,7 @@ fn render_list(
                 s.name.clone()
             };
             let name = if is_sub {
-                let stype = s
-                    .subagent_type
-                    .as_deref()
-                    .unwrap_or("sub");
+                let stype = s.subagent_type.as_deref().unwrap_or("sub");
                 format!("└─ [{stype}] {raw_name}")
             } else {
                 raw_name
@@ -673,7 +675,10 @@ fn render_list(
             let name_cell = if let Some(ref hint) = r.interaction_hint {
                 Cell::from(ratatui::text::Text::from(vec![
                     Line::from(name),
-                    Line::from(Span::styled(hint.clone(), Style::default().fg(Color::Magenta))),
+                    Line::from(Span::styled(
+                        hint.clone(),
+                        Style::default().fg(Color::Magenta),
+                    )),
                 ]))
             } else {
                 Cell::from(name)

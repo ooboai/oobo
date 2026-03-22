@@ -173,18 +173,24 @@ pub struct SessionFiles {
 /// with per-session roles. Also returns a peer map (session_id -> peer IDs).
 pub fn detect_interactions(
     sessions: &[SessionFiles],
-) -> (Vec<FileInteraction>, std::collections::HashMap<String, Vec<String>>) {
+) -> (
+    Vec<FileInteraction>,
+    std::collections::HashMap<String, Vec<String>>,
+) {
     use std::collections::{HashMap, HashSet};
 
     let mut interactions = Vec::new();
     let mut peers: HashMap<String, HashSet<String>> = HashMap::new();
 
     if sessions.len() < 2 {
-        let peer_map = peers.into_iter().map(|(k, v)| {
-            let mut sorted: Vec<String> = v.into_iter().collect();
-            sorted.sort();
-            (k, sorted)
-        }).collect();
+        let peer_map = peers
+            .into_iter()
+            .map(|(k, v)| {
+                let mut sorted: Vec<String> = v.into_iter().collect();
+                sorted.sort();
+                (k, sorted)
+            })
+            .collect();
         return (interactions, peer_map);
     }
 
@@ -238,8 +244,14 @@ pub fn detect_interactions(
         let sids: Vec<&str> = entries.iter().map(|(sid, _, _)| *sid).collect();
         for (i, a) in sids.iter().enumerate() {
             for b in &sids[i + 1..] {
-                peers.entry(a.to_string()).or_default().insert(b.to_string());
-                peers.entry(b.to_string()).or_default().insert(a.to_string());
+                peers
+                    .entry(a.to_string())
+                    .or_default()
+                    .insert(b.to_string());
+                peers
+                    .entry(b.to_string())
+                    .or_default()
+                    .insert(a.to_string());
             }
         }
 
@@ -557,8 +569,14 @@ mod tests {
         let interactions = vec![FileInteraction {
             path: "src/main.rs".into(),
             sessions: vec![
-                FileSessionRole { session_id: "s1".into(), role: FileRole::Writer },
-                FileSessionRole { session_id: "s2".into(), role: FileRole::Reader },
+                FileSessionRole {
+                    session_id: "s1".into(),
+                    role: FileRole::Writer,
+                },
+                FileSessionRole {
+                    session_id: "s2".into(),
+                    role: FileRole::Reader,
+                },
             ],
         }];
         let anchor = Anchor {
@@ -594,16 +612,34 @@ mod tests {
     #[test]
     fn test_detect_interactions_shared() {
         let inputs = vec![
-            SessionFiles { session_id: "s1".into(), edited: vec!["a.rs".into()], read: vec![] },
-            SessionFiles { session_id: "s2".into(), edited: vec![], read: vec!["a.rs".into()] },
-            SessionFiles { session_id: "s3".into(), edited: vec!["b.rs".into()], read: vec![] },
+            SessionFiles {
+                session_id: "s1".into(),
+                edited: vec!["a.rs".into()],
+                read: vec![],
+            },
+            SessionFiles {
+                session_id: "s2".into(),
+                edited: vec![],
+                read: vec!["a.rs".into()],
+            },
+            SessionFiles {
+                session_id: "s3".into(),
+                edited: vec!["b.rs".into()],
+                read: vec![],
+            },
         ];
         let (interactions, peers) = detect_interactions(&inputs);
         assert_eq!(interactions.len(), 1);
         assert_eq!(interactions[0].path, "a.rs");
         assert_eq!(interactions[0].sessions.len(), 2);
-        assert!(interactions[0].sessions.iter().any(|r| r.session_id == "s1" && r.role == FileRole::Writer));
-        assert!(interactions[0].sessions.iter().any(|r| r.session_id == "s2" && r.role == FileRole::Reader));
+        assert!(interactions[0]
+            .sessions
+            .iter()
+            .any(|r| r.session_id == "s1" && r.role == FileRole::Writer));
+        assert!(interactions[0]
+            .sessions
+            .iter()
+            .any(|r| r.session_id == "s2" && r.role == FileRole::Reader));
         assert_eq!(peers.get("s1").unwrap(), &vec!["s2".to_string()]);
         assert_eq!(peers.get("s2").unwrap(), &vec!["s1".to_string()]);
         assert!(peers.get("s3").is_none());
@@ -612,8 +648,16 @@ mod tests {
     #[test]
     fn test_detect_interactions_no_overlap() {
         let inputs = vec![
-            SessionFiles { session_id: "s1".into(), edited: vec!["a.rs".into()], read: vec![] },
-            SessionFiles { session_id: "s2".into(), edited: vec!["b.rs".into()], read: vec![] },
+            SessionFiles {
+                session_id: "s1".into(),
+                edited: vec!["a.rs".into()],
+                read: vec![],
+            },
+            SessionFiles {
+                session_id: "s2".into(),
+                edited: vec!["b.rs".into()],
+                read: vec![],
+            },
         ];
         let (interactions, peers) = detect_interactions(&inputs);
         assert!(interactions.is_empty());
@@ -623,12 +667,26 @@ mod tests {
     #[test]
     fn test_detect_interactions_both_role() {
         let inputs = vec![
-            SessionFiles { session_id: "s1".into(), edited: vec!["a.rs".into()], read: vec!["a.rs".into()] },
-            SessionFiles { session_id: "s2".into(), edited: vec![], read: vec!["a.rs".into()] },
+            SessionFiles {
+                session_id: "s1".into(),
+                edited: vec!["a.rs".into()],
+                read: vec!["a.rs".into()],
+            },
+            SessionFiles {
+                session_id: "s2".into(),
+                edited: vec![],
+                read: vec!["a.rs".into()],
+            },
         ];
         let (interactions, _) = detect_interactions(&inputs);
         assert_eq!(interactions.len(), 1);
-        assert!(interactions[0].sessions.iter().any(|r| r.session_id == "s1" && r.role == FileRole::Both));
-        assert!(interactions[0].sessions.iter().any(|r| r.session_id == "s2" && r.role == FileRole::Reader));
+        assert!(interactions[0]
+            .sessions
+            .iter()
+            .any(|r| r.session_id == "s1" && r.role == FileRole::Both));
+        assert!(interactions[0]
+            .sessions
+            .iter()
+            .any(|r| r.session_id == "s2" && r.role == FileRole::Reader));
     }
 }

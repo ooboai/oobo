@@ -379,17 +379,35 @@ fn is_cursor_agent(agent: &str) -> bool {
 fn is_read_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "Read" | "ReadFile" | "View" | "read_file" | "read"
-            | "Grep" | "grep" | "Search" | "search" | "SemanticSearch"
-            | "Glob" | "glob" | "ListFiles" | "list_files"
+        "Read"
+            | "ReadFile"
+            | "View"
+            | "read_file"
+            | "read"
+            | "Grep"
+            | "grep"
+            | "Search"
+            | "search"
+            | "SemanticSearch"
+            | "Glob"
+            | "glob"
+            | "ListFiles"
+            | "list_files"
     )
 }
 
 fn is_dir_scoped_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "Grep" | "grep" | "Search" | "search" | "SemanticSearch"
-            | "Glob" | "glob" | "ListFiles" | "list_files"
+        "Grep"
+            | "grep"
+            | "Search"
+            | "search"
+            | "SemanticSearch"
+            | "Glob"
+            | "glob"
+            | "ListFiles"
+            | "list_files"
     )
 }
 
@@ -486,9 +504,20 @@ mod tests {
     #[test]
     fn test_is_read_tool_positives() {
         for tool in [
-            "Read", "ReadFile", "View", "read_file", "read",
-            "Grep", "grep", "Search", "search", "SemanticSearch",
-            "Glob", "glob", "ListFiles", "list_files",
+            "Read",
+            "ReadFile",
+            "View",
+            "read_file",
+            "read",
+            "Grep",
+            "grep",
+            "Search",
+            "search",
+            "SemanticSearch",
+            "Glob",
+            "glob",
+            "ListFiles",
+            "list_files",
         ] {
             assert!(is_read_tool(tool), "{tool} should be a read tool");
         }
@@ -512,11 +541,22 @@ mod tests {
 
     #[test]
     fn test_dir_scoped_is_subset_of_read_tool() {
-        for tool in ["Grep", "grep", "Search", "search", "SemanticSearch",
-                      "Glob", "glob", "ListFiles", "list_files"] {
-            assert!(is_read_tool(tool),
+        for tool in [
+            "Grep",
+            "grep",
+            "Search",
+            "search",
+            "SemanticSearch",
+            "Glob",
+            "glob",
+            "ListFiles",
+            "list_files",
+        ] {
+            assert!(
+                is_read_tool(tool),
                 "{tool} is in is_dir_scoped_tool but not is_read_tool — \
-                 the dir-scoped check will never fire");
+                 the dir-scoped check will never fire"
+            );
         }
     }
 }

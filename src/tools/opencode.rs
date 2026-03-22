@@ -105,7 +105,15 @@ fn sessions_from_modern_db(conn: &rusqlite::Connection, db_path: &Path) -> Vec<S
         } else {
             None
         };
-        Ok((id, title, directory, time_created, time_updated, worktree, parent_session_id))
+        Ok((
+            id,
+            title,
+            directory,
+            time_created,
+            time_updated,
+            worktree,
+            parent_session_id,
+        ))
     }) {
         Ok(r) => r,
         Err(_) => return Vec::new(),
@@ -1027,17 +1035,22 @@ mod tests {
             "INSERT INTO session (id, project_id, title, time_created, time_updated) \
              VALUES ('parent-1', 'p1', 'Main session', 1772701435000, 1772701472000)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated) \
              VALUES ('child-1', 'p1', 'parent-1', 'Subagent task', 1772701440000, 1772701460000)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         let sessions = sessions_from_modern_db(&conn, &db_path);
         assert_eq!(sessions.len(), 2);
 
-        let parent = sessions.iter().find(|s| s.session_id == "parent-1").unwrap();
+        let parent = sessions
+            .iter()
+            .find(|s| s.session_id == "parent-1")
+            .unwrap();
         assert!(parent.parent_session_id.is_none());
         assert!(!parent.is_subagent());
 
