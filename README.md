@@ -1,25 +1,76 @@
-[License](LICENSE-APACHE)
-[CI](https://github.com/ooboai/oobo/actions/workflows/ci.yml)
-[Issues](https://github.com/ooboai/oobo/issues)
-GitHub Release
+<div align="center">
+
+<img src="assets/icon.png" alt="oobo" width="120" />
 
 # oobo
 
 ### Git for agents (and humans).
 
-A transparent git decorator that enriches every commit with AI context: sessions, tokens, and code attribution. Humans use it like normal git. Agents use `--agent` for compact output or `--json` for structured JSON. Anchor metadata always syncs via git; transcripts stay local unless you turn transparency on.
+A transparent git decorator that enriches every commit with AI context:<br/>sessions, tokens, and code attribution — across 10 AI coding tools.<br/>No workflow changes. No plugins. No cloud required.
 
-[How It Works](#how-it-works) · [Install](#installation) · [Quick Start](#quick-start) · [For AI Agents](#for-ai-agents) · [Contributing](CONTRIBUTING.md)
+[![License](https://img.shields.io/badge/license-Apache%202.0%20%2F%20MIT-blue)](LICENSE-APACHE)
+[![CI](https://img.shields.io/github/actions/workflow/status/ooboai/oobo/ci.yml?label=CI)](https://github.com/ooboai/oobo/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/ooboai/oobo?color=green)](https://github.com/ooboai/oobo/releases)
+[![Issues](https://img.shields.io/github/issues/ooboai/oobo)](https://github.com/ooboai/oobo/issues)
+[![Stars](https://img.shields.io/github/stars/ooboai/oobo?style=social)](https://github.com/ooboai/oobo)
+
+[Documentation](https://docs.oobo.ai) · [Report Bug](https://github.com/ooboai/oobo/issues/new?labels=bug) · [Request Feature](https://github.com/ooboai/oobo/issues/new?labels=enhancement) · [Contributing](CONTRIBUTING.md)
+
+</div>
 
 ---
 
-## Why oobo?
+## Installation
 
-AI coding tools generate conversations, token usage, and context that disappear the moment you close the tab. Meanwhile, `git log` only shows diffs — it has no idea that Claude wrote that function or that you spent 14k tokens debugging a race condition.
+```bash
+curl -fsSL https://oobo.ai/install.sh | bash
+```
 
-**oobo bridges the gap.** It decorates git transparently, and on every write operation (commit, push, merge) it captures the AI sessions that contributed to the change and writes structured metadata called an **anchor**.
+**Platforms:** macOS (Apple Silicon, Intel) · Linux (x86_64, ARM64, glibc, musl)
 
-No workflow changes. No plugins. No cloud required.
+Or grab a binary from [Releases](https://github.com/ooboai/oobo/releases).
+
+---
+
+## Features
+
+- **Drop-In Git Replacement** — Use `oobo` exactly like `git`. Every command passes through transparently. Read operations have zero overhead.
+- **AI Session Tracking** — Automatically discovers and links AI chat sessions to your commits — which agent wrote what, how many tokens it took, and which conversation produced each change.
+- **10 Tools Supported** — Cursor, Claude Code, Gemini CLI, OpenCode, Codex, Aider, GitHub Copilot, Windsurf, Zed, and Trae.
+- **Code Attribution** — Know exactly which lines were AI-generated vs human-written, per commit.
+- **Agent-Native** — Every command supports `--agent` (compact, pipe-delimited) and `--json` (structured) output modes. Built for agents that commit code constantly across tools.
+- **Local-First, Private by Default** — Everything stays in `~/.oobo/`. Nothing leaves your machine unless you opt in. No telemetry. Secrets are redacted before sharing.
+- **Anchor System** — Extends git commits with structured AI metadata that travels with the repo via a git orphan branch. No external dependencies.
+
+---
+
+## Quick Start
+
+```bash
+# 1. Install — setup runs automatically, detects your tools, configures everything
+curl -fsSL https://oobo.ai/install.sh | bash
+
+# 2. Use oobo wherever you'd use git — everything passes through
+oobo commit -m "fix auth middleware"
+oobo push origin main
+
+# 3. See what happened
+oobo anchors       # enriched commit history with AI context
+oobo sessions      # browse your AI chat sessions
+oobo stats         # token usage, attribution breakdown
+```
+
+**Optionally**, alias `git` so you don't have to think about it:
+
+```bash
+oobo alias install      # adds alias git=oobo to your shell rc
+```
+
+**Optionally**, connect to [oobo.ai](https://oobo.ai) for free cloud sync:
+
+```bash
+oobo auth login --key <your_key>
+```
 
 ---
 
@@ -48,10 +99,11 @@ Git:   commit = diff(files)
 Oobo:  anchor = commit + sessions + tokens + attribution
 ```
 
-Each anchor records which AI sessions contributed, token counts, code attribution (AI vs human lines), model used, and session duration. Anchors live in a local SQLite database and on a git orphan branch (`oobo/anchors/v1`) that travels with the repo. The orphan branch is always created on the first intercepted commit — metadata syncs automatically.
+Each anchor records which AI sessions contributed, token counts, code attribution (AI vs human lines), model used, and session duration. Anchors live in a local SQLite database and on a git orphan branch (`oobo/anchors/v1`) that travels with the repo.
 
-### Supported tools
+---
 
+## Supported Tools
 
 | Tool                | Sessions | Transcripts | Token Stats | Agent Hooks |
 | ------------------- | -------- | ----------- | ----------- | ----------- |
@@ -66,92 +118,64 @@ Each anchor records which AI sessions contributed, token counts, code attributio
 | Zed                 | ✓        | ✓           | ✓           | —           |
 | Trae                | ✓        | ✓           | partial     | —           |
 
-
 All tools are read-only — oobo never writes to AI tool data directories.
 
 ---
 
-## Installation
+## For AI Agents
 
-**Humans:**
+Oobo is built for agents. Agents commit code constantly, across tools, often in parallel. Without oobo, there is no record of which agent wrote what, how many tokens it took, or which conversation produced a given function.
 
-```bash
-curl -fsSL https://oobo.ai/install.sh | bash
-```
-
-**Agents** (silent install, JSON output):
+### Agent install
 
 ```bash
 curl -fsSL https://oobo.ai/install.sh | bash -s -- --agent
 # → {"status":"ok","version":"...","binary":"...","platform":"..."}
 ```
 
-Agents that read `~/.agents/skills/oobo/SKILL.md` will find the install command automatically in the frontmatter. The skill file is installed during `oobo setup`.
+The `--agent` flag suppresses colors and interactive prompts and returns a single JSON line.
 
-Or grab a binary from [Releases](https://github.com/ooboai/oobo/releases).
+### Output modes
 
-**Platforms:** macOS (Apple Silicon, Intel) · Linux (x86_64, ARM64, glibc, musl)
+Every command supports two structured output modes:
 
-### Build from source
+- **`--agent`** — compact, pipe-delimited text. Lists have a schema header (`# field | field | ...`) then one record per line. Designed for minimal token cost.
+- **`--json`** — full structured JSON for scripts and programmatic use.
 
 ```bash
-git clone https://github.com/ooboai/oobo.git && cd oobo
-cargo build --release
-# binary at target/release/oobo
+oobo sessions --agent          # compact session list
+oobo sessions --json           # full JSON with all fields
+oobo anchors --agent           # compact commit log
+oobo stats --json              # full analytics as JSON
 ```
+
+### Skill file
+
+Oobo installs a skill file at `~/.oobo/skills/oobo/SKILL.md` during `oobo setup`, with symlinks in `~/.agents/skills/oobo/`, `~/.claude/skills/oobo/`, `~/.codex/skills/oobo/`, `~/.cursor/skills/oobo/`, and `~/.gemini/skills/oobo/`. AI coding tools discover the skill automatically and know how to install and use oobo.
+
+### Agent lifecycle hooks
+
+For tools that support it (Cursor, Claude Code, Gemini CLI, OpenCode), oobo installs hooks that track agent activity in real time: session start/end, tool calls, subagent spawns, thinking events, and context compaction. This enables precise session linking and rich telemetry attached to every commit anchor.
 
 ---
 
-## Quick Start
-
-```bash
-# 1. Run the setup wizard (detects your tools, configures remote)
-oobo setup
-
-# 2. (Optional) Log in for cloud sync — free at oobo.ai
-oobo auth login --key <your_key>
-
-# 3. Use oobo wherever you'd use git — everything passes through
-oobo commit -m "fix auth middleware"
-oobo push origin main
-
-# 4. See what happened
-oobo anchors       # enriched commit history with AI context
-oobo sessions      # browse your AI chat sessions
-oobo stats         # token usage, attribution
-```
-
-**Optionally**, alias `git` itself so you don't have to think about it:
-
-```bash
-oobo alias install      # adds alias git=oobo to your shell rc
-```
+## Commands
 
 ### Browsing sessions
 
 ```bash
-oobo sessions                    # interactive TUI — navigate with arrows, Enter to view
+oobo sessions                    # interactive TUI — navigate with arrows
 oobo sessions --all              # sessions across all projects
 oobo sessions search "auth bug"  # search by keyword
-```
-
-The TUI shows source, model, tokens, duration, and title for each session. Select one to scroll through the full conversation.
-
-For scripting and automation, session IDs (UUIDs) are available in JSON output. You can use a short prefix to reference them:
-
-```bash
-oobo sessions list --agent             # get session IDs (compact)
-oobo sessions list --json              # full JSON with all fields
-oobo sessions list --tool claude -n 10 # filter by tool, limit results
-oobo sessions show abc12def            # view by ID prefix
-oobo sessions search "auth" --all      # search across all projects
+oobo sessions list --tool claude -n 10
+oobo sessions show abc12def      # view by ID prefix
 oobo sessions export abc12def --format md --out chat.md
 ```
 
 ### Enriched commit history
 
 ```bash
-oobo anchors                     # commit history with AI context, attribution
+oobo anchors                     # commit history with AI context
 oobo anchors -n 20               # show last 20 commits
 oobo a --agent                   # compact output (short alias)
 ```
@@ -170,7 +194,6 @@ oobo stats --since 30d           # time-filtered
 ```bash
 oobo projects                    # interactive TUI for all tracked projects
 oobo projects show myapp         # details + sessions for a project
-oobo projects forget myapp       # remove a project from tracking
 ```
 
 ### Developer card
@@ -178,125 +201,48 @@ oobo projects forget myapp       # remove a project from tracking
 ```bash
 oobo card                        # generate your developer stats card (PNG)
 oobo card --format svg           # SVG output
-oobo card --format md            # markdown output
 oobo card --out dev.png          # save to a custom path
-```![oobo card](.github/oobo-card.png)
+```
 
-Generates an overview of your AI tool usage — sessions, tokens, models, AI code percentage, commit profile — and saves it as a shareable file. No project names or private data included.
+<div align="center">
+<img src=".github/oobo-card.png" alt="oobo developer card" width="600" />
+</div>
 
 ### Sharing & exporting
 
 ```bash
-oobo share <session_id>                # share a redacted session (uploads to server)
-oobo share <session_id> --out chat.md  # save redacted session as markdown
-oobo sessions export <id> --format md  # export full session as markdown
-oobo sessions export <id> --format json --out chat.json
+oobo share <session_id>                # share a redacted session
+oobo share <session_id> --out chat.md  # save as markdown
+oobo sessions export <id> --format md  # export full session
 ```
 
 ### Sync & transparency
 
 ```bash
 oobo sync                        # show current sync status
-oobo sync on                     # enable backend sync (global)
+oobo sync on                     # enable backend sync
 oobo sync off                    # disable backend sync
-oobo sync --import               # import anchors from orphan branch into local DB
-oobo transparency                # show current per-repo transparency setting
 oobo transparency on             # sync redacted transcripts for this repo
 oobo transparency off            # keep transcripts local only
-oobo transparency reset          # clear per-repo override, use global default
 ```
 
 ### Auth
 
 ```bash
-oobo auth login                  # log in to api.oobo.ai (free) or self-hosted
+oobo auth login                  # log in to api.oobo.ai (free)
 oobo auth login --key <key>      # authenticate with an API key
-oobo auth status                 # show auth state + configured tool keys
-oobo auth logout                 # remove credentials
+oobo auth status                 # show auth state
 oobo auth set-remote <url>       # point to a self-hosted server
-oobo auth anthropic <key>        # set Anthropic Admin API key
-oobo auth openai <key>           # set OpenAI API key
-oobo auth copilot <token>        # set GitHub Copilot org PAT
-oobo auth google <key>           # set Google AI Studio key
-oobo auth windsurf <key>         # set Windsurf/Codeium service key
-```
-
-### Ignore & unignore
-
-```bash
-oobo ignore                      # stop tracking the current repo
-oobo ignore --list               # show all ignored repos
-oobo unignore                    # re-enable tracking for this repo
 ```
 
 ### Maintenance
 
 ```bash
-oobo scan                        # discover projects + sessions from all tools
+oobo scan                        # discover projects + sessions
 oobo index                       # compute token counts and analytics
-oobo index --force               # re-index already indexed sessions
-oobo index --bg                  # run indexing in background
 oobo inspect --fix               # diagnose and auto-repair issues
-oobo sources                     # data source status per tool
 oobo update                      # check for updates and self-update
-oobo update --check              # only check, don't install
 ```
-
----
-
-## For AI Agents
-
-Oobo is built for agents. Agents commit code constantly, across tools, often in parallel. Without oobo, there is no record of which agent wrote what, how many tokens it took, or which conversation produced a given function.
-
-### Output modes
-
-Every command supports two structured output modes:
-
-- **`--agent`** — compact, pipe-delimited text. Lists have a schema header (`# field | field | ...`) then one record per line. Single objects use `key: value` pairs. Designed for minimal token cost.
-- **`--json`** — full structured JSON output for scripts and programmatic use.
-
-```bash
-oobo sessions --agent                  # compact session list
-oobo sessions --json                   # full JSON with all fields
-oobo sessions show <id> --agent        # session summary (no messages)
-oobo sessions show <id> --json         # full conversation + messages as JSON
-oobo anchors --agent                   # compact commit log
-oobo anchors --json                    # full enriched history as JSON
-oobo stats --agent                     # compact stats
-oobo stats --json                      # full analytics as JSON
-```
-
-Both are global flags. They work with any command at any position.
-
-### Installing from an agent
-
-```bash
-curl -fsSL https://oobo.ai/install.sh | bash -s -- --agent
-# → {"status":"ok","version":"...","binary":"...","platform":"..."}
-```
-
-The `--agent` flag on the installer suppresses colors and interactive prompts and returns a single JSON line. This is what agents should use.
-
-### Skill file
-
-Oobo installs a skill file at `~/.oobo/skills/oobo/SKILL.md` during `oobo setup`, with symlinks in `~/.agents/skills/oobo/`, `~/.claude/skills/oobo/`, `~/.codex/skills/oobo/`, `~/.cursor/skills/oobo/`, and `~/.gemini/skills/oobo/`. AI coding tools scan these paths for skills. The skill file tells agents:
-
-- How to check if oobo is installed (`command -v oobo`)
-- How to install it (`curl -fsSL https://oobo.ai/install.sh | bash -s -- --agent`)
-- Every available command with JSON field descriptions
-- Recommended configuration for agent workflows
-
-To print the skill file:
-
-```bash
-oobo agent
-```
-
-### Agent lifecycle hooks
-
-For tools that support it (Cursor, Claude Code, Gemini CLI, OpenCode), oobo installs hooks that track agent activity in real time: session start/end, every tool call and failure, subagent spawns, thinking events, and context compaction. This enables precise session linking and rich telemetry — tool usage breakdowns, bash command history, and thinking duration — attached to every commit anchor.
-
-Session stats (tokens, model, duration) are computed proactively at session-end and commit time, so `oobo sessions` shows complete data immediately without requiring a manual `oobo scan`.
 
 ---
 
@@ -335,13 +281,13 @@ By default, oobo points at **`api.oobo.ai`** — our free hosted backend. Create
 oobo auth login --key <your_key>
 ```
 
-If you prefer to run your own server, point oobo at it:
+To run your own server:
 
 ```bash
 oobo auth set-remote https://oobo.mycompany.com
 ```
 
-Your backend implements endpoints under `/anchors`. Only **ingest** is required — the rest are optional:
+Your backend implements endpoints under `/anchors`. Only **ingest** is required:
 
 | Endpoint           | Method | Auth            | Required | Purpose                          |
 | ------------------ | ------ | --------------- | -------- | -------------------------------- |
@@ -350,33 +296,25 @@ Your backend implements endpoints under `/anchors`. Only **ingest** is required 
 | `/anchors/health`  | GET    | None            | No       | Health check (connectivity test) |
 | `/anchors/share`   | POST   | Bearer optional | No       | Accept shared sessions           |
 
-### Backend implementation
+See `src/remote/payload.rs` for the full anchor payload schema.
 
-**`POST /anchors/ingest`** (required) — receives anchor data on every commit. The request body is JSON with the full anchor payload (commit metadata, AI attribution, linked sessions, and optionally redacted transcripts). Respond `200`/`202` on success. Return `409` for duplicate anchors (same `commit_hash` + `git_remote`). The CLI treats `409` as success silently.
+---
 
-**`GET /anchors/verify`** (optional) — validates the API key in the `Authorization: Bearer <key>` header. Return `200` with a JSON body (optionally including `{"email": "..."}`) on success, or `401` on failure. Called during `oobo auth login`.
+## Build from Source
 
-**`GET /anchors/health`** (optional) — no auth required. Return any `2xx` response. Called by `oobo dash` to check connectivity.
-
-**`POST /anchors/share`** (optional) — accepts a redacted session for sharing. Bearer token is optional — if present, the share is associated with the user's account; if absent, the share is anonymous. Return `200`/`201` with a `{"url": "..."}` body so the CLI can print the share link.
-
-All authenticated requests include:
-
+```bash
+git clone https://github.com/ooboai/oobo.git && cd oobo
+cargo build --release
+# binary at target/release/oobo
 ```
-Authorization: Bearer <api_key>
-User-Agent: oobo/<version>
-Content-Type: application/json
-```
-
-See the [anchor payload reference](#the-anchor) and `src/remote/payload.rs` for the full schema.
 
 ---
 
 ## Privacy
 
 - **Read-only** — never writes to AI tool directories
-- **Local by default** — everything stays in `~/.oobo/`. Nothing leaves your machine unless you configure a remote server
-- **Secret redaction** — sessions are scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before any sharing
+- **Local by default** — everything stays in `~/.oobo/`. Nothing leaves your machine unless you configure a remote
+- **Secret redaction** — sessions are scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before sharing
 - **No telemetry** — oobo does not phone home
 - **Config protection** — API keys in config get `chmod 0600`
 
@@ -386,7 +324,7 @@ See [SECURITY.md](SECURITY.md) for the full policy.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, project structure, and guidelines.
+Oobo is open source under [Apache 2.0](LICENSE-APACHE) and [MIT](LICENSE-MIT) (dual licensed, at your option). See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, project structure, and guidelines.
 
 ---
 
