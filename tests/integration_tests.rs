@@ -778,6 +778,7 @@ fn test_event_payload_roundtrip() {
         intent: None,
         reasoning: None,
         transparency_mode: TransparencyMode::On,
+        file_interactions: None,
     };
 
     let sessions = vec![SessionLink {
@@ -802,6 +803,7 @@ fn test_event_payload_roundtrip() {
         parent_session_id: None,
         subagent_type: None,
         is_estimated: false,
+        peer_session_ids: Vec::new(),
     }];
 
     let payload = EventPayload {

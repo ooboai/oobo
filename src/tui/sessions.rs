@@ -20,6 +20,8 @@ struct SessionRow {
     stats: Option<StatsRow>,
     /// Display depth: 0 = top-level, 1 = subagent.
     depth: u8,
+    /// Interaction hint shown after the last session in an interacting group.
+    interaction_hint: Option<String>,
 }
 
 enum View {
@@ -47,11 +49,13 @@ pub fn run_list(sessions: Vec<Session>, show_all: bool) -> Result<(), String> {
                 msg_count,
                 stats,
                 depth,
+                interaction_hint: None,
             }
         })
         .collect();
 
     arrange_parent_child(&mut rows);
+    annotate_interactions(&mut rows, &stats_map);
 
     if rows.is_empty() {
         eprintln!("No sessions found.");
@@ -431,6 +435,96 @@ fn arrange_parent_child(rows: &mut Vec<SessionRow>) {
     }
 }
 
+/// Detect file interactions among top-level sessions in the same project and
+/// annotate the last session in each interacting group with a hint.
+/// Falls back to `files_touched` from the stats DB when ephemeral state files
+/// are absent (i.e. completed sessions).
+fn annotate_interactions(
+    rows: &mut [SessionRow],
+    stats_map: &HashMap<(String, String), StatsRow>,
+) {
+    use std::collections::HashSet;
+
+    let mut by_project: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+    for (i, r) in rows.iter().enumerate() {
+        if r.depth == 0 && !r.session.project_path.is_empty() {
+            by_project
+                .entry(r.session.project_path.clone())
+                .or_default()
+                .push(i);
+        }
+    }
+
+    let mut hints: Vec<(usize, String)> = Vec::new();
+
+    for (project_path, indices) in &by_project {
+        if indices.len() < 2 {
+            continue;
+        }
+
+        let inputs: Vec<crate::core::anchor::SessionFiles> = indices
+            .iter()
+            .map(|&idx| {
+                let sid = &rows[idx].session.session_id;
+                let (edited, read) = crate::hooks::state::get_file_sets(project_path, sid);
+
+                if edited.is_empty() && read.is_empty() {
+                    let key = (sid.to_string(), rows[idx].session.source.clone());
+                    if let Some(st) = stats_map.get(&key) {
+                        return crate::core::anchor::SessionFiles {
+                            session_id: sid.clone(),
+                            edited: st.files_touched.clone(),
+                            read: Vec::new(),
+                        };
+                    }
+                }
+
+                crate::core::anchor::SessionFiles {
+                    session_id: sid.clone(),
+                    edited,
+                    read,
+                }
+            })
+            .collect();
+
+        let (interactions, _) = crate::core::anchor::detect_interactions(&inputs);
+        if interactions.is_empty() {
+            continue;
+        }
+
+        let mut participating: HashSet<usize> = HashSet::new();
+        let mut shared_files: Vec<String> = interactions.iter().map(|fi| fi.path.clone()).collect();
+        shared_files.sort();
+
+        for fi in &interactions {
+            for role in &fi.sessions {
+                if let Some(&idx) = indices.iter().find(|&&i| rows[i].session.session_id == role.session_id) {
+                    participating.insert(idx);
+                }
+            }
+        }
+
+        let count = participating.len();
+        let file_list = if shared_files.len() <= 2 {
+            shared_files.join(", ")
+        } else {
+            format!("{}, {} (+{} more)", shared_files[0], shared_files[1], shared_files.len() - 2)
+        };
+
+        if let Some(&last_idx) = indices
+            .iter()
+            .rev()
+            .find(|i| participating.contains(i))
+        {
+            hints.push((last_idx, format!("↳ {count} sessions interacted via {file_list}")));
+        }
+    }
+
+    for (idx, hint) in hints {
+        rows[idx].interaction_hint = Some(hint);
+    }
+}
+
 fn render_list(
     f: &mut Frame,
     rows: &[&SessionRow],
@@ -576,6 +670,17 @@ fn render_list(
                 Style::default()
             };
 
+            let name_cell = if let Some(ref hint) = r.interaction_hint {
+                Cell::from(ratatui::text::Text::from(vec![
+                    Line::from(name),
+                    Line::from(Span::styled(hint.clone(), Style::default().fg(Color::Magenta))),
+                ]))
+            } else {
+                Cell::from(name)
+            };
+
+            let row_height = if r.interaction_hint.is_some() { 2 } else { 1 };
+
             Row::new(vec![
                 Cell::from(short_id).style(Style::default().fg(Color::DarkGray)),
                 Cell::from(src),
@@ -583,9 +688,10 @@ fn render_list(
                 Cell::from(model),
                 Cell::from(tokens).style(token_style),
                 Cell::from(dur),
-                Cell::from(name),
+                name_cell,
             ])
             .style(row_style)
+            .height(row_height)
         })
         .collect();
 

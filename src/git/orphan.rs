@@ -65,9 +65,77 @@ pub(super) fn write_anchor(
         }
     }
 
+    // Generate timeline.json when file interactions exist.
+    if let Some(ref interactions) = anchor.file_interactions {
+        if !interactions.is_empty() {
+            if let Ok(timeline_json) = build_timeline_json(anchor, session_links, interactions) {
+                entries.push((format!("{base_path}/timeline.json"), timeline_json));
+            }
+        }
+    }
+
     write_to_branch(project_root, &entries)?;
 
     Ok(())
+}
+
+/// Build a timeline JSON blob for multi-agent file interactions.
+///
+/// TODO: Add an `events` array with per-file timestamped read/write events
+/// to enable causality analysis (e.g. "Agent-2 read calculator.py 49s after
+/// Agent-1 wrote it"). Requires recording per-file timestamps in
+/// `edited_files`/`read_files` state, which is not yet available.
+fn build_timeline_json(
+    anchor: &Anchor,
+    session_links: &[SessionLink],
+    interactions: &[crate::core::anchor::FileInteraction],
+) -> Result<String, String> {
+    let longest_session_ms: Option<u64> = {
+        let durations: Vec<u64> = session_links
+            .iter()
+            .filter_map(|l| l.duration_secs)
+            .collect();
+        if durations.is_empty() {
+            None
+        } else {
+            Some(durations.iter().max().copied().unwrap_or(0) * 1000)
+        }
+    };
+
+    let interactions_json: Vec<serde_json::Value> = interactions
+        .iter()
+        .map(|fi| {
+            let sessions: Vec<serde_json::Value> = fi
+                .sessions
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "session_id": r.session_id,
+                        "role": match r.role {
+                            crate::core::anchor::FileRole::Writer => "writer",
+                            crate::core::anchor::FileRole::Reader => "reader",
+                            crate::core::anchor::FileRole::Both => "both",
+                        },
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "path": fi.path,
+                "sessions": sessions,
+            })
+        })
+        .collect();
+
+    let mut timeline = serde_json::json!({
+        "session_count": anchor.session_ids.len(),
+        "file_interactions": interactions_json,
+    });
+
+    if let Some(dur) = longest_session_ms {
+        timeline["longest_session_ms"] = serde_json::json!(dur);
+    }
+
+    serde_json::to_string_pretty(&timeline).map_err(|e| format!("serialize timeline: {e}"))
 }
 
 /// Replace absolute paths containing the project root with repo-relative paths.
@@ -764,6 +832,7 @@ mod tests {
             intent: None,
             reasoning: None,
             transparency_mode: TransparencyMode::Off,
+            file_interactions: None,
         }
     }
 
@@ -810,6 +879,7 @@ mod tests {
             parent_session_id: None,
             subagent_type: None,
             is_estimated: false,
+            peer_session_ids: Vec::new(),
         };
 
         let result = write_anchor(repo, &anchor, &[session_link], &[]);
@@ -1074,5 +1144,81 @@ mod tests {
         let result = build_commit_on(&repo, &parent, &[("".into(), "data".into())], "should fail");
         assert!(result.is_err(), "empty path should fail in update-index");
         assert_no_leftover("after mid-pipeline error");
+    }
+
+    #[test]
+    fn test_build_timeline_json() {
+        use crate::core::anchor::{FileInteraction, FileRole, FileSessionRole};
+
+        let mut anchor = make_test_anchor("abc123");
+        anchor.session_ids = vec!["s1".into(), "s2".into()];
+        let interactions = vec![FileInteraction {
+            path: "src/main.rs".into(),
+            sessions: vec![
+                FileSessionRole { session_id: "s1".into(), role: FileRole::Writer },
+                FileSessionRole { session_id: "s2".into(), role: FileRole::Reader },
+            ],
+        }];
+        anchor.file_interactions = Some(interactions.clone());
+
+        let links = vec![
+            SessionLink {
+                session_id: "s1".into(),
+                agent: "cursor".into(),
+                model: None,
+                link_type: LinkType::Explicit,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+                duration_secs: Some(120),
+                tool_calls: None,
+                files_touched: None,
+                tool_usage: None,
+                tool_failures: None,
+                subagent_count: None,
+                bash_commands: None,
+                thinking_duration_ms: None,
+                compact_count: None,
+                is_subagent: false,
+                parent_session_id: None,
+                subagent_type: None,
+                is_estimated: false,
+                peer_session_ids: vec!["s2".into()],
+            },
+            SessionLink {
+                session_id: "s2".into(),
+                agent: "claude".into(),
+                model: None,
+                link_type: LinkType::Inferred,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+                duration_secs: Some(60),
+                tool_calls: None,
+                files_touched: None,
+                tool_usage: None,
+                tool_failures: None,
+                subagent_count: None,
+                bash_commands: None,
+                thinking_duration_ms: None,
+                compact_count: None,
+                is_subagent: false,
+                parent_session_id: None,
+                subagent_type: None,
+                is_estimated: false,
+                peer_session_ids: vec!["s1".into()],
+            },
+        ];
+
+        let json_str = build_timeline_json(&anchor, &links, &interactions).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        assert_eq!(val["session_count"], 2);
+        assert_eq!(val["longest_session_ms"], 120_000);
+        assert_eq!(val["file_interactions"].as_array().unwrap().len(), 1);
+        assert_eq!(val["file_interactions"][0]["path"], "src/main.rs");
+        assert_eq!(val["file_interactions"][0]["sessions"].as_array().unwrap().len(), 2);
     }
 }

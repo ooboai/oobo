@@ -85,6 +85,8 @@ fn list_json(
     // Index sessions without stats inline so the output is complete.
     index_missing_sessions(&sessions, &mut stats_map);
 
+    let peer_map = compute_peer_map(&sessions, &stats_map);
+
     let items: Vec<serde_json::Value> = sessions
         .iter()
         .map(|s| {
@@ -115,6 +117,12 @@ fn list_json(
                 obj["is_estimated"] = serde_json::json!(st.is_estimated);
                 obj["files_touched"] = serde_json::json!(st.files_touched);
                 obj["tool_calls"] = serde_json::json!(st.tool_call_count);
+            }
+
+            if let Some(peers) = peer_map.get(&s.session_id) {
+                if !peers.is_empty() {
+                    obj["peer_session_ids"] = serde_json::json!(peers);
+                }
             }
 
             obj
@@ -182,6 +190,7 @@ fn search(query: &str, cfg: &Config, all: bool, agent: bool, limit: usize) -> Re
     matches.truncate(limit);
 
     if agent {
+        let peer_map = compute_peer_map(&sessions, &stats_map);
         let items: Vec<serde_json::Value> = matches
             .iter()
             .map(|(s, st, matched_on)| {
@@ -205,6 +214,11 @@ fn search(query: &str, cfg: &Config, all: bool, agent: bool, limit: usize) -> Re
                 }
                 if let Some(ref stype) = s.subagent_type {
                     obj["subagent_type"] = serde_json::json!(stype);
+                }
+                if let Some(peers) = peer_map.get(&s.session_id) {
+                    if !peers.is_empty() {
+                        obj["peer_session_ids"] = serde_json::json!(peers);
+                    }
                 }
                 obj
             })
@@ -278,7 +292,7 @@ fn show_json(id: &str) -> Result<(), String> {
         obj["subagent_type"] = serde_json::json!(stype);
     }
 
-    if let Some(st) = stats {
+    if let Some(ref st) = stats {
         obj["model"] = serde_json::json!(st.model);
         obj["input_tokens"] = serde_json::json!(st.input_tokens);
         obj["output_tokens"] = serde_json::json!(st.output_tokens);
@@ -286,6 +300,26 @@ fn show_json(id: &str) -> Result<(), String> {
         obj["is_estimated"] = serde_json::json!(st.is_estimated);
         obj["files_touched"] = serde_json::json!(st.files_touched);
         obj["tool_calls"] = serde_json::json!(st.tool_call_count);
+    }
+
+    if !s.project_path.is_empty() && !s.is_subagent() {
+        let cfg = crate::config::Config::load_or_default();
+        let project_sessions = session::all_for_project(&s.project_path, &cfg);
+        let keys: Vec<(String, String)> = project_sessions
+            .iter()
+            .map(|ps| (ps.session_id.clone(), ps.source.clone()))
+            .collect();
+        let mut stats_map = db
+            .as_ref()
+            .and_then(|d| d.get_stats_bulk(&keys).ok())
+            .unwrap_or_default();
+        index_missing_sessions(&project_sessions, &mut stats_map);
+        let peer_map = compute_peer_map(&project_sessions, &stats_map);
+        if let Some(peers) = peer_map.get(&s.session_id) {
+            if !peers.is_empty() {
+                obj["peer_session_ids"] = serde_json::json!(peers);
+            }
+        }
     }
 
     crate::utils::print_json(&obj);
@@ -381,6 +415,63 @@ fn export(id: &str, format: &str, out: Option<&str>) -> Result<(), String> {
 /// Index sessions that have no stats yet (blocking).
 /// Capped at 20 to avoid blocking JSON/agent output for too long.
 const INLINE_INDEX_CAP: usize = 20;
+
+/// Compute peer_session_ids for each session by comparing file interactions.
+/// Tries ephemeral session state files first (active sessions), then falls
+/// back to `files_touched` from the stats DB (historical sessions).
+fn compute_peer_map(
+    sessions: &[crate::tools::cursor::Session],
+    stats_map: &std::collections::HashMap<(String, String), crate::db::stats::StatsRow>,
+) -> std::collections::HashMap<String, Vec<String>> {
+    use std::collections::HashMap;
+
+    if sessions.len() < 2 {
+        return HashMap::new();
+    }
+
+    let mut by_project: HashMap<&str, Vec<&crate::tools::cursor::Session>> = HashMap::new();
+    for s in sessions {
+        if !s.project_path.is_empty() && !s.is_subagent() {
+            by_project.entry(&s.project_path).or_default().push(s);
+        }
+    }
+
+    let mut all_peers: HashMap<String, Vec<String>> = HashMap::new();
+
+    for (_proj, group) in &by_project {
+        if group.len() < 2 {
+            continue;
+        }
+
+        let inputs: Vec<crate::core::anchor::SessionFiles> = group
+            .iter()
+            .map(|s| {
+                let (edited, read) = crate::hooks::state::get_file_sets(&s.project_path, &s.session_id);
+
+                if edited.is_empty() && read.is_empty() {
+                    if let Some(st) = stats_map.get(&(s.session_id.clone(), s.source.clone())) {
+                        return crate::core::anchor::SessionFiles {
+                            session_id: s.session_id.clone(),
+                            edited: st.files_touched.clone(),
+                            read: Vec::new(),
+                        };
+                    }
+                }
+
+                crate::core::anchor::SessionFiles {
+                    session_id: s.session_id.clone(),
+                    edited,
+                    read,
+                }
+            })
+            .collect();
+
+        let (_, peer_map) = crate::core::anchor::detect_interactions(&inputs);
+        all_peers.extend(peer_map);
+    }
+
+    all_peers
+}
 
 fn index_missing_sessions(
     sessions: &[crate::tools::cursor::Session],

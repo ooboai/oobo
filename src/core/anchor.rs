@@ -133,6 +133,132 @@ pub struct Anchor {
     pub reasoning: Option<String>,
 
     pub transparency_mode: TransparencyMode,
+
+    /// Cross-session file interactions detected at commit time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_interactions: Option<Vec<FileInteraction>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileInteraction {
+    pub path: String,
+    pub sessions: Vec<FileSessionRole>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileSessionRole {
+    pub session_id: String,
+    pub role: FileRole,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileRole {
+    Writer,
+    Reader,
+    Both,
+}
+
+/// Input for the shared file-interaction detection algorithm.
+/// Each entry represents one session's file access.
+#[derive(Debug, Clone)]
+pub struct SessionFiles {
+    pub session_id: String,
+    pub edited: Vec<String>,
+    pub read: Vec<String>,
+}
+
+/// Shared algorithm: given a list of sessions with their edited/read files,
+/// detect files touched by 2+ sessions and return `FileInteraction` entries
+/// with per-session roles. Also returns a peer map (session_id -> peer IDs).
+pub fn detect_interactions(
+    sessions: &[SessionFiles],
+) -> (Vec<FileInteraction>, std::collections::HashMap<String, Vec<String>>) {
+    use std::collections::{HashMap, HashSet};
+
+    let mut interactions = Vec::new();
+    let mut peers: HashMap<String, HashSet<String>> = HashMap::new();
+
+    if sessions.len() < 2 {
+        let peer_map = peers.into_iter().map(|(k, v)| {
+            let mut sorted: Vec<String> = v.into_iter().collect();
+            sorted.sort();
+            (k, sorted)
+        }).collect();
+        return (interactions, peer_map);
+    }
+
+    let mut file_map: HashMap<&str, Vec<(&str, bool, bool)>> = HashMap::new();
+
+    for s in sessions {
+        let edited_set: HashSet<&str> = s.edited.iter().map(|f| f.as_str()).collect();
+        let read_set: HashSet<&str> = s.read.iter().map(|f| f.as_str()).collect();
+
+        for f in &s.edited {
+            let is_read = read_set.contains(f.as_str());
+            file_map
+                .entry(f.as_str())
+                .or_default()
+                .push((&s.session_id, true, is_read));
+        }
+        for f in &s.read {
+            if !edited_set.contains(f.as_str()) {
+                file_map
+                    .entry(f.as_str())
+                    .or_default()
+                    .push((&s.session_id, false, true));
+            }
+        }
+    }
+
+    let mut sorted_paths: Vec<&&str> = file_map.keys().collect();
+    sorted_paths.sort();
+
+    for path in sorted_paths {
+        let entries = &file_map[*path];
+        if entries.len() < 2 {
+            continue;
+        }
+
+        let roles: Vec<FileSessionRole> = entries
+            .iter()
+            .map(|(sid, is_writer, is_reader)| {
+                let role = match (*is_writer, *is_reader) {
+                    (true, true) => FileRole::Both,
+                    (true, false) => FileRole::Writer,
+                    _ => FileRole::Reader,
+                };
+                FileSessionRole {
+                    session_id: sid.to_string(),
+                    role,
+                }
+            })
+            .collect();
+
+        let sids: Vec<&str> = entries.iter().map(|(sid, _, _)| *sid).collect();
+        for (i, a) in sids.iter().enumerate() {
+            for b in &sids[i + 1..] {
+                peers.entry(a.to_string()).or_default().insert(b.to_string());
+                peers.entry(b.to_string()).or_default().insert(a.to_string());
+            }
+        }
+
+        interactions.push(FileInteraction {
+            path: path.to_string(),
+            sessions: roles,
+        });
+    }
+
+    let peer_map = peers
+        .into_iter()
+        .map(|(k, v)| {
+            let mut sorted: Vec<String> = v.into_iter().collect();
+            sorted.sort();
+            (k, sorted)
+        })
+        .collect();
+
+    (interactions, peer_map)
 }
 
 /// Per-session metadata attached to an anchor.
@@ -189,6 +315,9 @@ pub struct SessionLink {
     pub subagent_type: Option<String>,
     #[serde(default)]
     pub is_estimated: bool,
+    /// IDs of other sessions this session interacted with via shared files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peer_session_ids: Vec<String>,
 }
 
 impl Anchor {
@@ -243,6 +372,7 @@ mod tests {
             intent: None,
             reasoning: None,
             transparency_mode: TransparencyMode::Off,
+            file_interactions: None,
         };
         let json = serde_json::to_string(&anchor).unwrap();
         let restored: Anchor = serde_json::from_str(&json).unwrap();
@@ -336,6 +466,7 @@ mod tests {
             parent_session_id: None,
             subagent_type: None,
             is_estimated: false,
+            peer_session_ids: Vec::new(),
         };
         let json = serde_json::to_string(&link).unwrap();
         assert!(!json.contains("input_tokens"));
@@ -419,5 +550,85 @@ mod tests {
     #[test]
     fn test_author_type_default_is_human() {
         assert_eq!(AuthorType::default(), AuthorType::Human);
+    }
+
+    #[test]
+    fn test_file_interactions_roundtrip() {
+        let interactions = vec![FileInteraction {
+            path: "src/main.rs".into(),
+            sessions: vec![
+                FileSessionRole { session_id: "s1".into(), role: FileRole::Writer },
+                FileSessionRole { session_id: "s2".into(), role: FileRole::Reader },
+            ],
+        }];
+        let anchor = Anchor {
+            oobo_version: "0.1.0".into(),
+            commit_hash: "abc".into(),
+            branch: "main".into(),
+            author: "test".into(),
+            author_type: AuthorType::Assisted,
+            contributors: vec![],
+            committed_at: 0,
+            message: "test".into(),
+            files_changed: vec![],
+            added: 0,
+            deleted: 0,
+            file_changes: vec![],
+            ai_added: 0,
+            ai_deleted: 0,
+            human_added: 0,
+            human_deleted: 0,
+            ai_percentage: None,
+            session_ids: vec!["s1".into(), "s2".into()],
+            summary: None,
+            intent: None,
+            reasoning: None,
+            transparency_mode: TransparencyMode::Off,
+            file_interactions: Some(interactions.clone()),
+        };
+        let json = serde_json::to_string(&anchor).unwrap();
+        let restored: Anchor = serde_json::from_str(&json).unwrap();
+        assert_eq!(anchor.file_interactions, restored.file_interactions);
+    }
+
+    #[test]
+    fn test_detect_interactions_shared() {
+        let inputs = vec![
+            SessionFiles { session_id: "s1".into(), edited: vec!["a.rs".into()], read: vec![] },
+            SessionFiles { session_id: "s2".into(), edited: vec![], read: vec!["a.rs".into()] },
+            SessionFiles { session_id: "s3".into(), edited: vec!["b.rs".into()], read: vec![] },
+        ];
+        let (interactions, peers) = detect_interactions(&inputs);
+        assert_eq!(interactions.len(), 1);
+        assert_eq!(interactions[0].path, "a.rs");
+        assert_eq!(interactions[0].sessions.len(), 2);
+        assert!(interactions[0].sessions.iter().any(|r| r.session_id == "s1" && r.role == FileRole::Writer));
+        assert!(interactions[0].sessions.iter().any(|r| r.session_id == "s2" && r.role == FileRole::Reader));
+        assert_eq!(peers.get("s1").unwrap(), &vec!["s2".to_string()]);
+        assert_eq!(peers.get("s2").unwrap(), &vec!["s1".to_string()]);
+        assert!(peers.get("s3").is_none());
+    }
+
+    #[test]
+    fn test_detect_interactions_no_overlap() {
+        let inputs = vec![
+            SessionFiles { session_id: "s1".into(), edited: vec!["a.rs".into()], read: vec![] },
+            SessionFiles { session_id: "s2".into(), edited: vec!["b.rs".into()], read: vec![] },
+        ];
+        let (interactions, peers) = detect_interactions(&inputs);
+        assert!(interactions.is_empty());
+        assert!(peers.is_empty());
+    }
+
+    #[test]
+    fn test_detect_interactions_both_role() {
+        let inputs = vec![
+            SessionFiles { session_id: "s1".into(), edited: vec!["a.rs".into()], read: vec!["a.rs".into()] },
+            SessionFiles { session_id: "s2".into(), edited: vec![], read: vec!["a.rs".into()] },
+        ];
+        let (interactions, _) = detect_interactions(&inputs);
+        assert_eq!(interactions.len(), 1);
+        assert!(interactions[0].sessions.iter().any(|r| r.session_id == "s1" && r.role == FileRole::Both));
+        assert!(interactions[0].sessions.iter().any(|r| r.session_id == "s2" && r.role == FileRole::Reader));
     }
 }

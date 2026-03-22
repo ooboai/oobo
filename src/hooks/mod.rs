@@ -151,7 +151,42 @@ pub fn handle_event(
 
                         if let Some(abs_path) = file_path {
                             let rel = make_relative(abs_path, &project_root);
-                            let _ = state::record_edited_file(&project_root, sid, &rel);
+                            if !rel.starts_with('/') && !rel.starts_with("..") {
+                                let _ = state::record_edited_file(&project_root, sid, &rel);
+                            }
+                        }
+                    }
+
+                    // Track read files for file-reading tools.
+                    if is_read_tool(tool_name) {
+                        let file_path = event
+                            .extra
+                            .get("file_path")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| {
+                                tool_input
+                                    .and_then(|ti| ti.get("file_path"))
+                                    .and_then(|v| v.as_str())
+                            })
+                            .or_else(|| {
+                                // For dir-scoped tools (Grep, Search, Glob, etc.)
+                                // only fall back to `path` if it looks like a file.
+                                if is_dir_scoped_tool(tool_name) {
+                                    None
+                                } else {
+                                    tool_input
+                                        .and_then(|ti| ti.get("path"))
+                                        .and_then(|v| v.as_str())
+                                }
+                            });
+
+                        if let Some(abs_path) = file_path {
+                            if !abs_path.ends_with('/') && abs_path != "." {
+                                let rel = make_relative(abs_path, &project_root);
+                                if !rel.starts_with('/') && !rel.starts_with("..") {
+                                    let _ = state::record_read_file(&project_root, sid, &rel);
+                                }
+                            }
                         }
                     }
                 }
@@ -341,6 +376,23 @@ fn is_cursor_agent(agent: &str) -> bool {
     crate::core::tool::is_cursor_agent(agent)
 }
 
+fn is_read_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "Read" | "ReadFile" | "View" | "read_file" | "read"
+            | "Grep" | "grep" | "Search" | "search" | "SemanticSearch"
+            | "Glob" | "glob" | "ListFiles" | "list_files"
+    )
+}
+
+fn is_dir_scoped_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "Grep" | "grep" | "Search" | "search" | "SemanticSearch"
+            | "Glob" | "glob" | "ListFiles" | "list_files"
+    )
+}
+
 /// Strip the project root prefix to get a relative path, matching how git
 /// and the rest of the attribution pipeline represent file paths.
 /// Canonicalizes both sides to handle symlinks and macOS `/var` vs `/private/var`.
@@ -429,5 +481,42 @@ mod tests {
     fn test_make_relative_outside_project() {
         let result = make_relative("/tmp/other/file.rs", "/home/user/project");
         assert_eq!(result, "/tmp/other/file.rs");
+    }
+
+    #[test]
+    fn test_is_read_tool_positives() {
+        for tool in [
+            "Read", "ReadFile", "View", "read_file", "read",
+            "Grep", "grep", "Search", "search", "SemanticSearch",
+            "Glob", "glob", "ListFiles", "list_files",
+        ] {
+            assert!(is_read_tool(tool), "{tool} should be a read tool");
+        }
+    }
+
+    #[test]
+    fn test_is_read_tool_negatives() {
+        for tool in ["Write", "Edit", "Bash", "Shell", "Delete", "cat", ""] {
+            assert!(!is_read_tool(tool), "{tool} should NOT be a read tool");
+        }
+    }
+
+    #[test]
+    fn test_is_dir_scoped_tool() {
+        assert!(is_dir_scoped_tool("Grep"));
+        assert!(is_dir_scoped_tool("Search"));
+        assert!(is_dir_scoped_tool("Glob"));
+        assert!(!is_dir_scoped_tool("Read"));
+        assert!(!is_dir_scoped_tool("View"));
+    }
+
+    #[test]
+    fn test_dir_scoped_is_subset_of_read_tool() {
+        for tool in ["Grep", "grep", "Search", "search", "SemanticSearch",
+                      "Glob", "glob", "ListFiles", "list_files"] {
+            assert!(is_read_tool(tool),
+                "{tool} is in is_dir_scoped_tool but not is_read_tool — \
+                 the dir-scoped check will never fire");
+        }
     }
 }

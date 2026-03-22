@@ -193,6 +193,7 @@ mod tests {
             intent: None,
             reasoning: None,
             transparency_mode: TransparencyMode::On,
+            file_interactions: None,
         };
 
         let session_links = vec![SessionLink {
@@ -217,6 +218,7 @@ mod tests {
             parent_session_id: None,
             subagent_type: None,
             is_estimated: false,
+            peer_session_ids: Vec::new(),
         }];
 
         let payload = EventPayload {

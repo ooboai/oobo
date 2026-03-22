@@ -55,6 +55,9 @@ pub struct ActiveSession {
     /// Files edited by the agent, accumulated from PostToolUse hooks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edited_files: Option<std::collections::HashSet<String>>,
+    /// Files read by the agent, accumulated from PostToolUse hooks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_files: Option<std::collections::HashSet<String>>,
     /// Tool usage counts by tool name (e.g. {"Bash": 12, "Edit": 8, "Read": 15}).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_usage: Option<std::collections::HashMap<String, u32>>,
@@ -147,6 +150,7 @@ pub fn write_session(
         pre_agent_snapshots: None,
         file_snapshots: None,
         edited_files: None,
+        read_files: None,
         tool_usage: None,
         tool_failures: None,
         bash_commands: None,
@@ -253,6 +257,29 @@ pub fn record_edited_file(project_root: &str, session_id: &str, file_path: &str)
     let mut files = state.edited_files.unwrap_or_default();
     files.insert(file_path.to_string());
     state.edited_files = Some(files);
+    state.updated_at = chrono::Utc::now().timestamp();
+
+    let json = serde_json::to_string_pretty(&state)?;
+    atomic_write_json(&path, &json)?;
+
+    Ok(())
+}
+
+/// Record a file read by the agent during this session.
+/// Called from `after-tool-use` hook events for file-reading tools (Read,
+/// ReadFile, View, Grep, Search, etc.).
+pub fn record_read_file(project_root: &str, session_id: &str, file_path: &str) -> Result<()> {
+    let path = session_path(project_root, session_id);
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&path)?;
+    let mut state: ActiveSession = serde_json::from_str(&content)?;
+
+    let mut files = state.read_files.unwrap_or_default();
+    files.insert(file_path.to_string());
+    state.read_files = Some(files);
     state.updated_at = chrono::Utc::now().timestamp();
 
     let json = serde_json::to_string_pretty(&state)?;
@@ -440,6 +467,23 @@ pub fn get_edited_files(project_root: &str, session_id: &str) -> Vec<String> {
         .edited_files
         .map(|s| s.into_iter().collect())
         .unwrap_or_default()
+}
+
+/// Read both edited_files and read_files from a session's state in a single file read.
+pub fn get_file_sets(project_root: &str, session_id: &str) -> (Vec<String>, Vec<String>) {
+    let state = match read_session(project_root, session_id) {
+        Some(s) => s,
+        None => return (Vec::new(), Vec::new()),
+    };
+    let edited = state
+        .edited_files
+        .map(|s| s.into_iter().collect())
+        .unwrap_or_default();
+    let read = state
+        .read_files
+        .map(|s| s.into_iter().collect())
+        .unwrap_or_default();
+    (edited, read)
 }
 
 /// Read and deserialize the active session state file, if it exists.
@@ -752,6 +796,7 @@ mod tests {
             pre_agent_snapshots: None,
             file_snapshots: None,
             edited_files: None,
+            read_files: None,
             tool_usage: None,
             tool_failures: None,
             bash_commands: None,
@@ -770,6 +815,7 @@ mod tests {
             pre_agent_snapshots: None,
             file_snapshots: None,
             edited_files: None,
+            read_files: None,
             tool_usage: None,
             tool_failures: None,
             bash_commands: None,
@@ -788,6 +834,7 @@ mod tests {
             pre_agent_snapshots: None,
             file_snapshots: None,
             edited_files: None,
+            read_files: None,
             tool_usage: None,
             tool_failures: None,
             bash_commands: None,
@@ -853,6 +900,28 @@ mod tests {
         record_edited_file(root_str, "edit-sess", "src/main.rs").unwrap(); // duplicate
 
         let files = get_edited_files(root_str, "edit-sess");
+        assert_eq!(files.len(), 2);
+        assert!(files.contains(&"src/main.rs".to_string()));
+        assert!(files.contains(&"src/lib.rs".to_string()));
+    }
+
+    #[test]
+    fn test_record_and_get_read_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        write_session(root_str, "read-sess", "claude", None).unwrap();
+
+        let (_, reads) = get_file_sets(root_str, "read-sess");
+        assert!(reads.is_empty());
+
+        record_read_file(root_str, "read-sess", "src/main.rs").unwrap();
+        record_read_file(root_str, "read-sess", "src/lib.rs").unwrap();
+        record_read_file(root_str, "read-sess", "src/main.rs").unwrap(); // duplicate
+
+        let (_, files) = get_file_sets(root_str, "read-sess");
         assert_eq!(files.len(), 2);
         assert!(files.contains(&"src/main.rs".to_string()));
         assert!(files.contains(&"src/lib.rs".to_string()));

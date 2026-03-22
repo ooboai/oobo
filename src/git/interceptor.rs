@@ -204,7 +204,7 @@ fn enrich_commit(
         .collect();
     let bubble_data = crate::tools::cursor::composer_data::preload_bubble_data_for(&cursor_ids);
 
-    let session_links: Vec<SessionLink> = active_sessions
+    let mut session_links: Vec<SessionLink> = active_sessions
         .iter()
         .map(|s| {
             let touched: Vec<String> = ai_files_touched
@@ -263,9 +263,29 @@ fn enrich_commit(
                 parent_session_id: None,
                 subagent_type: None,
                 is_estimated: false,
+                peer_session_ids: Vec::new(),
             }
         })
         .collect();
+
+    // Filter out subagent sessions before detecting file interactions —
+    // a parent and its subagent touching the same files is expected, not novel.
+    let subagent_ids: std::collections::HashSet<String> = active_sessions
+        .iter()
+        .filter_map(|s| s.subagent_runs.as_ref())
+        .flat_map(|runs| runs.iter().map(|r| r.agent_id.clone()))
+        .collect();
+    let top_level_sessions: Vec<&_> = active_sessions
+        .iter()
+        .filter(|s| !subagent_ids.contains(&s.session_id))
+        .collect();
+    let (file_interactions, peer_map) =
+        detect_file_interactions_refs(&top_level_sessions, project_root);
+    for link in session_links.iter_mut() {
+        if let Some(peers) = peer_map.get(&link.session_id) {
+            link.peer_session_ids = peers.clone();
+        }
+    }
 
     let session_ids: Vec<String> = session_links.iter().map(|s| s.session_id.clone()).collect();
 
@@ -393,6 +413,11 @@ fn enrich_commit(
         intent: None,
         reasoning: None,
         transparency_mode: transparency,
+        file_interactions: if file_interactions.is_empty() {
+            None
+        } else {
+            Some(file_interactions)
+        },
     };
 
     let db = crate::db::Db::open().ok();
@@ -402,6 +427,9 @@ fn enrich_commit(
             eprintln!("oobo: warning: could not save anchor: {e}");
         }
 
+        // TODO: persist `peer_session_ids` to the `anchor_sessions` table
+        // once a DB migration adds the column. Currently peer data is only
+        // stored in the anchor JSON blob on the orphan branch.
         for link in &session_links {
             let lt = match link.link_type {
                 LinkType::Explicit => "explicit",
@@ -861,6 +889,7 @@ fn discover_sessions_from_tools(
                 pre_agent_snapshots: None,
                 file_snapshots: None,
                 edited_files: None,
+                read_files: None,
                 tool_usage: None,
                 tool_failures: None,
                 bash_commands: None,
@@ -878,6 +907,36 @@ fn discover_sessions_from_tools(
 
 fn ms_to_secs(ms: i64) -> i64 {
     if ms > 1_000_000_000_000 { ms / 1000 } else { ms }
+}
+
+/// Detect files touched by multiple sessions and return both file interactions
+/// and the peer map. Accepts references to avoid cloning `ActiveSession` data.
+/// Expects only top-level sessions — subagent sessions are filtered out
+/// by the caller in `enrich_commit` using `subagent_runs` data.
+fn detect_file_interactions_refs(
+    sessions: &[&crate::hooks::state::ActiveSession],
+    project_root: &str,
+) -> (Vec<crate::core::anchor::FileInteraction>, std::collections::HashMap<String, Vec<String>>) {
+    let inputs: Vec<crate::core::anchor::SessionFiles> = sessions
+        .iter()
+        .map(|s| {
+            let (edited, read) = if s.edited_files.is_some() || s.read_files.is_some() {
+                (
+                    s.edited_files.as_ref().map(|h| h.iter().cloned().collect()).unwrap_or_default(),
+                    s.read_files.as_ref().map(|h| h.iter().cloned().collect()).unwrap_or_default(),
+                )
+            } else {
+                hooks::state::get_file_sets(project_root, &s.session_id)
+            };
+            crate::core::anchor::SessionFiles {
+                session_id: s.session_id.clone(),
+                edited,
+                read,
+            }
+        })
+        .collect();
+
+    crate::core::anchor::detect_interactions(&inputs)
 }
 
 /// Proactively index linked sessions on a background thread so stats are
@@ -1380,5 +1439,70 @@ mod tests {
     fn test_filter_by_recency_empty() {
         let result = filter_by_recency(&[]);
         assert!(result.is_empty());
+    }
+
+    fn make_session(id: &str, edited: Vec<&str>, read: Vec<&str>) -> crate::hooks::state::ActiveSession {
+        let now = chrono::Utc::now().timestamp();
+        crate::hooks::state::ActiveSession {
+            session_id: id.into(),
+            agent: "claude".into(),
+            model: None,
+            worktree: None,
+            transcript_path: None,
+            pre_agent_snapshots: None,
+            file_snapshots: None,
+            edited_files: if edited.is_empty() {
+                None
+            } else {
+                Some(edited.into_iter().map(|s| s.to_string()).collect())
+            },
+            read_files: if read.is_empty() {
+                None
+            } else {
+                Some(read.into_iter().map(|s| s.to_string()).collect())
+            },
+            tool_usage: None,
+            tool_failures: None,
+            bash_commands: None,
+            subagent_runs: None,
+            thinking_duration_ms: None,
+            compact_count: None,
+            started_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn test_detect_file_interactions_refs_uses_active_session_data() {
+        let sessions = vec![
+            make_session("s1", vec!["a.rs"], vec![]),
+            make_session("s2", vec!["a.rs"], vec![]),
+        ];
+        let refs: Vec<&_> = sessions.iter().collect();
+        let (interactions, peers) = detect_file_interactions_refs(&refs, "/tmp");
+        assert_eq!(interactions.len(), 1);
+        assert_eq!(interactions[0].path, "a.rs");
+        assert_eq!(peers.get("s1").unwrap(), &vec!["s2".to_string()]);
+        assert_eq!(peers.get("s2").unwrap(), &vec!["s1".to_string()]);
+    }
+
+    #[test]
+    fn test_detect_file_interactions_refs_no_overlap() {
+        let sessions = vec![
+            make_session("s1", vec!["a.rs"], vec![]),
+            make_session("s2", vec!["b.rs"], vec![]),
+        ];
+        let refs: Vec<&_> = sessions.iter().collect();
+        let (interactions, peers) = detect_file_interactions_refs(&refs, "/tmp");
+        assert!(interactions.is_empty());
+        assert!(peers.is_empty());
+    }
+
+    #[test]
+    fn test_detect_file_interactions_refs_single_session() {
+        let sessions = vec![make_session("s1", vec!["a.rs"], vec!["b.rs"])];
+        let refs: Vec<&_> = sessions.iter().collect();
+        let (interactions, _) = detect_file_interactions_refs(&refs, "/tmp");
+        assert!(interactions.is_empty());
     }
 }
