@@ -1,5 +1,6 @@
 use serde::Serialize;
 
+use crate::cli::OutputMode;
 use crate::config::Config;
 use crate::session;
 
@@ -31,7 +32,7 @@ pub fn run(
     cfg: &Config,
     session_id: &str,
     output: Option<String>,
-    agent: bool,
+    mode: OutputMode,
 ) -> Result<(), String> {
     let session = session::find_session_any(session_id)?;
 
@@ -94,26 +95,35 @@ pub fn run(
             render_markdown(&shared)
         };
         std::fs::write(path, &content).map_err(|e| format!("write {path}: {e}"))?;
-        if agent {
-            let resp = serde_json::json!({
-                "status": "saved",
-                "session_id": session.session_id,
-                "path": path,
-                "messages": shared.messages.len(),
-            });
-            crate::utils::print_json(&resp);
-        } else {
-            eprintln!(
-                "shared session {} → {}",
-                &session.session_id[..session.session_id.len().min(8)],
-                path
-            );
+        match mode {
+            OutputMode::Agent => {
+                println!("status: saved");
+                println!("session_id: {}", session.session_id);
+                println!("path: {path}");
+                println!("messages: {}", shared.messages.len());
+            }
+            OutputMode::Json => {
+                let resp = serde_json::json!({
+                    "status": "saved",
+                    "session_id": session.session_id,
+                    "path": path,
+                    "messages": shared.messages.len(),
+                });
+                crate::utils::print_json(&resp);
+            }
+            OutputMode::Tui => {
+                eprintln!(
+                    "shared session {} → {}",
+                    &session.session_id[..session.session_id.len().min(8)],
+                    path
+                );
+            }
         }
         return Ok(());
     }
 
     let json_str = serde_json::to_string_pretty(&shared).map_err(|e| format!("serialize: {e}"))?;
-    upload_share(cfg, &json_str, agent)
+    upload_share(cfg, &json_str, mode)
 }
 
 fn render_markdown(shared: &SharedSession) -> String {
@@ -167,7 +177,7 @@ fn stats_model(db: &Option<crate::db::Db>, session_id: &str, source: &str) -> Op
         .and_then(|s| s.model)
 }
 
-fn upload_share(cfg: &Config, json_body: &str, agent: bool) -> Result<(), String> {
+fn upload_share(cfg: &Config, json_body: &str, mode: OutputMode) -> Result<(), String> {
     let url = format!("{}/anchors/share", cfg.server.url.trim_end_matches('/'));
 
     let client = reqwest::blocking::Client::builder()
@@ -196,8 +206,19 @@ fn upload_share(cfg: &Config, json_body: &str, agent: bool) -> Result<(), String
         return Err(format!("server returned HTTP {status}: {body}"));
     }
 
-    if agent {
+    if mode == OutputMode::Json {
         println!("{body}");
+    } else if mode == OutputMode::Agent {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+            if let Some(url) = parsed.get("url").and_then(|u| u.as_str()) {
+                println!("status: shared");
+                println!("url: {url}");
+            } else {
+                println!("status: shared");
+            }
+        } else {
+            println!("status: shared");
+        }
     } else if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
         if let Some(share_url) = parsed.get("url").and_then(|u| u.as_str()) {
             eprintln!("shared: {share_url}");
@@ -282,7 +303,7 @@ mod tests {
     #[test]
     fn test_empty_messages_returns_error() {
         let cfg = Config::load_or_default();
-        let result = run(&cfg, "nonexistent-session-id-xyz", None, false);
+        let result = run(&cfg, "nonexistent-session-id-xyz", None, OutputMode::Tui);
         assert!(result.is_err());
     }
 

@@ -24,6 +24,42 @@ pub fn run(check_only: bool) -> Result<(), String> {
     install_latest(&latest)?;
     eprintln!("updated to v{latest_clean}");
 
+    let current_exe = std::env::current_exe().ok();
+    if let Some(exe) = current_exe {
+        eprintln!("running post-update migrations...");
+        match std::process::Command::new(&exe)
+            .args(["update", "--post-update"])
+            .status()
+        {
+            Ok(s) if !s.success() => eprintln!("warning: post-update exited with {s}"),
+            Err(e) => eprintln!("warning: could not run post-update: {e}"),
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+pub fn run_post_update() -> Result<(), String> {
+    eprintln!("oobo: running post-update tasks...");
+
+    match crate::commands::agent::ensure_skill_file() {
+        Ok(_) => eprintln!("  skill file updated"),
+        Err(e) => eprintln!("  skill file: {e}"),
+    }
+
+    match crate::db::Db::open() {
+        Ok(_) => eprintln!("  database migrations applied"),
+        Err(e) => eprintln!("  database: {e}"),
+    }
+
+    let hooks = crate::hooks::install::install_all_agent_hooks();
+    if hooks.is_empty() {
+        eprintln!("  agent hooks: none installed");
+    } else {
+        eprintln!("  agent hooks: {}", hooks.join(", "));
+    }
+
     Ok(())
 }
 

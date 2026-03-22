@@ -1,3 +1,4 @@
+use crate::cli::OutputMode;
 use crate::config::Config;
 use crate::db::Db;
 
@@ -5,12 +6,49 @@ use crate::db::Db;
 ///
 /// `oobo anchors` shows recent commits annotated with linked sessions,
 /// agent/human attribution, and token counts where available.
-pub fn run(cfg: &Config, limit: usize, agent: bool) -> Result<(), String> {
+pub fn run(cfg: &Config, limit: usize, mode: OutputMode) -> Result<(), String> {
     let db = Db::open()?;
 
     let commits = recent_commits_with_anchors(cfg, &db, limit)?;
 
-    if agent {
+    if mode == OutputMode::Agent {
+        println!("# hash | message | author | date | sessions | ai% | added | deleted");
+        for entry in &commits {
+            let hash_short = if entry.commit_hash.len() >= 7 {
+                &entry.commit_hash[..7]
+            } else {
+                &entry.commit_hash
+            };
+            let sess_count = entry.sessions.len();
+            let ai_pct = entry
+                .ai_percentage
+                .map(|p| format!("{:.0}%", p))
+                .unwrap_or_default();
+            let message = crate::utils::sanitize_pipe(&entry.message);
+            let author = crate::utils::sanitize_pipe(&entry.author);
+            let date = if entry.committed_at > 0 {
+                chrono::DateTime::from_timestamp(entry.committed_at, 0)
+                    .map(|dt| dt.format("%Y-%m-%dT%H:%M").to_string())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            println!(
+                "{} | {} | {} | {} | {} | {} | {} | {}",
+                hash_short,
+                message,
+                author,
+                date,
+                sess_count,
+                ai_pct,
+                entry.added,
+                entry.deleted,
+            );
+        }
+        return Ok(());
+    }
+
+    if mode == OutputMode::Json {
         let j = serde_json::to_string_pretty(&commits).map_err(|e| format!("json: {e}"))?;
         println!("{j}");
         return Ok(());

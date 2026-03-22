@@ -2,10 +2,11 @@ use std::collections::HashMap;
 
 use chrono::Datelike;
 
+use crate::cli::OutputMode;
 use crate::db::Db;
 use crate::tui;
 
-pub fn run(agent: bool, out: Option<String>, format: &str) -> Result<(), String> {
+pub fn run(mode: OutputMode, out: Option<String>, format: &str) -> Result<(), String> {
     let db = Db::open()?;
 
     let global = db.aggregate_stats_global()?;
@@ -74,19 +75,23 @@ pub fn run(agent: bool, out: Option<String>, format: &str) -> Result<(), String>
         heatmap,
     };
 
+    let is_structured = mode.is_structured();
+
     match format {
         "json" => {
             print_json(&card);
             return Ok(());
         }
         "md" => {
-            if !agent {
+            if !is_structured {
                 print_terminal(&card);
             }
             let md = render_markdown(&card);
             let path = out.unwrap_or_else(|| "oobo-card.md".to_string());
             std::fs::write(&path, &md).map_err(|e| format!("cannot write {path}: {e}"))?;
-            if !agent {
+            if is_structured {
+                println!("saved: {path}");
+            } else {
                 eprintln!("\n  saved to {path}");
             }
             return Ok(());
@@ -96,13 +101,16 @@ pub fn run(agent: bool, out: Option<String>, format: &str) -> Result<(), String>
 
     let is_svg = format == "svg";
 
-    if agent && !is_svg {
-        print_json(&card);
-    } else if !agent {
+    if is_structured && !is_svg {
+        match mode {
+            OutputMode::Agent => print_agent_compact(&card),
+            _ => print_json(&card),
+        }
+    } else if !is_structured {
         print_terminal(&card);
     }
 
-    if agent && out.is_none() && !is_svg {
+    if is_structured && out.is_none() && !is_svg {
         return Ok(());
     }
 
@@ -111,14 +119,18 @@ pub fn run(agent: bool, out: Option<String>, format: &str) -> Result<(), String>
     if is_svg {
         let path = out.unwrap_or_else(|| "oobo-card.svg".to_string());
         std::fs::write(&path, &svg).map_err(|e| format!("cannot write {path}: {e}"))?;
-        if !agent {
+        if is_structured {
+            println!("saved: {path}");
+        } else {
             eprintln!("\n  saved to {path}");
         }
     } else {
         let png = svg_to_png(&svg)?;
         let path = out.unwrap_or_else(|| "oobo-card.png".to_string());
         std::fs::write(&path, &png).map_err(|e| format!("cannot write {path}: {e}"))?;
-        if !agent {
+        if is_structured {
+            println!("saved: {path}");
+        } else {
             eprintln!("\n  saved to {path}");
         }
     }
@@ -819,6 +831,42 @@ fn render_markdown(c: &CardData) -> String {
 }
 
 // ── JSON output ──────────────────────────────────────────────────────────────
+
+fn print_agent_compact(c: &CardData) {
+    println!("author: {}", crate::utils::sanitize_pipe(&c.author));
+    println!("tools: {}", c.tool_count);
+    println!("projects: {}", c.project_count);
+    println!("sessions: {}", c.session_count);
+    println!("tokens: {}", tui::format_tokens(c.total_tokens));
+    if let Some(ai_pct) = c.ai_percentage {
+        println!("ai_code: {:.1}%", ai_pct);
+    }
+    println!("ai_commits: {}", c.ai_commits);
+    if let Some(cpd) = c.commits_per_day {
+        println!("commits_per_day: {:.1}", cpd);
+    }
+    println!("active_days: {}", c.active_days);
+    if let Some(ref since) = c.active_since {
+        println!("active_since: {since}");
+    }
+    if !c.top_tools.is_empty() {
+        println!("# tool | sessions | tokens");
+        for t in &c.top_tools {
+            println!(
+                "{} | {} | {}",
+                t.name,
+                t.sessions,
+                tui::format_tokens(t.tokens),
+            );
+        }
+    }
+    if !c.top_models.is_empty() {
+        println!("# model | sessions | pct");
+        for m in &c.top_models {
+            println!("{} | {} | {:.0}%", m.name, m.sessions, m.pct);
+        }
+    }
+}
 
 fn print_json(c: &CardData) {
     let tools: Vec<serde_json::Value> = c

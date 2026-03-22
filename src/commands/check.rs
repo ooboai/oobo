@@ -1,7 +1,8 @@
+use crate::cli::OutputMode;
 use crate::config::Config;
 use crate::db::Db;
 
-pub fn run(fix: bool, agent: bool) -> Result<(), String> {
+pub fn run(fix: bool, mode: OutputMode) -> Result<(), String> {
     let mut checks: Vec<CheckResult> = vec![
         check_config(),
         check_db(),
@@ -29,23 +30,37 @@ pub fn run(fix: bool, agent: bool) -> Result<(), String> {
         }
     }
 
-    if agent {
-        let items: Vec<serde_json::Value> = checks
-            .iter()
-            .map(|c| {
-                serde_json::json!({
-                    "name": c.name,
-                    "status": match c.status {
-                        Status::Ok => "ok",
-                        Status::Warn => "warn",
-                        Status::Fail => "fail",
-                        Status::Fixed => "fixed",
-                    },
-                    "detail": c.detail,
+    if mode.is_structured() {
+        if mode == OutputMode::Agent {
+            println!("# name | status | detail");
+            for c in &checks {
+                let status = match c.status {
+                    Status::Ok => "ok",
+                    Status::Warn => "warn",
+                    Status::Fail => "fail",
+                    Status::Fixed => "fixed",
+                };
+                let detail = crate::utils::sanitize_pipe(&c.detail);
+                println!("{} | {} | {}", c.name, status, detail);
+            }
+        } else {
+            let items: Vec<serde_json::Value> = checks
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "name": c.name,
+                        "status": match c.status {
+                            Status::Ok => "ok",
+                            Status::Warn => "warn",
+                            Status::Fail => "fail",
+                            Status::Fixed => "fixed",
+                        },
+                        "detail": c.detail,
+                    })
                 })
-            })
-            .collect();
-        crate::utils::print_json(&serde_json::json!({ "checks": items }));
+                .collect();
+            crate::utils::print_json(&serde_json::json!({ "checks": items }));
+        }
         return Ok(());
     }
 

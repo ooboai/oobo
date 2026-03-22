@@ -1,26 +1,38 @@
 use std::io::IsTerminal;
 
+use crate::cli::OutputMode;
 use crate::config::Config;
 use crate::remote;
 use crate::tools::cursor;
 
-pub fn run(cfg: &Config, agent_mode: bool) {
-    if agent_mode {
-        run_json(cfg);
-    } else if std::io::stdin().is_terminal() {
-        if let Err(e) = crate::tui::dash::run(cfg) {
-            eprintln!("error: {e}");
+pub fn run(cfg: &Config, mode: OutputMode) {
+    match mode {
+        OutputMode::Agent => run_agent(cfg),
+        OutputMode::Json => run_json(cfg),
+        OutputMode::Tui => {
+            if std::io::stdin().is_terminal() {
+                if let Err(e) = crate::tui::dash::run(cfg) {
+                    eprintln!("error: {e}");
+                }
+            } else {
+                run_plain(cfg);
+            }
         }
-    } else {
-        run_plain(cfg);
     }
 }
 
-fn run_json(cfg: &Config) {
-    let mut tools_enabled: Vec<&str> = Vec::new();
+struct DashData {
+    tools_enabled: Vec<String>,
+    projects: usize,
+    sessions: i64,
+    total_tokens: i64,
+}
+
+fn gather_dash(cfg: &Config) -> DashData {
+    let mut tools_enabled = Vec::new();
     for (key, _) in TOOLS {
         if tool_enabled(cfg, key) {
-            tools_enabled.push(key);
+            tools_enabled.push(key.to_string());
         }
     }
 
@@ -40,16 +52,43 @@ fn run_json(cfg: &Config) {
         (0, 0, 0)
     };
 
+    DashData {
+        tools_enabled,
+        projects,
+        sessions,
+        total_tokens,
+    }
+}
+
+fn run_agent(cfg: &Config) {
+    let d = gather_dash(cfg);
+
+    println!("version: {}", env!("CARGO_PKG_VERSION"));
+    println!(
+        "config: {}",
+        crate::config::Config::config_path().display()
+    );
+    println!("data: {}", crate::paths::oobo_home().display());
+    println!("server: {}", cfg.server.url);
+    println!("tools: {}", d.tools_enabled.join(", "));
+    println!("projects: {}", d.projects);
+    println!("sessions: {}", d.sessions);
+    println!("tokens: {}", crate::tui::format_tokens(d.total_tokens));
+}
+
+fn run_json(cfg: &Config) {
+    let d = gather_dash(cfg);
+
     let json = serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "config_path": crate::config::Config::config_path().display().to_string(),
         "data_dir": crate::paths::oobo_home().display().to_string(),
         "server_url": cfg.server.url,
         "alias_enabled": cfg.git.alias_enabled,
-        "tools_enabled": tools_enabled,
-        "projects": projects,
-        "sessions": sessions,
-        "total_tokens": total_tokens,
+        "tools_enabled": d.tools_enabled,
+        "projects": d.projects,
+        "sessions": d.sessions,
+        "total_tokens": d.total_tokens,
     });
     crate::utils::print_json(&json);
 }

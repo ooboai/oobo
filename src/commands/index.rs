@@ -12,7 +12,7 @@ pub fn run(
     force: bool,
     bg: bool,
     status: bool,
-    _agent_mode: bool,
+    _mode: bool,
 ) -> Result<(), String> {
     if status {
         return show_status();

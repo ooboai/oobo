@@ -3,6 +3,19 @@ use clap::{Parser, Subcommand};
 use crate::config::Config;
 use crate::git;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputMode {
+    Tui,
+    Agent,
+    Json,
+}
+
+impl OutputMode {
+    pub fn is_structured(self) -> bool {
+        matches!(self, OutputMode::Agent | OutputMode::Json)
+    }
+}
+
 /// oobo — git decorator for humans and agents
 #[derive(Parser, Debug)]
 #[command(
@@ -46,7 +59,7 @@ use crate::git;
   update       Check for updates or self-update
   version      Show version info
 
-\x1b[2mEvery command supports --agent for structured JSON output.\x1b[0m
+\x1b[2mUse --agent for compact output or --json for structured JSON.\x1b[0m
 ",
     disable_help_subcommand = true
 )]
@@ -54,9 +67,13 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// Structured JSON output for all commands (for AI agents and scripts)
-    #[arg(long, global = true)]
+    /// Compact output for AI agents (minimal, pipe-delimited)
+    #[arg(long, global = true, conflicts_with = "json")]
     pub agent: bool,
+
+    /// Structured JSON output for scripts and programmatic use
+    #[arg(long, global = true, conflicts_with = "agent")]
+    pub json: bool,
 
     /// Raw args passed when invoked as a git alias (everything after `oobo`)
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
@@ -71,11 +88,12 @@ pub enum Command {
         display_order = 1,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo sessions              Interactive TUI\n  \
-                       oobo sessions --agent      JSON output\n  \
+                       oobo sessions --agent      Compact output\n  \
+                       oobo sessions --json       Full JSON output\n  \
                        oobo sessions --all        All projects\n  \
-                       oobo sessions list --agent  JSON (explicit subcommand)\n  \
-                       oobo sessions show <id> --agent   Conversation as JSON\n  \
-                       oobo sessions search auth --agent  Search as JSON\n  \
+                       oobo sessions list --agent  Compact (explicit subcommand)\n  \
+                       oobo sessions show <id> --json    Conversation as JSON\n  \
+                       oobo sessions search auth --agent  Search results\n  \
                        oobo sessions export <id> --format md --out chat.md"
     )]
     Sessions {
@@ -94,7 +112,8 @@ pub enum Command {
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo anchors               Show recent commits with AI context\n  \
                        oobo a -n 20               Show last 20 (short alias)\n  \
-                       oobo anchors --agent       JSON output"
+                       oobo anchors --agent       Compact output\n  \
+                       oobo anchors --json        Full JSON output"
     )]
     Anchors {
         /// Number of commits to show
@@ -108,7 +127,7 @@ pub enum Command {
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo share <id>             Preview redacted session\n  \
                        oobo share <id> --out s.json  Save to file\n  \
-                       oobo share <id> --agent       JSON output"
+                       oobo share <id> --agent       Compact output"
     )]
     Share {
         /// Session ID or prefix
@@ -183,9 +202,9 @@ pub enum Command {
         display_order = 11,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo projects              Interactive TUI\n  \
-                       oobo projects --agent      JSON output\n  \
-                       oobo projects list --agent  JSON (explicit subcommand)\n  \
-                       oobo projects show myapp --agent  Project details as JSON\n  \
+                       oobo projects --agent      Compact output\n  \
+                       oobo projects list --json   Full JSON output\n  \
+                       oobo projects show myapp --agent  Project summary\n  \
                        oobo projects forget myapp  Remove a project from tracking"
     )]
     Projects {
@@ -198,9 +217,9 @@ pub enum Command {
         display_order = 12,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo stats                         Global stats\n  \
-                       oobo stats --agent                  JSON output\n  \
-                       oobo stats --project myapp --agent   Per-project JSON\n  \
-                       oobo stats --tool cursor --agent     Per-tool JSON\n  \
+                       oobo stats --agent                  Compact output\n  \
+                       oobo stats --json                   Full JSON output\n  \
+                       oobo stats --project myapp --agent   Per-project stats\n  \
                        oobo stats --since 30d              Last 30 days\n  \
                        oobo stats --since 2026-02-01       Since a date"
     )]
@@ -224,7 +243,8 @@ pub enum Command {
                        oobo card --out dev.svg         Save to custom path\n  \
                        oobo card --format md            Markdown output\n  \
                        oobo card --format json          JSON output\n  \
-                       oobo card --agent                JSON output (agent mode)"
+                       oobo card --agent                Compact output\n  \
+                       oobo card --json                 Full JSON output"
     )]
     Card {
         /// Save to a custom file path (default: oobo-card.png)
@@ -276,7 +296,8 @@ pub enum Command {
         display_order = 17,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo sources                Show all data sources and coverage\n  \
-                       oobo sources --agent        JSON output"
+                       oobo sources --agent        Compact output\n  \
+                       oobo sources --json         Full JSON output"
     )]
     Sources,
 
@@ -321,7 +342,8 @@ pub enum Command {
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo inspect             Run diagnostics\n  \
                        oobo inspect --fix       Auto-repair what can be fixed\n  \
-                       oobo inspect --agent     JSON output"
+                       oobo inspect --agent     Compact output\n  \
+                       oobo inspect --json      Full JSON output"
     )]
     Inspect {
         /// Auto-fix issues that can be repaired
@@ -335,6 +357,9 @@ pub enum Command {
         /// Only check, don't install
         #[arg(long)]
         check: bool,
+        /// Run post-update migrations (internal, called by the new binary after update)
+        #[arg(long, hide = true)]
+        post_update: bool,
     },
 
     /// Show oobo version, git version, and environment info
@@ -559,7 +584,13 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
         }
     };
 
-    let agent_mode = cli.agent;
+    let mode = if cli.json {
+        OutputMode::Json
+    } else if cli.agent {
+        OutputMode::Agent
+    } else {
+        OutputMode::Tui
+    };
 
     let result = match cli.command {
         Some(Command::Setup) => {
@@ -575,7 +606,7 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
                     limit: None,
                 },
             };
-            crate::commands::sessions::run(&cfg, resolved, agent_mode)?;
+            crate::commands::sessions::run(&cfg, resolved, mode)?;
             Ok(0)
         }
         Some(Command::Alias { action }) => {
@@ -583,7 +614,7 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
             Ok(0)
         }
         Some(Command::Dash) => {
-            crate::commands::dash::run(&cfg, agent_mode);
+            crate::commands::dash::run(&cfg, mode);
             Ok(0)
         }
         Some(Command::Projects { action }) => {
@@ -591,7 +622,7 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
                 Some(a) => a,
                 None => ProjectAction::List,
             };
-            crate::commands::projects::run(resolved, agent_mode)?;
+            crate::commands::projects::run(resolved, mode)?;
             Ok(0)
         }
         Some(Command::Stats {
@@ -599,11 +630,11 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
             tool,
             since,
         }) => {
-            crate::commands::stats::run(project, tool, agent_mode, since)?;
+            crate::commands::stats::run(project, tool, mode, since)?;
             Ok(0)
         }
         Some(Command::Scan { project, quiet }) => {
-            crate::commands::scan::run(&cfg, project, quiet || agent_mode)?;
+            crate::commands::scan::run(&cfg, project, quiet || mode.is_structured())?;
             Ok(0)
         }
         Some(Command::Index {
@@ -612,19 +643,23 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
             bg,
             status,
         }) => {
-            crate::commands::index::run(project, force, bg, status, agent_mode)?;
+            crate::commands::index::run(project, force, bg, status, mode.is_structured())?;
             Ok(0)
         }
         Some(Command::Sources) => {
-            crate::commands::sources::run_cmd(agent_mode)?;
+            crate::commands::sources::run_cmd(mode)?;
             Ok(0)
         }
         Some(Command::Auth { action }) => {
             crate::commands::auth::run(action)?;
             Ok(0)
         }
-        Some(Command::Update { check }) => {
-            crate::commands::update::run(check)?;
+        Some(Command::Update { check, post_update }) => {
+            if post_update {
+                crate::commands::update::run_post_update()?;
+            } else {
+                crate::commands::update::run(check)?;
+            }
             Ok(0)
         }
         Some(Command::Agent) => {
@@ -632,15 +667,15 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
             Ok(0)
         }
         Some(Command::Share { session_id, out }) => {
-            crate::commands::share::run(&cfg, &session_id, out, agent_mode)?;
+            crate::commands::share::run(&cfg, &session_id, out, mode)?;
             Ok(0)
         }
         Some(Command::Anchors { limit }) => {
-            crate::commands::anchors::run(&cfg, limit, agent_mode)?;
+            crate::commands::anchors::run(&cfg, limit, mode)?;
             Ok(0)
         }
         Some(Command::Inspect { fix }) => {
-            crate::commands::check::run(fix, agent_mode)?;
+            crate::commands::check::run(fix, mode)?;
             Ok(0)
         }
         Some(Command::Sync {
@@ -676,11 +711,11 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
             Ok(0)
         }
         Some(Command::Card { out, format }) => {
-            crate::commands::card::run(agent_mode, out, &format)?;
+            crate::commands::card::run(mode, out, &format)?;
             Ok(0)
         }
         Some(Command::Version) => {
-            print_oobo_version(&cfg, agent_mode);
+            print_oobo_version(&cfg, mode);
             Ok(0)
         }
         Some(Command::Hooks { action }) => {
@@ -755,7 +790,7 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
     result
 }
 
-fn print_oobo_version(cfg: &Config, agent_mode: bool) {
+fn print_oobo_version(cfg: &Config, mode: OutputMode) {
     let version = env!("CARGO_PKG_VERSION");
     let git_version = git::proxy::run_git_capture(cfg, &["--version"])
         .unwrap_or_else(|_| "not found".to_string());
@@ -764,32 +799,40 @@ fn print_oobo_version(cfg: &Config, agent_mode: bool) {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
 
-    if agent_mode {
-        let json = serde_json::json!({
-            "oobo_version": version,
-            "git_version": git_ver,
-            "db_path": db_path.display().to_string(),
-            "os": os,
-            "arch": arch,
-        });
-        crate::utils::print_json(&json);
-    } else {
-        println!("oobo {} ({})", version, env!("CARGO_PKG_HOMEPAGE"));
-        println!("git:  {git_ver}");
+    match mode {
+        OutputMode::Agent => {
+            println!("version: {version}");
+            println!("git: {git_ver}");
+            println!("os: {os} {arch}");
+        }
+        OutputMode::Json => {
+            let json = serde_json::json!({
+                "oobo_version": version,
+                "git_version": git_ver,
+                "db_path": db_path.display().to_string(),
+                "os": os,
+                "arch": arch,
+            });
+            crate::utils::print_json(&json);
+        }
+        OutputMode::Tui => {
+            println!("oobo {} ({})", version, env!("CARGO_PKG_HOMEPAGE"));
+            println!("git:  {git_ver}");
 
-        let db_size = std::fs::metadata(&db_path)
-            .map(|m| {
-                let bytes = m.len();
-                if bytes >= 1_048_576 {
-                    format!("{:.1} MB", bytes as f64 / 1_048_576.0)
-                } else if bytes >= 1024 {
-                    format!("{:.0} KB", bytes as f64 / 1024.0)
-                } else {
-                    format!("{bytes} B")
-                }
-            })
-            .unwrap_or_else(|_| "not created".to_string());
-        println!("db:   {} ({})", db_path.display(), db_size);
-        println!("os:   {os} {arch}");
+            let db_size = std::fs::metadata(&db_path)
+                .map(|m| {
+                    let bytes = m.len();
+                    if bytes >= 1_048_576 {
+                        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+                    } else if bytes >= 1024 {
+                        format!("{:.0} KB", bytes as f64 / 1024.0)
+                    } else {
+                        format!("{bytes} B")
+                    }
+                })
+                .unwrap_or_else(|_| "not created".to_string());
+            println!("db:   {} ({})", db_path.display(), db_size);
+            println!("os:   {os} {arch}");
+        }
     }
 }

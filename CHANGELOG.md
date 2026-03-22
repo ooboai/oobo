@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Compact `--agent` output mode** — `--agent` now produces compact, pipe-delimited text instead of JSON. Lists print a schema header (`# field | field | ...`) then one record per line. Single-object commands print `key: value` pairs. Designed for minimal token cost when agents read oobo output.
+- **`--json` flag** — new global flag for full structured JSON output, replacing the previous `--agent` JSON behavior. Use `--json` for scripts or when the full object graph (messages, file attribution) is needed.
+- **Multi-tool skill discovery** — `oobo setup` and `oobo update` now install the `SKILL.md` symlink in `~/.agents/skills/oobo/`, `~/.claude/skills/oobo/`, `~/.codex/skills/oobo/`, `~/.cursor/skills/oobo/`, and `~/.gemini/skills/oobo/`, ensuring all major AI coding tools already installed on the system discover the skill automatically.
+- **Post-update migrations** — `oobo update` now runs post-update tasks automatically after installing a new version: refreshes the skill file, applies pending DB migrations, and re-installs agent hooks.
 - **Subagent session hierarchy tracking** — parent-child relationships between agent sessions and their spawned subagents are now detected and displayed. Cursor (`subagentInfo`), Claude Code (`subagents/agent-*.jsonl`), Gemini CLI (`parentSessionId`), and OpenCode (`parent_id`) are all supported. Subagent sessions appear nested under their parent in the TUI with `└─ [type]` prefix, and `parent_session_id`/`subagent_type` fields are included in JSON output. Subagent transcripts are written to the orphan branch under `subagents/` within the parent session directory.
 - **Multi-agent file interaction tracking** — when multiple AI sessions touch the same files in a project, oobo now detects and records these interactions. `read_files` are tracked via `after-tool-use` hooks for Read, Grep, Search, Glob, and similar tools. At commit time, `file_interactions` (with per-session Writer/Reader/Both roles) and `peer_session_ids` are computed and stored on anchors. The TUI shows interaction hints inline, and `peer_session_ids` appears in all `--agent` JSON output paths (list, show, search). A `timeline.json` file is generated on the orphan branch for commits with file interactions.
 - **`detect_interactions()` shared algorithm** — centralized file interaction detection in `core/anchor.rs`, used by the interceptor (commit time), `oobo sessions` CLI (display time), and the TUI, eliminating DRY violations
@@ -26,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking: `--agent` output format** — `--agent` no longer produces JSON. Use `--json` for JSON output. This affects all commands that previously returned JSON via `--agent`. Notably, `sessions show <id> --agent` no longer includes the `messages` array — use `sessions show <id> --json` for the full conversation transcript.
 - Renamed `orphan::fetch()` to `orphan::fetch_and_reconcile()` to accurately reflect its side effects
 - Removed duplicate `fetch_remote_branch` from `sync.rs` in favor of centralized `orphan::fetch_and_reconcile`
 - Improved jitter quality for retry backoff by mixing in the process ID to decorrelate concurrent retries

@@ -1,10 +1,36 @@
+use crate::cli::OutputMode;
 use crate::db::Db;
 
-pub fn run_cmd(agent_mode: bool) -> Result<(), String> {
-    if agent_mode {
-        return run_json();
+pub fn run_cmd(mode: OutputMode) -> Result<(), String> {
+    match mode {
+        OutputMode::Agent => run_agent(),
+        OutputMode::Json => run_json(),
+        OutputMode::Tui => run(),
     }
-    run()
+}
+
+fn run_agent() -> Result<(), String> {
+    let db = Db::open()?;
+    let tools = gather_tool_sources(&db)?;
+
+    println!("# tool | sessions | tokens | source");
+    for t in &tools {
+        let tok = if t.total_tokens > 0 {
+            let suffix = if t.has_native_tokens {
+                " (native)"
+            } else {
+                " (est.)"
+            };
+            format!("{}{}", crate::tui::format_tokens(t.total_tokens), suffix)
+        } else {
+            "0".to_string()
+        };
+        println!(
+            "{} | {} | {} | {}",
+            t.label, t.session_count, tok, t.source_desc,
+        );
+    }
+    Ok(())
 }
 
 fn run_json() -> Result<(), String> {

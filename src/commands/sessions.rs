@@ -1,26 +1,24 @@
-use crate::cli::SessionAction;
+use crate::cli::{OutputMode, SessionAction};
 use crate::config::Config;
 use crate::db::Db;
 use crate::session;
 
-pub fn run(cfg: &Config, action: SessionAction, agent: bool) -> Result<(), String> {
+pub fn run(cfg: &Config, action: SessionAction, mode: OutputMode) -> Result<(), String> {
     match action {
-        SessionAction::List { all, tool, limit } => {
-            if agent {
-                list_json(cfg, all, tool.as_deref(), limit)
-            } else {
-                list_tui(cfg, all)
-            }
-        }
-        SessionAction::Show { id } => {
-            if agent {
-                show_json(&id)
-            } else {
+        SessionAction::List { all, tool, limit } => match mode {
+            OutputMode::Agent => list_agent(cfg, all, tool.as_deref(), limit),
+            OutputMode::Json => list_json(cfg, all, tool.as_deref(), limit),
+            OutputMode::Tui => list_tui(cfg, all),
+        },
+        SessionAction::Show { id } => match mode {
+            OutputMode::Agent => show_agent(&id),
+            OutputMode::Json => show_json(&id),
+            OutputMode::Tui => {
                 let s = session::find_session_any(&id)?;
                 crate::tui::sessions::run_show(s)
             }
-        }
-        SessionAction::Search { query, all, limit } => search(&query, cfg, all, agent, limit),
+        },
+        SessionAction::Search { query, all, limit } => search(&query, cfg, all, mode, limit),
         SessionAction::Export { id, format, out } => export(&id, &format, out.as_deref()),
     }
 }
@@ -44,6 +42,76 @@ fn list_tui(cfg: &Config, all: bool) -> Result<(), String> {
     };
 
     crate::tui::sessions::run_list(sessions, show_all)
+}
+
+fn list_agent(
+    cfg: &Config,
+    all: bool,
+    tool_filter: Option<&str>,
+    limit: Option<usize>,
+) -> Result<(), String> {
+    let (mut sessions, scope_all) = if all {
+        (session::all_sessions(cfg), true)
+    } else {
+        let root = crate::tools::cursor::get_project_root();
+        let s = session::all_for_project(&root, cfg);
+        if s.is_empty() {
+            (session::all_sessions(cfg), true)
+        } else {
+            (s, false)
+        }
+    };
+
+    if let Some(tool) = tool_filter {
+        let lower = tool.to_lowercase();
+        sessions.retain(|s| {
+            s.source.to_lowercase() == lower
+                || crate::tui::source_label(&s.source).to_lowercase() == lower
+        });
+    }
+
+    if let Some(n) = limit {
+        sessions.truncate(n);
+    }
+
+    let db = Db::open().ok();
+    let mut stats_map = db
+        .as_ref()
+        .and_then(|d| d.get_stats_bulk(&[]).ok())
+        .unwrap_or_default();
+
+    index_missing_sessions(&sessions, &mut stats_map);
+
+    if scope_all {
+        println!("# scope: all");
+    } else {
+        println!("# scope: project");
+    }
+    println!("# session_id | name | source | model | in_tokens | out_tokens | updated");
+    for s in &sessions {
+        let st = stats_map.get(&(s.session_id.clone(), s.source.clone()));
+        let model = st.and_then(|st| st.model.as_deref()).unwrap_or("");
+        let in_tok = st
+            .and_then(|st| st.input_tokens)
+            .map(|v| crate::tui::format_tokens(v))
+            .unwrap_or_default();
+        let out_tok = st
+            .and_then(|st| st.output_tokens)
+            .map(|v| crate::tui::format_tokens(v))
+            .unwrap_or_default();
+        let name = crate::utils::sanitize_pipe(&crate::utils::truncate_name(&s.name, 60));
+        println!(
+            "{} | {} | {} | {} | {} | {} | {}",
+            s.session_id,
+            name,
+            crate::tui::source_label(&s.source),
+            model,
+            in_tok,
+            out_tok,
+            s.updated_at_iso(),
+        );
+    }
+    Ok(())
 }
 
 fn list_json(
@@ -133,16 +201,16 @@ fn list_json(
     Ok(())
 }
 
-fn search(query: &str, cfg: &Config, all: bool, agent: bool, limit: usize) -> Result<(), String> {
-    let sessions = if all {
-        session::all_sessions(cfg)
+fn search(query: &str, cfg: &Config, all: bool, mode: OutputMode, limit: usize) -> Result<(), String> {
+    let (sessions, scope_all) = if all {
+        (session::all_sessions(cfg), true)
     } else {
         let root = crate::tools::cursor::get_project_root();
         let s = session::all_for_project(&root, cfg);
         if s.is_empty() {
-            session::all_sessions(cfg)
+            (session::all_sessions(cfg), true)
         } else {
-            s
+            (s, false)
         }
     };
 
@@ -189,58 +257,131 @@ fn search(query: &str, cfg: &Config, all: bool, agent: bool, limit: usize) -> Re
 
     matches.truncate(limit);
 
-    if agent {
-        let peer_map = compute_peer_map(&sessions, &stats_map);
-        let items: Vec<serde_json::Value> = matches
-            .iter()
-            .map(|(s, st, matched_on)| {
-                let mut obj = serde_json::json!({
-                    "session_id": s.session_id,
-                    "name": s.name,
-                    "source": s.source,
-                    "mode": s.mode,
-                    "project_path": s.project_path,
-                    "created_at": s.created_at_iso(),
-                    "updated_at": s.updated_at_iso(),
-                    "matched_on": matched_on,
-                });
-                if let Some(st) = st {
-                    obj["model"] = serde_json::json!(st.model);
-                    obj["input_tokens"] = serde_json::json!(st.input_tokens);
-                    obj["output_tokens"] = serde_json::json!(st.output_tokens);
-                }
-                if let Some(ref pid) = s.parent_session_id {
-                    obj["parent_session_id"] = serde_json::json!(pid);
-                }
-                if let Some(ref stype) = s.subagent_type {
-                    obj["subagent_type"] = serde_json::json!(stype);
-                }
-                if let Some(peers) = peer_map.get(&s.session_id) {
-                    if !peers.is_empty() {
-                        obj["peer_session_ids"] = serde_json::json!(peers);
+    match mode {
+        OutputMode::Agent => {
+            if scope_all {
+                println!("# scope: all");
+            } else {
+                println!("# scope: project");
+            }
+            println!("# session_id | name | source | model | matched_on | updated");
+            for (s, st, matched_on) in &matches {
+                let model = st.and_then(|st| st.model.as_deref()).unwrap_or("");
+                let name = crate::utils::sanitize_pipe(&crate::utils::truncate_name(&s.name, 60));
+                println!(
+                    "{} | {} | {} | {} | {} | {}",
+                    s.session_id,
+                    name,
+                    crate::tui::source_label(&s.source),
+                    model,
+                    matched_on,
+                    s.updated_at_iso(),
+                );
+            }
+        }
+        OutputMode::Json => {
+            let peer_map = compute_peer_map(&sessions, &stats_map);
+            let items: Vec<serde_json::Value> = matches
+                .iter()
+                .map(|(s, st, matched_on)| {
+                    let mut obj = serde_json::json!({
+                        "session_id": s.session_id,
+                        "name": s.name,
+                        "source": s.source,
+                        "mode": s.mode,
+                        "project_path": s.project_path,
+                        "created_at": s.created_at_iso(),
+                        "updated_at": s.updated_at_iso(),
+                        "matched_on": matched_on,
+                    });
+                    if let Some(st) = st {
+                        obj["model"] = serde_json::json!(st.model);
+                        obj["input_tokens"] = serde_json::json!(st.input_tokens);
+                        obj["output_tokens"] = serde_json::json!(st.output_tokens);
                     }
-                }
-                obj
-            })
-            .collect();
-        crate::utils::print_json(&items);
-    } else {
-        if matches.is_empty() {
-            eprintln!("no sessions matching \"{query}\"");
-            return Ok(());
+                    if let Some(ref pid) = s.parent_session_id {
+                        obj["parent_session_id"] = serde_json::json!(pid);
+                    }
+                    if let Some(ref stype) = s.subagent_type {
+                        obj["subagent_type"] = serde_json::json!(stype);
+                    }
+                    if let Some(peers) = peer_map.get(&s.session_id) {
+                        if !peers.is_empty() {
+                            obj["peer_session_ids"] = serde_json::json!(peers);
+                        }
+                    }
+                    obj
+                })
+                .collect();
+            crate::utils::print_json(&items);
         }
-        println!("{:<10} {:<10} {:<12} NAME", "ID", "SOURCE", "UPDATED");
-        for (s, _, _) in &matches {
-            println!(
-                "{:<10} {:<10} {:<12} {}",
-                &s.session_id[..s.session_id.len().min(8)],
-                crate::tui::source_label(&s.source),
-                s.updated_at_iso(),
-                crate::utils::truncate_name(&s.name, 60),
-            );
+        OutputMode::Tui => {
+            if matches.is_empty() {
+                eprintln!("no sessions matching \"{query}\"");
+                return Ok(());
+            }
+            println!("{:<10} {:<10} {:<12} NAME", "ID", "SOURCE", "UPDATED");
+            for (s, _, _) in &matches {
+                println!(
+                    "{:<10} {:<10} {:<12} {}",
+                    &s.session_id[..s.session_id.len().min(8)],
+                    crate::tui::source_label(&s.source),
+                    s.updated_at_iso(),
+                    crate::utils::truncate_name(&s.name, 60),
+                );
+            }
+            eprintln!("\n{} result(s)", matches.len());
         }
-        eprintln!("\n{} result(s)", matches.len());
     }
+
+    Ok(())
+}
+
+fn show_agent(id: &str) -> Result<(), String> {
+    let s = session::find_session_any(id)?;
+
+    let db = Db::open().ok();
+    let stats = db
+        .as_ref()
+        .and_then(|d| d.get_stats(&s.session_id, &s.source).ok())
+        .flatten();
+
+    let msg_count = session::count_messages(&s);
+
+    println!("session_id: {}", s.session_id);
+    println!("name: {}", crate::utils::sanitize_pipe(&s.name));
+    println!("source: {}", crate::tui::source_label(&s.source));
+    println!("mode: {}", s.mode);
+    println!("project_path: {}", s.project_path);
+    if let Some(ref pid) = s.parent_session_id {
+        println!("parent_session_id: {pid}");
+    }
+    if let Some(ref stype) = s.subagent_type {
+        println!("subagent_type: {stype}");
+    }
+    if let Some(ref st) = stats {
+        let model = st.model.as_deref().unwrap_or("unknown");
+        println!("model: {model}");
+        let in_t = st.input_tokens.unwrap_or(0);
+        let out_t = st.output_tokens.unwrap_or(0);
+        println!(
+            "tokens: {}/{}",
+            crate::tui::format_tokens(in_t),
+            crate::tui::format_tokens(out_t)
+        );
+        if let Some(dur) = st.duration_secs {
+            println!("duration: {}", crate::tui::format_duration(dur));
+        }
+        if !st.files_touched.is_empty() {
+            println!("files: {}", st.files_touched.len());
+        }
+        if st.tool_call_count > 0 {
+            println!("tool_calls: {}", st.tool_call_count);
+        }
+    }
+    println!("messages: {msg_count}");
+    println!("created: {}", s.created_at_iso());
+    println!("updated: {}", s.updated_at_iso());
 
     Ok(())
 }

@@ -18,14 +18,6 @@ fn oobo_skill_path() -> PathBuf {
     oobo_skill_dir().join("SKILL.md")
 }
 
-fn agents_skill_link() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".agents")
-        .join("skills")
-        .join("oobo")
-}
-
 pub fn ensure_skill_file() -> Result<PathBuf, String> {
     let skill_dir = oobo_skill_dir();
     paths::ensure_dir(&skill_dir)?;
@@ -42,13 +34,38 @@ pub fn ensure_skill_file() -> Result<PathBuf, String> {
         fs::write(&path, SKILL_MD).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     }
 
-    ensure_agents_symlink(&skill_dir);
+    ensure_all_symlinks(&skill_dir);
 
     Ok(path)
 }
 
-fn ensure_agents_symlink(skill_dir: &PathBuf) {
-    let link = agents_skill_link();
+fn ensure_all_symlinks(skill_dir: &PathBuf) {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return,
+    };
+
+    // .agents/skills is the universal convention — always create
+    ensure_symlink(skill_dir, &home.join(".agents").join("skills").join("oobo"));
+
+    // Tool-specific paths: only create if the tool's base directory already exists,
+    // to avoid prematurely creating config directories for tools not in use.
+    let conditional = [
+        (".claude", "skills", "oobo"),
+        (".codex", "skills", "oobo"),
+        (".cursor", "skills", "oobo"),
+        (".gemini", "skills", "oobo"),
+    ];
+
+    for (base, sub, name) in &conditional {
+        let base_dir = home.join(base);
+        if base_dir.exists() {
+            ensure_symlink(skill_dir, &base_dir.join(sub).join(name));
+        }
+    }
+}
+
+fn ensure_symlink(skill_dir: &PathBuf, link: &PathBuf) {
     let link_parent = match link.parent() {
         Some(p) => p,
         None => return,
@@ -60,12 +77,12 @@ fn ensure_agents_symlink(skill_dir: &PathBuf) {
 
     if link.exists() || link.symlink_metadata().is_ok() {
         if link.is_symlink() {
-            if let Ok(target) = fs::read_link(&link) {
+            if let Ok(target) = fs::read_link(link) {
                 if target == *skill_dir {
                     return;
                 }
             }
-            let _ = fs::remove_file(&link);
+            let _ = fs::remove_file(link);
         } else {
             return;
         }
@@ -73,11 +90,11 @@ fn ensure_agents_symlink(skill_dir: &PathBuf) {
 
     #[cfg(unix)]
     {
-        let _ = std::os::unix::fs::symlink(skill_dir, &link);
+        let _ = std::os::unix::fs::symlink(skill_dir, link);
     }
 
     #[cfg(windows)]
     {
-        let _ = std::os::windows::fs::symlink_dir(skill_dir, &link);
+        let _ = std::os::windows::fs::symlink_dir(skill_dir, link);
     }
 }

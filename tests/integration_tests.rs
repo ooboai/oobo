@@ -473,6 +473,104 @@ fn test_oobo_dash_command() {
 }
 
 #[test]
+fn test_agent_compact_format() {
+    let output = Command::new(oobo_binary())
+        .args(["version", "--agent"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "oobo version --agent should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("version: "),
+        "agent output should use key: value format, got: {stdout}"
+    );
+}
+
+#[test]
+fn test_agent_json_conflict() {
+    let output = Command::new(oobo_binary())
+        .args(["version", "--agent", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "--agent and --json should conflict"
+    );
+}
+
+#[test]
+fn test_agent_sources_pipe_format() {
+    let output = Command::new(oobo_binary())
+        .args(["sources", "--agent"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "oobo sources --agent should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("# tool | "),
+        "sources --agent should start with schema header, got: {stdout}"
+    );
+}
+
+#[test]
+fn test_agent_dash_key_value_format() {
+    let output = Command::new(oobo_binary())
+        .args(["dash", "--agent"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "oobo dash --agent should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("version: "),
+        "dash --agent should use key: value format, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("config: "),
+        "dash --agent should include config key, got: {stdout}"
+    );
+}
+
+#[test]
+fn test_agent_sessions_list_scope() {
+    let output = Command::new(oobo_binary())
+        .args(["sessions", "list", "--limit", "1", "--agent"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "oobo sessions list --agent should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("# scope: "),
+        "sessions list --agent should include scope on stdout, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("# session_id | "),
+        "sessions list --agent should include schema header, got: {stdout}"
+    );
+}
+
+#[test]
+fn test_json_sessions_list_bare_array() {
+    let output = Command::new(oobo_binary())
+        .args(["sessions", "list", "--limit", "1", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "oobo sessions list --json should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("sessions list --json should produce valid JSON: {e}, got: {stdout}"));
+    assert!(
+        parsed.is_array(),
+        "JSON output should be a bare array, got: {stdout}"
+    );
+}
+
+#[test]
 fn test_oobo_anchors_command() {
     let tmp = TempDir::new().unwrap();
 
@@ -483,7 +581,7 @@ fn test_oobo_anchors_command() {
         .unwrap();
 
     let output = Command::new(oobo_binary())
-        .args(["anchors", "--agent"])
+        .args(["anchors", "--json"])
         .current_dir(tmp.path())
         .output()
         .unwrap();
@@ -491,7 +589,7 @@ fn test_oobo_anchors_command() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("[]") || stdout.is_empty() || output.status.success(),
-        "oobo anchors --agent should succeed or return empty on fresh repo"
+        "oobo anchors --json should succeed or return empty on fresh repo"
     );
 }
 
@@ -563,16 +661,16 @@ fn test_e2e_commit_creates_anchor() {
     );
 
     let log_output = Command::new(oobo_binary())
-        .args(["anchors", "--agent"])
+        .args(["anchors", "--json"])
         .current_dir(tmp.path())
         .output()
         .unwrap();
 
     let stdout = String::from_utf8_lossy(&log_output.stdout);
-    assert!(log_output.status.success(), "oobo anchors --agent failed");
+    assert!(log_output.status.success(), "oobo anchors --json failed");
 
     let entries: Vec<serde_json::Value> =
-        serde_json::from_str(&stdout).expect("oobo anchors --agent should return valid JSON");
+        serde_json::from_str(&stdout).expect("oobo anchors --json should return valid JSON");
 
     assert_eq!(entries.len(), 1, "should have exactly 1 commit");
     assert_eq!(entries[0]["message"], "initial commit");

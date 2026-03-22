@@ -7,7 +7,7 @@ GitHub Release
 
 ### Git for agents (and humans).
 
-A transparent git decorator that enriches every commit with AI context: sessions, tokens, and code attribution. Humans use it like normal git. Agents use `--agent` for structured JSON. Anchor metadata always syncs via git; transcripts stay local unless you turn transparency on.
+A transparent git decorator that enriches every commit with AI context: sessions, tokens, and code attribution. Humans use it like normal git. Agents use `--agent` for compact output or `--json` for structured JSON. Anchor metadata always syncs via git; transcripts stay local unless you turn transparency on.
 
 [How It Works](#how-it-works) · [Install](#installation) · [Quick Start](#quick-start) · [For AI Agents](#for-ai-agents) · [Contributing](CONTRIBUTING.md)
 
@@ -140,7 +140,8 @@ The TUI shows source, model, tokens, duration, and title for each session. Selec
 For scripting and automation, session IDs (UUIDs) are available in JSON output. You can use a short prefix to reference them:
 
 ```bash
-oobo sessions list --agent             # get session IDs as JSON
+oobo sessions list --agent             # get session IDs (compact)
+oobo sessions list --json              # full JSON with all fields
 oobo sessions list --tool claude -n 10 # filter by tool, limit results
 oobo sessions show abc12def            # view by ID prefix
 oobo sessions search "auth" --all      # search across all projects
@@ -152,7 +153,7 @@ oobo sessions export abc12def --format md --out chat.md
 ```bash
 oobo anchors                     # commit history with AI context, attribution
 oobo anchors -n 20               # show last 20 commits
-oobo a --agent                   # JSON output (short alias)
+oobo a --agent                   # compact output (short alias)
 ```
 
 ### Analytics
@@ -247,31 +248,25 @@ oobo update --check              # only check, don't install
 
 Oobo is built for agents. Agents commit code constantly, across tools, often in parallel. Without oobo, there is no record of which agent wrote what, how many tokens it took, or which conversation produced a given function.
 
-### The --agent flag
+### Output modes
 
-Every command supports `--agent` for structured JSON output:
+Every command supports two structured output modes:
+
+- **`--agent`** — compact, pipe-delimited text. Lists have a schema header (`# field | field | ...`) then one record per line. Single objects use `key: value` pairs. Designed for minimal token cost.
+- **`--json`** — full structured JSON output for scripts and programmatic use.
 
 ```bash
-oobo sessions --agent                  # JSON list of sessions
-oobo sessions list --agent             # same (explicit subcommand)
-oobo sessions list --all --tool claude --agent  # filter + JSON
-oobo sessions show <id> --agent        # full conversation as JSON
-oobo sessions search <q> --agent       # search results as JSON
-oobo sessions export <id> --format json # export session as JSON
-oobo projects --agent                  # JSON list of projects
-oobo projects show <name> --agent      # project detail as JSON
-oobo anchors --agent                   # enriched commit history as JSON
-oobo stats --agent                     # analytics as structured data
-oobo card --agent                      # developer card as JSON
-oobo sources --agent                   # data source coverage as JSON
-oobo dash --agent                      # configuration overview as JSON
-oobo version --agent                   # version info as JSON
-oobo inspect --agent                   # diagnostics as machine-readable JSON
-oobo share <id> --agent                # redacted session as JSON
-oobo scan --agent                      # suppresses interactive output
+oobo sessions --agent                  # compact session list
+oobo sessions --json                   # full JSON with all fields
+oobo sessions show <id> --agent        # session summary (no messages)
+oobo sessions show <id> --json         # full conversation + messages as JSON
+oobo anchors --agent                   # compact commit log
+oobo anchors --json                    # full enriched history as JSON
+oobo stats --agent                     # compact stats
+oobo stats --json                      # full analytics as JSON
 ```
 
-`--agent` is a global flag. It works with any command at any position.
+Both are global flags. They work with any command at any position.
 
 ### Installing from an agent
 
@@ -284,7 +279,7 @@ The `--agent` flag on the installer suppresses colors and interactive prompts an
 
 ### Skill file
 
-Oobo installs a skill file at `~/.agents/skills/oobo/SKILL.md` during `oobo setup`. AI coding tools (Cursor, Claude Code, Codex, Gemini CLI, OpenCode) scan this path for skills. The skill file tells agents:
+Oobo installs a skill file at `~/.oobo/skills/oobo/SKILL.md` during `oobo setup`, with symlinks in `~/.agents/skills/oobo/`, `~/.claude/skills/oobo/`, `~/.codex/skills/oobo/`, `~/.cursor/skills/oobo/`, and `~/.gemini/skills/oobo/`. AI coding tools scan these paths for skills. The skill file tells agents:
 
 - How to check if oobo is installed (`command -v oobo`)
 - How to install it (`curl -fsSL https://oobo.ai/install.sh | bash -s -- --agent`)

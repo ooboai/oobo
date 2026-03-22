@@ -85,6 +85,15 @@ pub fn format_transcript(messages: &[Message], max_messages: u32, assistant_labe
     out
 }
 
+/// Sanitize a value for pipe-delimited agent output.
+/// Replaces `|` with `/` and collapses whitespace to single spaces.
+pub fn sanitize_pipe(s: &str) -> String {
+    s.replace('|', "/")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub fn print_json<T: serde::Serialize>(value: &T) {
     println!(
         "{}",
@@ -103,6 +112,26 @@ pub fn open_db_readonly(path: &Path) -> Result<rusqlite::Connection, rusqlite::E
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sanitize_pipe_no_pipes() {
+        assert_eq!(sanitize_pipe("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_sanitize_pipe_with_pipes() {
+        assert_eq!(sanitize_pipe("fix: handle X | Y case"), "fix: handle X / Y case");
+    }
+
+    #[test]
+    fn test_sanitize_pipe_collapses_whitespace() {
+        assert_eq!(sanitize_pipe("hello\n  world"), "hello world");
+    }
+
+    #[test]
+    fn test_sanitize_pipe_combined() {
+        assert_eq!(sanitize_pipe("a | b\nc"), "a / b c");
+    }
 
     #[test]
     fn test_truncate_name_short() {

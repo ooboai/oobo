@@ -1,11 +1,12 @@
 use std::io::IsTerminal;
 
+use crate::cli::OutputMode;
 use crate::db::Db;
 
 pub fn run(
     project: Option<String>,
     tool: Option<String>,
-    agent: bool,
+    mode: OutputMode,
     since: Option<String>,
 ) -> Result<(), String> {
     let db = Db::open()?;
@@ -35,9 +36,16 @@ pub fn run(
         )
     };
 
-    if agent {
-        print_json(&stats, &project, &tool);
-        return Ok(());
+    match mode {
+        OutputMode::Agent => {
+            print_agent(&db, &stats, &project, &tool, &scope_label);
+            return Ok(());
+        }
+        OutputMode::Json => {
+            print_json(&stats, &project, &tool);
+            return Ok(());
+        }
+        OutputMode::Tui => {}
     }
 
     if stats.session_count == 0 {
@@ -236,6 +244,57 @@ fn build_data_sources(
         sources.push((label, desc.to_string()));
     }
     sources
+}
+
+fn print_agent(
+    db: &Db,
+    stats: &crate::db::stats::AggregateStats,
+    project: &Option<String>,
+    tool: &Option<String>,
+    scope_label: &str,
+) {
+    let scope_label = crate::utils::sanitize_pipe(scope_label);
+    println!("scope: {scope_label}");
+    let total = stats.total_input_tokens + stats.total_output_tokens;
+    println!("sessions: {}", stats.session_count);
+    println!(
+        "tokens: {}/{}",
+        crate::tui::format_tokens(stats.total_input_tokens),
+        crate::tui::format_tokens(stats.total_output_tokens)
+    );
+    if total > 0 {
+        println!("total_tokens: {}", crate::tui::format_tokens(total));
+    }
+    if stats.total_duration_secs > 0 {
+        println!(
+            "duration: {}",
+            crate::tui::format_duration(stats.total_duration_secs)
+        );
+    }
+
+    if project.is_none() && tool.is_none() {
+        if let Ok(per_tool) = db.aggregate_stats_per_tool() {
+            if per_tool.len() > 1 {
+                println!("# tool | sessions | tokens");
+                for (source, s) in &per_tool {
+                    let t = s.total_input_tokens + s.total_output_tokens;
+                    println!(
+                        "{} | {} | {}",
+                        crate::tui::source_label(source),
+                        s.session_count,
+                        crate::tui::format_tokens(t),
+                    );
+                }
+            }
+        }
+
+        if let Ok(ai) = db.ai_code_percentage(None, None) {
+            if ai.total_commits > 0 {
+                println!("ai_code: {:.1}%", ai.ai_percentage);
+                println!("commits: {}", ai.total_commits);
+            }
+        }
+    }
 }
 
 fn print_json(

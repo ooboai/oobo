@@ -1,26 +1,22 @@
 use std::io::IsTerminal;
 
-use crate::cli::ProjectAction;
+use crate::cli::{OutputMode, ProjectAction};
 use crate::db::Db;
 
-pub fn run(action: ProjectAction, agent: bool) -> Result<(), String> {
+pub fn run(action: ProjectAction, mode: OutputMode) -> Result<(), String> {
     let db = Db::open()?;
 
     match action {
-        ProjectAction::List => {
-            if agent {
-                list_projects_json(&db)
-            } else {
-                list_projects(&db)
-            }
-        }
-        ProjectAction::Show { name } => {
-            if agent {
-                show_project_json(&db, &name)
-            } else {
-                show_project(&db, &name)
-            }
-        }
+        ProjectAction::List => match mode {
+            OutputMode::Agent => list_projects_agent(&db),
+            OutputMode::Json => list_projects_json(&db),
+            OutputMode::Tui => list_projects(&db),
+        },
+        ProjectAction::Show { name } => match mode {
+            OutputMode::Agent => show_project_agent(&db, &name),
+            OutputMode::Json => show_project_json(&db, &name),
+            OutputMode::Tui => show_project(&db, &name),
+        },
         ProjectAction::Forget { name } => forget_project(&db, &name),
     }
 }
@@ -115,6 +111,92 @@ fn print_plain(projects: &[crate::tui::projects::ProjectDisplay]) -> Result<(), 
         );
     }
     println!("\n{} project(s)", projects.len());
+    Ok(())
+}
+
+fn list_projects_agent(db: &Db) -> Result<(), String> {
+    let projects = db.list_projects()?;
+
+    println!("# name | sessions | tokens | path");
+    for p in &projects {
+        let session_count = db.count_sessions_by_project(&p.id).unwrap_or(0);
+        let stats = db.aggregate_stats_by_project(&p.id).unwrap_or_default();
+        let total = stats.total_input_tokens + stats.total_output_tokens;
+        let name = crate::utils::sanitize_pipe(&p.name);
+        println!(
+            "{} | {} | {} | {}",
+            name,
+            session_count,
+            crate::tui::format_tokens(total),
+            p.path,
+        );
+    }
+    Ok(())
+}
+
+fn show_project_agent(db: &Db, name: &str) -> Result<(), String> {
+    let project = find_project(db, name)?;
+    let session_count = db.count_sessions_by_project(&project.id).unwrap_or(0);
+    let stats = db.aggregate_stats_by_project(&project.id)?;
+    let tools: Vec<String> = project
+        .tools
+        .iter()
+        .map(|t| crate::tui::source_label(t).to_string())
+        .collect();
+    let total = stats.total_input_tokens + stats.total_output_tokens;
+
+    println!("name: {}", project.name);
+    println!("path: {}", project.path);
+    if let Some(ref remote) = project.git_remote {
+        println!("remote: {remote}");
+    }
+    println!("tools: {}", tools.join(", "));
+    println!("sessions: {session_count}");
+    println!(
+        "tokens: {}/{}",
+        crate::tui::format_tokens(stats.total_input_tokens),
+        crate::tui::format_tokens(stats.total_output_tokens)
+    );
+    if total > 0 {
+        println!("total_tokens: {}", crate::tui::format_tokens(total));
+    }
+    if stats.total_duration_secs > 0 {
+        println!(
+            "duration: {}",
+            crate::tui::format_duration(stats.total_duration_secs)
+        );
+    }
+
+    let sessions = db.list_sessions_by_project(&project.id)?;
+    if !sessions.is_empty() {
+        let total = sessions.len();
+        let shown = total.min(20);
+        if total > shown {
+            println!("# showing {shown} of {total} sessions");
+        }
+        println!("# session_id | source | name | updated");
+        for s in sessions.iter().take(20) {
+            let name_display = s.name.as_deref().unwrap_or("(untitled)");
+            let name = crate::utils::sanitize_pipe(&crate::utils::truncate_name(name_display, 50));
+            let updated = s
+                .updated_at
+                .map(|ts| {
+                    let secs = crate::utils::to_epoch_secs(ts);
+                    chrono::DateTime::from_timestamp(secs, 0)
+                        .map(|dt| dt.format("%Y-%m-%d").to_string())
+                        .unwrap_or_else(|| "—".to_string())
+                })
+                .unwrap_or_else(|| "—".to_string());
+            println!(
+                "{} | {} | {} | {}",
+                &s.id[..s.id.len().min(8)],
+                crate::tui::source_label(&s.source),
+                name,
+                updated,
+            );
+        }
+    }
+
     Ok(())
 }
 
