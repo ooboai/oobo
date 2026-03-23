@@ -532,7 +532,10 @@ mod tests {
         let root = "/Users/teddy/dev/projects/myapp";
         let input = format!("cd {root}/src && export TOKEN={sk}");
         let result = sanitize_for_public(&input, root);
-        assert!(!result.contains("/Users/teddy"), "absolute path should be stripped");
+        assert!(
+            !result.contains("/Users/teddy"),
+            "absolute path should be stripped"
+        );
         assert!(!result.contains(&sk), "secret should be redacted");
         assert!(result.contains("cd src"), "relative path should remain");
     }

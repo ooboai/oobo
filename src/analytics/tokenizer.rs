@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::sync::OnceLock;
 use tiktoken_rs::{cl100k_base, o200k_base, CoreBPE};
 
 /// Model families for selecting the appropriate tokenizer encoding.
@@ -26,14 +27,16 @@ pub fn detect_family(model: &str) -> ModelFamily {
     {
         return ModelFamily::O200k;
     }
-    // Default to cl100k — works well for Claude and GPT-4
     ModelFamily::Cl100k
 }
 
-fn get_bpe(family: ModelFamily) -> Option<CoreBPE> {
+static CL100K_BPE: OnceLock<Option<CoreBPE>> = OnceLock::new();
+static O200K_BPE: OnceLock<Option<CoreBPE>> = OnceLock::new();
+
+fn get_bpe(family: ModelFamily) -> Option<&'static CoreBPE> {
     match family {
-        ModelFamily::Cl100k => cl100k_base().ok(),
-        ModelFamily::O200k => o200k_base().ok(),
+        ModelFamily::Cl100k => CL100K_BPE.get_or_init(|| cl100k_base().ok()).as_ref(),
+        ModelFamily::O200k => O200K_BPE.get_or_init(|| o200k_base().ok()).as_ref(),
     }
 }
 
@@ -54,20 +57,28 @@ pub fn count_tokens_default(text: &str) -> u64 {
     count_tokens(text, ModelFamily::Cl100k)
 }
 
-/// Sum token counts for user messages in a conversation.
+pub fn is_input_role(role: &str) -> bool {
+    matches!(role, "user" | "system" | "tool" | "function" | "human")
+}
+
+pub fn is_output_role(role: &str) -> bool {
+    role == "assistant"
+}
+
+/// Sum token counts for input messages (user, system, tool, function).
 pub fn count_input_tokens(messages: &[(String, String)], family: ModelFamily) -> u64 {
     messages
         .iter()
-        .filter(|(role, _)| role == "user")
+        .filter(|(role, _)| is_input_role(role))
         .map(|(_, text)| count_tokens(text, family))
         .sum()
 }
 
-/// Sum token counts for assistant messages in a conversation.
+/// Sum token counts for output messages (assistant).
 pub fn count_output_tokens(messages: &[(String, String)], family: ModelFamily) -> u64 {
     messages
         .iter()
-        .filter(|(role, _)| role == "assistant")
+        .filter(|(role, _)| is_output_role(role))
         .map(|(_, text)| count_tokens(text, family))
         .sum()
 }
@@ -156,5 +167,46 @@ mod tests {
         assert!(input > 0);
         assert!(output > 0);
         assert!(output > input);
+    }
+
+    #[test]
+    fn test_system_and_tool_roles_counted_as_input() {
+        let messages = vec![
+            (
+                "system".to_string(),
+                "You are a helpful coding assistant.".to_string(),
+            ),
+            ("user".to_string(), "Read main.rs".to_string()),
+            ("assistant".to_string(), "I will read the file.".to_string()),
+            (
+                "tool".to_string(),
+                "fn main() { println!(\"hello\"); }".to_string(),
+            ),
+            (
+                "function".to_string(),
+                "File read successfully.".to_string(),
+            ),
+        ];
+
+        let input = count_input_tokens(&messages, ModelFamily::Cl100k);
+        let output = count_output_tokens(&messages, ModelFamily::Cl100k);
+
+        let user_only = count_tokens("Read main.rs", ModelFamily::Cl100k);
+        assert!(
+            input > user_only,
+            "input should include system + tool + function roles, not just user"
+        );
+        assert!(output > 0);
+    }
+
+    #[test]
+    fn test_human_role_counted_as_input() {
+        let messages = vec![
+            ("human".to_string(), "What is Rust?".to_string()),
+            ("assistant".to_string(), "A systems language.".to_string()),
+        ];
+
+        let input = count_input_tokens(&messages, ModelFamily::Cl100k);
+        assert!(input > 0, "human role should be counted as input");
     }
 }

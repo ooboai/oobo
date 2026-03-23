@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.12] - 2026-03-22
+## [0.1.12] - 2026-03-23
 
 ### Fixed
 
@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`file_interactions` absolute path leakage** — multi-agent file interaction paths are now sanitized before writing to the orphan branch or remote payload.
 - **Subagent `modified_files` not relativized** — `subagent-stop` hook events pushed file paths directly into `snapshot_session_files` without `make_relative()`, unlike `after-tool-use` which already did. Now consistent.
 - **Shared session path leakage** — `oobo share` now uses `sanitize_for_public()` (redact + strip paths) instead of just `redact()` on message text, preventing absolute paths from appearing in uploaded shared sessions.
+- **Token estimation missing on anchors** — `SessionLink` objects sent to the backend had `input_tokens: null` / `output_tokens: null` whenever native token counts weren't available (common for Cursor sessions). Anchors now include tiktoken-estimated token counts as a fallback, marked `is_estimated: true`. Estimates use the correct BPE encoding per model family (cl100k for Claude, o200k for GPT-4o/o1/o3).
+- **Token estimation undercounting by 20–60%** — `count_input_tokens` only counted `user` role messages, missing `system` prompts, `tool` results, and `function` outputs. All input-side roles are now counted.
+- **Inconsistent native token predicate** — `compute_session_stats` treated `Some(0)` as native data while the interceptor treated it as missing. Both paths now use `> 0` to decide whether native tokens are present, falling through to tiktoken when the tool reported zero.
+- **BPE tokenizer re-allocated per message** — `cl100k_base()` / `o200k_base()` were called per `count_tokens` invocation, allocating a new `CoreBPE` each time. Now cached in `OnceLock` statics — initialized once per process.
+- **Redundant state.vscdb reads at commit time** — Cursor sessions triggered up to 3 SQLite reads of the same row (bubble data, composerData for duration, composerData for messages). Composer data is now preloaded once alongside bubble data and passed through to all consumers.
 
 ### Changed
 

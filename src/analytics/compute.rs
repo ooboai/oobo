@@ -27,30 +27,30 @@ pub fn compute_session_stats(
     let native = native.unwrap_or_default();
     let model = native.model.clone();
 
-    let family = model
-        .as_deref()
-        .map(tokenizer::detect_family)
-        .unwrap_or(tokenizer::ModelFamily::Cl100k);
+    let has_native_tokens =
+        native.input_tokens.is_some_and(|v| v > 0) || native.output_tokens.is_some_and(|v| v > 0);
 
-    let pairs: Vec<(String, String)> = messages
-        .iter()
-        .map(|m| (m.role.clone(), m.text.clone()))
-        .collect();
-
-    let (input_tokens, output_tokens, token_source) =
-        if native.input_tokens.is_some() || native.output_tokens.is_some() {
-            (
-                native.input_tokens.unwrap_or(0),
-                native.output_tokens.unwrap_or(0),
-                "native",
-            )
-        } else if !messages.is_empty() {
-            let inp = tokenizer::count_input_tokens(&pairs, family);
-            let out = tokenizer::count_output_tokens(&pairs, family);
-            (inp, out, "tiktoken")
-        } else {
-            (0, 0, "unknown")
-        };
+    let (input_tokens, output_tokens, token_source) = if has_native_tokens {
+        (
+            native.input_tokens.unwrap_or(0),
+            native.output_tokens.unwrap_or(0),
+            "native",
+        )
+    } else if !messages.is_empty() {
+        let family = model
+            .as_deref()
+            .map(tokenizer::detect_family)
+            .unwrap_or(tokenizer::ModelFamily::Cl100k);
+        let pairs: Vec<(String, String)> = messages
+            .iter()
+            .map(|m| (m.role.clone(), m.text.clone()))
+            .collect();
+        let inp = tokenizer::count_input_tokens(&pairs, family);
+        let out = tokenizer::count_output_tokens(&pairs, family);
+        (inp, out, "tiktoken")
+    } else {
+        (0, 0, "unknown")
+    };
 
     let is_estimated = token_source != "native";
 
@@ -150,6 +150,39 @@ mod tests {
     #[test]
     fn test_compute_no_messages() {
         let stats = compute_session_stats("s3", "cursor", &[], None);
+        assert_eq!(stats.input_tokens, Some(0));
+        assert_eq!(stats.output_tokens, Some(0));
+        assert_eq!(stats.token_source, "unknown");
+    }
+
+    #[test]
+    fn test_compute_native_zero_falls_through_to_tiktoken() {
+        let messages = make_messages();
+        let native = NativeStats {
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            ..Default::default()
+        };
+
+        let stats = compute_session_stats("s4", "cursor", &messages, Some(native));
+        assert!(
+            stats.input_tokens.unwrap_or(0) > 0,
+            "Some(0) native should fall through to tiktoken"
+        );
+        assert!(stats.output_tokens.unwrap_or(0) > 0);
+        assert!(stats.is_estimated);
+        assert_eq!(stats.token_source, "tiktoken");
+    }
+
+    #[test]
+    fn test_compute_native_zero_no_messages() {
+        let native = NativeStats {
+            input_tokens: Some(0),
+            output_tokens: Some(0),
+            ..Default::default()
+        };
+
+        let stats = compute_session_stats("s5", "cursor", &[], Some(native));
         assert_eq!(stats.input_tokens, Some(0));
         assert_eq!(stats.output_tokens, Some(0));
         assert_eq!(stats.token_source, "unknown");

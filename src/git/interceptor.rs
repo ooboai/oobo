@@ -203,6 +203,7 @@ fn enrich_commit(
         .map(|s| s.session_id.clone())
         .collect();
     let bubble_data = crate::tools::cursor::composer_data::preload_bubble_data_for(&cursor_ids);
+    let composer_data = crate::tools::cursor::composer_data::preload_composer_data_for(&cursor_ids);
 
     let mut session_links: Vec<SessionLink> = active_sessions
         .iter()
@@ -213,7 +214,35 @@ fn enrich_commit(
                 .map(|(path, _)| path.clone())
                 .collect();
 
-            let native = extract_live_stats(&s.session_id, &s.agent, project_root, &bubble_data);
+            let native = extract_live_stats(
+                &s.session_id,
+                &s.agent,
+                project_root,
+                &bubble_data,
+                &composer_data,
+            );
+
+            let native_inp = native.as_ref().and_then(|n| n.input_tokens);
+            let native_out = native.as_ref().and_then(|n| n.output_tokens);
+            let has_native_tokens =
+                native_inp.is_some_and(|v| v > 0) || native_out.is_some_and(|v| v > 0);
+
+            let (final_input, final_output, is_estimated) = if has_native_tokens {
+                (native_inp, native_out, false)
+            } else {
+                let msgs = load_session_messages(
+                    &s.session_id,
+                    &s.agent,
+                    project_root,
+                    &bubble_data,
+                    &composer_data,
+                );
+                if let Some((inp, out)) = count_tokens_from_messages(&msgs, s.model.as_deref()) {
+                    (Some(inp), Some(out), true)
+                } else {
+                    (None, None, false)
+                }
+            };
 
             let duration_fallback = {
                 let elapsed = now_epoch - s.started_at;
@@ -229,8 +258,8 @@ fn enrich_commit(
                 agent: s.agent.clone(),
                 model: s.model.clone(),
                 link_type: LinkType::Explicit,
-                input_tokens: native.as_ref().and_then(|n| n.input_tokens),
-                output_tokens: native.as_ref().and_then(|n| n.output_tokens),
+                input_tokens: final_input,
+                output_tokens: final_output,
                 cache_read_tokens: native.as_ref().and_then(|n| n.cache_read_tokens),
                 cache_creation_tokens: native.as_ref().and_then(|n| n.cache_creation_tokens),
                 duration_secs: native
@@ -268,7 +297,7 @@ fn enrich_commit(
                 is_subagent: false,
                 parent_session_id: None,
                 subagent_type: None,
-                is_estimated: false,
+                is_estimated,
                 peer_session_ids: Vec::new(),
             }
         })
@@ -1343,6 +1372,10 @@ fn extract_live_stats(
         String,
         crate::tools::cursor::composer_data::BubbleSession,
     >,
+    preloaded_composer: &std::collections::HashMap<
+        String,
+        crate::tools::cursor::composer_data::ComposerSession,
+    >,
 ) -> Option<crate::analytics::NativeStats> {
     use crate::tools::cursor::composer_data;
 
@@ -1350,7 +1383,7 @@ fn extract_live_stats(
         if let Some(bubble) = bubble_data.get(session_id) {
             let mut stats = composer_data::native_stats_from_bubble(bubble);
             if stats.duration_secs.is_none() {
-                if let Some(cs) = composer_data::read_composer_data(session_id) {
+                if let Some(cs) = preloaded_composer.get(session_id) {
                     if let (Some(c), Some(u)) = (cs.created_at, cs.last_updated_at) {
                         if u > c {
                             stats.duration_secs = Some(((u - c) / 1000) as u64);
@@ -1360,8 +1393,8 @@ fn extract_live_stats(
             }
             return Some(stats);
         }
-        if let Some(stats) = composer_data::extract_native_stats(session_id) {
-            return Some(stats);
+        if let Some(cs) = preloaded_composer.get(session_id) {
+            return Some(composer_data::native_stats_from_session(cs));
         }
         return None;
     }
@@ -1405,6 +1438,72 @@ fn extract_live_stats(
     }
 
     None
+}
+
+/// Count tokens from a message slice using tiktoken. Iterates directly over
+/// the borrowed slice to avoid cloning message strings into intermediate pairs.
+fn count_tokens_from_messages(
+    messages: &[crate::core::message::Message],
+    model: Option<&str>,
+) -> Option<(u64, u64)> {
+    use crate::analytics::tokenizer;
+
+    if messages.is_empty() {
+        return None;
+    }
+
+    let family = model
+        .map(tokenizer::detect_family)
+        .unwrap_or(tokenizer::ModelFamily::Cl100k);
+    let inp: u64 = messages
+        .iter()
+        .filter(|m| tokenizer::is_input_role(&m.role))
+        .map(|m| tokenizer::count_tokens(&m.text, family))
+        .sum();
+    let out: u64 = messages
+        .iter()
+        .filter(|m| tokenizer::is_output_role(&m.role))
+        .map(|m| tokenizer::count_tokens(&m.text, family))
+        .sum();
+    if inp > 0 || out > 0 {
+        Some((inp, out))
+    } else {
+        None
+    }
+}
+
+/// Load conversation messages for a session, preferring already-loaded data.
+/// For Cursor: uses preloaded bubble data, falls back to preloaded composerData.
+/// For other agents: delegates to the tool registry's transcript parser.
+fn load_session_messages(
+    session_id: &str,
+    agent: &str,
+    project_root: &str,
+    bubble_data: &std::collections::HashMap<
+        String,
+        crate::tools::cursor::composer_data::BubbleSession,
+    >,
+    preloaded_composer: &std::collections::HashMap<
+        String,
+        crate::tools::cursor::composer_data::ComposerSession,
+    >,
+) -> Vec<crate::core::message::Message> {
+    if is_cursor_session(agent) {
+        if let Some(bs) = bubble_data.get(session_id) {
+            if !bs.messages.is_empty() {
+                return bs.messages.clone();
+            }
+        }
+        if let Some(cs) = preloaded_composer.get(session_id) {
+            if !cs.messages.is_empty() {
+                return cs.messages.clone();
+            }
+        }
+        Vec::new()
+    } else {
+        let source = crate::core::tool::normalize_source(agent);
+        crate::session::parse_messages_for_session(project_root, session_id, source)
+    }
 }
 
 /// Resolve the effective transparency mode for a project. Per-project settings
@@ -1539,5 +1638,202 @@ mod tests {
         let refs: Vec<&_> = sessions.iter().collect();
         let (interactions, _) = detect_file_interactions_refs(&refs, "/tmp");
         assert!(interactions.is_empty());
+    }
+
+    #[test]
+    fn test_count_tokens_from_messages_with_bubble_data() {
+        use crate::core::message::Message;
+        use crate::tools::cursor::composer_data::BubbleSession;
+
+        let mut bubble_data = std::collections::HashMap::new();
+        bubble_data.insert(
+            "test-session".to_string(),
+            BubbleSession {
+                messages: vec![
+                    Message {
+                        role: "user".to_string(),
+                        text: "How do I implement a binary search in Rust?".to_string(),
+                        timestamp_ms: Some(1000),
+                    },
+                    Message {
+                        role: "assistant".to_string(),
+                        text: "Here is a binary search implementation in Rust using iterators and pattern matching for clean, idiomatic code.".to_string(),
+                        timestamp_ms: Some(2000),
+                    },
+                ],
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+                files_touched: Vec::new(),
+                code_block_count: 0,
+                tool_call_count: 0,
+                is_agentic: true,
+            },
+        );
+
+        let composer_data = std::collections::HashMap::new();
+        let msgs = load_session_messages(
+            "test-session",
+            "cursor",
+            "/tmp/project",
+            &bubble_data,
+            &composer_data,
+        );
+        let result = count_tokens_from_messages(&msgs, None);
+        assert!(result.is_some(), "should produce tiktoken estimates");
+        let (inp, out) = result.unwrap();
+        assert!(inp > 0, "input tokens should be > 0");
+        assert!(out > 0, "output tokens should be > 0");
+    }
+
+    #[test]
+    fn test_count_tokens_from_messages_with_model() {
+        use crate::core::message::Message;
+
+        let messages = vec![
+            Message {
+                role: "user".to_string(),
+                text: "What is Rust programming language?".to_string(),
+                timestamp_ms: None,
+            },
+            Message {
+                role: "assistant".to_string(),
+                text: "Rust is a systems programming language focused on safety and performance."
+                    .to_string(),
+                timestamp_ms: None,
+            },
+        ];
+
+        let result_cl100k = count_tokens_from_messages(&messages, Some("claude-sonnet-4"));
+        let result_o200k = count_tokens_from_messages(&messages, Some("gpt-4o"));
+        assert!(result_cl100k.is_some());
+        assert!(result_o200k.is_some());
+        let (inp1, out1) = result_cl100k.unwrap();
+        let (inp2, out2) = result_o200k.unwrap();
+        assert!(inp1 > 0 && out1 > 0);
+        assert!(inp2 > 0 && out2 > 0);
+    }
+
+    #[test]
+    fn test_load_session_messages_empty_bubble() {
+        let mut bubble_data = std::collections::HashMap::new();
+        bubble_data.insert(
+            "empty-session".to_string(),
+            crate::tools::cursor::composer_data::BubbleSession::default(),
+        );
+        let composer_data = std::collections::HashMap::new();
+
+        let msgs = load_session_messages(
+            "empty-session",
+            "cursor",
+            "/tmp/project",
+            &bubble_data,
+            &composer_data,
+        );
+        let result = count_tokens_from_messages(&msgs, None);
+        assert!(result.is_none(), "empty messages should return None");
+    }
+
+    #[test]
+    fn test_load_session_messages_unknown_session() {
+        let bubble_data = std::collections::HashMap::new();
+        let composer_data = std::collections::HashMap::new();
+        let msgs = load_session_messages(
+            "nonexistent-session",
+            "cursor",
+            "/tmp/project",
+            &bubble_data,
+            &composer_data,
+        );
+        let result = count_tokens_from_messages(&msgs, None);
+        assert!(result.is_none(), "unknown session should return None");
+    }
+
+    #[test]
+    fn test_load_session_messages_falls_back_to_composer_data() {
+        use crate::core::message::Message;
+        use crate::tools::cursor::composer_data::ComposerSession;
+
+        let bubble_data = std::collections::HashMap::new();
+        let mut composer_data = std::collections::HashMap::new();
+        composer_data.insert(
+            "composer-session".to_string(),
+            ComposerSession {
+                composer_id: "composer-session".to_string(),
+                name: "test".to_string(),
+                mode: "agent".to_string(),
+                status: "done".to_string(),
+                created_at: Some(1000),
+                last_updated_at: Some(2000),
+                messages: vec![
+                    Message {
+                        role: "user".to_string(),
+                        text: "Help me write a function".to_string(),
+                        timestamp_ms: Some(1000),
+                    },
+                    Message {
+                        role: "assistant".to_string(),
+                        text: "Here is a function implementation.".to_string(),
+                        timestamp_ms: Some(1500),
+                    },
+                ],
+                files_touched: Vec::new(),
+                code_block_count: 0,
+                is_agentic: true,
+            },
+        );
+
+        let msgs = load_session_messages(
+            "composer-session",
+            "cursor",
+            "/tmp/project",
+            &bubble_data,
+            &composer_data,
+        );
+        assert!(!msgs.is_empty(), "should load messages from composer data");
+        let result = count_tokens_from_messages(&msgs, None);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_count_tokens_includes_system_and_tool_roles() {
+        use crate::core::message::Message;
+
+        let messages = vec![
+            Message {
+                role: "system".to_string(),
+                text: "You are a helpful coding assistant with access to tools.".to_string(),
+                timestamp_ms: None,
+            },
+            Message {
+                role: "user".to_string(),
+                text: "Read the file".to_string(),
+                timestamp_ms: None,
+            },
+            Message {
+                role: "assistant".to_string(),
+                text: "Reading the file now.".to_string(),
+                timestamp_ms: None,
+            },
+            Message {
+                role: "tool".to_string(),
+                text: "fn main() { println!(\"hello world\"); }".to_string(),
+                timestamp_ms: None,
+            },
+        ];
+
+        let result = count_tokens_from_messages(&messages, None);
+        assert!(result.is_some());
+        let (inp, _out) = result.unwrap();
+        let user_only_msgs = vec![Message {
+            role: "user".to_string(),
+            text: "Read the file".to_string(),
+            timestamp_ms: None,
+        }];
+        let user_only = count_tokens_from_messages(&user_only_msgs, None);
+        let (user_inp, _) = user_only.unwrap();
+        assert!(
+            inp > user_inp,
+            "input tokens should include system + tool, not just user"
+        );
     }
 }
