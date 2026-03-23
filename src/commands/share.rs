@@ -61,7 +61,7 @@ pub fn run(
         .iter()
         .map(|m| SharedMessage {
             role: m.role.clone(),
-            text: crate::redact::redact(&m.text),
+            text: crate::redact::sanitize_for_public(&m.text, &session.project_path),
         })
         .collect();
 

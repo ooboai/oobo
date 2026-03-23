@@ -306,7 +306,9 @@ pub fn handle_event(
                         if let Some(files_arr) = files_val.as_array() {
                             let files: Vec<String> = files_arr
                                 .iter()
-                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .filter_map(|v| v.as_str())
+                                .map(|s| make_relative(s, &project_root))
+                                .filter(|s| !s.starts_with('/') && !s.starts_with(".."))
                                 .collect();
                             if !files.is_empty() {
                                 let _ = state::snapshot_session_files(&project_root, sid, &files);

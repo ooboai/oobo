@@ -3,7 +3,7 @@ name: oobo
 description: AI development control plane. Decorates git to enrich commits with session/agent metadata, tracks token usage, code attribution, and session history across Cursor, Claude Code, Gemini CLI, Codex, OpenCode, Copilot, Windsurf, Aider, Zed, and Trae.
 metadata:
   author: oobo
-  version: "0.1.11"
+  version: "0.1.12"
 install:
   check: command -v oobo
   run: curl -fsSL https://oobo.ai/install.sh | bash -s -- --agent

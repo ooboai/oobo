@@ -13,6 +13,71 @@ pub fn redact(text: &str) -> String {
     redact_basic(text)
 }
 
+/// Full sanitization for any string that will be publicly visible
+/// (orphan branch, remote payload, shared sessions).
+/// Applies secret redaction first, then strips absolute paths.
+pub fn sanitize_for_public(text: &str, project_root: &str) -> String {
+    let redacted = redact(text);
+    strip_absolute_paths(&redacted, project_root)
+}
+
+/// Replace absolute paths containing the project root with repo-relative paths.
+/// Also strips the user's home directory from any remaining absolute paths.
+pub fn strip_absolute_paths(text: &str, project_root: &str) -> String {
+    let mut result = text.to_string();
+
+    if !project_root.is_empty() {
+        let root_slash = if project_root.ends_with('/') {
+            project_root.to_string()
+        } else {
+            format!("{project_root}/")
+        };
+        result = result.replace(&root_slash, "");
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let home_str = home.to_string_lossy();
+        let home_slash = format!("{home_str}/");
+        result = result.replace(&home_slash, "~/");
+    }
+
+    result
+}
+
+/// Strip absolute paths from a file path string, returning a relative path.
+/// Unlike `strip_absolute_paths` which does text replacement, this handles
+/// a single path value — stripping the project root or replacing the home
+/// directory prefix.
+pub fn sanitize_path(path: &str, project_root: &str) -> String {
+    if !path.starts_with('/') {
+        return path.to_string();
+    }
+
+    if !project_root.is_empty() {
+        let root_slash = if project_root.ends_with('/') {
+            project_root.to_string()
+        } else {
+            format!("{project_root}/")
+        };
+        if path.starts_with(&root_slash) {
+            return path[root_slash.len()..].to_string();
+        }
+        if path == project_root {
+            return ".".to_string();
+        }
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        let home_str = home.to_string_lossy();
+        let home_slash = format!("{home_str}/");
+        if path.starts_with(home_slash.as_str()) {
+            return format!("~/{}", &path[home_slash.len()..]);
+        }
+    }
+
+    path.to_string()
+}
+
 /// Check if gitleaks is installed.
 pub fn gitleaks_available() -> bool {
     Command::new("gitleaks")
@@ -389,5 +454,94 @@ mod tests {
             !redacted.contains(&aws_key),
             "gitleaks should redact AWS key"
         );
+    }
+
+    // ── strip_absolute_paths tests ──
+
+    #[test]
+    fn test_strip_absolute_paths_project_root() {
+        let root = "/Users/teddy/dev/projects/trender";
+        let input = "cd /Users/teddy/dev/projects/trender/src && cargo build";
+        let result = strip_absolute_paths(input, root);
+        assert_eq!(result, "cd src && cargo build");
+    }
+
+    #[test]
+    fn test_strip_absolute_paths_home_fallback() {
+        let root = "/Users/teddy/dev/projects/myapp";
+        let home = dirs::home_dir().unwrap();
+        let home_str = home.to_string_lossy();
+        let input = format!("ls {home_str}/.config/something");
+        let result = strip_absolute_paths(&input, root);
+        assert_eq!(result, "ls ~/.config/something");
+    }
+
+    #[test]
+    fn test_strip_absolute_paths_no_change_for_relative() {
+        let root = "/Users/teddy/dev/projects/myapp";
+        let input = "cargo test --release";
+        let result = strip_absolute_paths(input, root);
+        assert_eq!(result, "cargo test --release");
+    }
+
+    #[test]
+    fn test_strip_absolute_paths_empty_root() {
+        let input = "ls /some/path";
+        let result = strip_absolute_paths(input, "");
+        assert!(result.contains("/some/path"));
+    }
+
+    // ── sanitize_path tests ──
+
+    #[test]
+    fn test_sanitize_path_absolute_under_project() {
+        let root = "/Users/teddy/dev/projects/myapp";
+        let path = "/Users/teddy/dev/projects/myapp/src/lib.rs";
+        assert_eq!(sanitize_path(path, root), "src/lib.rs");
+    }
+
+    #[test]
+    fn test_sanitize_path_relative_passthrough() {
+        let root = "/Users/teddy/dev/projects/myapp";
+        let path = "src/lib.rs";
+        assert_eq!(sanitize_path(path, root), "src/lib.rs");
+    }
+
+    #[test]
+    fn test_sanitize_path_home_fallback() {
+        let root = "/Users/teddy/dev/projects/myapp";
+        let home = dirs::home_dir().unwrap();
+        let home_str = home.to_string_lossy();
+        let path = format!("{home_str}/.config/other.toml");
+        let result = sanitize_path(&path, root);
+        assert_eq!(result, "~/.config/other.toml");
+    }
+
+    #[test]
+    fn test_sanitize_path_unrelated_absolute() {
+        let root = "/Users/teddy/dev/projects/myapp";
+        let path = "/etc/hosts";
+        assert_eq!(sanitize_path(path, root), "/etc/hosts");
+    }
+
+    // ── sanitize_for_public tests ──
+
+    #[test]
+    fn test_sanitize_for_public_strips_paths_and_secrets() {
+        let sk = format!("{}abcdefghij1234567890", "sk_live_");
+        let root = "/Users/teddy/dev/projects/myapp";
+        let input = format!("cd {root}/src && export TOKEN={sk}");
+        let result = sanitize_for_public(&input, root);
+        assert!(!result.contains("/Users/teddy"), "absolute path should be stripped");
+        assert!(!result.contains(&sk), "secret should be redacted");
+        assert!(result.contains("cd src"), "relative path should remain");
+    }
+
+    #[test]
+    fn test_sanitize_for_public_clean_text() {
+        let root = "/Users/teddy/dev/projects/myapp";
+        let input = "cargo build --release";
+        let result = sanitize_for_public(input, root);
+        assert_eq!(result, input);
     }
 }

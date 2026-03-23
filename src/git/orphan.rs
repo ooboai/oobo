@@ -141,25 +141,9 @@ fn build_timeline_json(
     serde_json::to_string_pretty(&timeline).map_err(|e| format!("serialize timeline: {e}"))
 }
 
-/// Replace absolute paths containing the project root with repo-relative paths.
-/// Also strips the user's home directory from any remaining absolute paths.
+/// Delegate to the shared implementation in `redact` module.
 fn strip_absolute_paths(text: &str, project_root: &str) -> String {
-    let mut result = text.to_string();
-
-    let root_slash = if project_root.ends_with('/') {
-        project_root.to_string()
-    } else {
-        format!("{project_root}/")
-    };
-    result = result.replace(&root_slash, "");
-
-    if let Some(home) = dirs::home_dir() {
-        let home_str = home.to_string_lossy();
-        let home_slash = format!("{home_str}/");
-        result = result.replace(&home_slash, "~/");
-    }
-
-    result
+    crate::redact::strip_absolute_paths(text, project_root)
 }
 
 pub fn read_anchor(project_root: &str, commit_hash: &str) -> Option<Anchor> {

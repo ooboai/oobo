@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.12] - 2026-03-22
+
+### Fixed
+
+- **Privacy: absolute path leakage in public metadata** — `bash_commands` on the orphan branch and remote payload contained raw absolute paths (e.g. `/Users/teddy/dev/projects/...`), leaking usernames and directory structures on public repos. All publicly-visible fields now run through `sanitize_for_public()` which strips project root paths, replaces home directory with `~/`, and redacts secrets via gitleaks.
+- **`files_touched` absolute path leakage** — `file_snapshots` keys from subagent `modified_files` could carry absolute paths into `SessionLink.files_touched`. Now sanitized with `sanitize_path()` before serialization.
+- **`file_interactions` absolute path leakage** — multi-agent file interaction paths are now sanitized before writing to the orphan branch or remote payload.
+- **Subagent `modified_files` not relativized** — `subagent-stop` hook events pushed file paths directly into `snapshot_session_files` without `make_relative()`, unlike `after-tool-use` which already did. Now consistent.
+- **Shared session path leakage** — `oobo share` now uses `sanitize_for_public()` (redact + strip paths) instead of just `redact()` on message text, preventing absolute paths from appearing in uploaded shared sessions.
+
+### Changed
+
+- **`strip_absolute_paths` consolidated** — moved from a private function in `orphan.rs` to a shared public function in `redact/mod.rs`, alongside new `sanitize_for_public()` and `sanitize_path()` helpers. All public-facing serialization paths use the shared implementation.
+
 ## [0.1.11] - 2026-03-22
 
 ### Added
@@ -236,6 +250,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI/CD pipeline**: multi-platform testing (Ubuntu, macOS, Debian, Alpine) and 6-target release builds
 - **Dual license**: Apache 2.0 and MIT
 
+[0.1.12]: https://github.com/ooboai/oobo/compare/v0.1.11...v0.1.12
 [0.1.6]: https://github.com/ooboai/oobo/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/ooboai/oobo/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/ooboai/oobo/compare/v0.1.3...v0.1.4

@@ -244,7 +244,12 @@ fn enrich_commit(
                 files_touched: if touched.is_empty() {
                     None
                 } else {
-                    Some(touched)
+                    Some(
+                        touched
+                            .into_iter()
+                            .map(|p| redact::sanitize_path(&p, project_root))
+                            .collect(),
+                    )
                 },
                 tool_usage: s.tool_usage.clone(),
                 tool_failures: s.tool_failures,
@@ -253,10 +258,11 @@ fn enrich_commit(
                     .as_ref()
                     .map(|r| r.len() as u32)
                     .filter(|&c| c > 0),
-                bash_commands: s
-                    .bash_commands
-                    .as_ref()
-                    .map(|cmds| cmds.iter().map(|c| redact::redact(c)).collect()),
+                bash_commands: s.bash_commands.as_ref().map(|cmds| {
+                    cmds.iter()
+                        .map(|c| redact::sanitize_for_public(c, project_root))
+                        .collect()
+                }),
                 thinking_duration_ms: s.thinking_duration_ms,
                 compact_count: s.compact_count,
                 is_subagent: false,
@@ -279,8 +285,15 @@ fn enrich_commit(
         .iter()
         .filter(|s| !subagent_ids.contains(&s.session_id))
         .collect();
-    let (file_interactions, peer_map) =
+    let (raw_file_interactions, peer_map) =
         detect_file_interactions_refs(&top_level_sessions, project_root);
+    let file_interactions: Vec<_> = raw_file_interactions
+        .into_iter()
+        .map(|mut fi| {
+            fi.path = redact::sanitize_path(&fi.path, project_root);
+            fi
+        })
+        .collect();
     for link in session_links.iter_mut() {
         if let Some(peers) = peer_map.get(&link.session_id) {
             link.peer_session_ids = peers.clone();
@@ -686,8 +699,9 @@ fn collect_ai_files_touched(
         // exactly which files the agent edited. Check these first.
         if let Some(ref snapshots) = session.file_snapshots {
             for file in snapshots.keys() {
-                if seen.insert(file.clone()) {
-                    result.push((file.clone(), session.agent.clone()));
+                let normalized = normalize_path(file, project_root);
+                if seen.insert(normalized.clone()) {
+                    result.push((normalized, session.agent.clone()));
                 }
             }
         }
