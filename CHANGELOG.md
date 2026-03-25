@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.13] - 2026-03-25
+
+### Fixed
+
+- **Session stats never refreshed for active sessions** — once a session was indexed, its token counts, duration, and file stats were never recomputed even if the user kept chatting. All code paths (`oobo sessions`, `oobo index`, `oobo scan`) now detect stale stats by comparing `updated_at` against `computed_at` and re-index automatically.
+- **TUI and inline indexers only processed sessions with no stats** — sessions with outdated stats were silently skipped. Both the inline indexer (agent/JSON mode, capped at 20) and the TUI background indexer (capped at 100) now also re-index stale sessions.
+- **Stale stats reload discarded fresh data** — after re-indexing, `stats_map.entry().or_insert()` would keep the old entry; changed to `insert()` so refreshed stats actually replace stale ones.
+
+### Changed
+
+- **`StatsRow::is_stale()` method** — staleness logic moved from a standalone function in `commands::sessions` to a method on `StatsRow`, reducing coupling and making it testable without a full `Session` struct.
+- **Shared SQL timestamp normalization** — the `CASE WHEN` expression that normalizes `updated_at` (seconds/millis/micros) to epoch seconds is now a constant (`UPDATED_AT_EPOCH_SECS_SQL`) shared between both DB queries, preventing drift with the Rust-side `to_epoch_secs()`.
+- **Targeted stats reload** — after inline re-indexing, only the affected sessions are reloaded via individual `get_stats()` calls instead of fetching the entire `session_stats` table.
+
 ## [0.1.12] - 2026-03-23
 
 ### Fixed

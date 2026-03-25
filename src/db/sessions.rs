@@ -125,19 +125,23 @@ impl Db {
         collect_rows(rows)
     }
 
-    /// Return only sessions that don't have stats yet — avoids loading and
-    /// checking thousands of already-indexed sessions in application code.
+    /// Return sessions that need indexing: either no stats yet, or stats are
+    /// stale (session updated after stats were computed).
+    /// The staleness SQL mirrors [`super::stats::StatsRow::is_stale`].
     pub fn list_unindexed_sessions(&self) -> Result<Vec<SessionRow>, String> {
+        let sql = format!(
+            "SELECT s.id, s.source, s.project_id, s.name, s.mode, s.model,
+                    s.created_at, s.updated_at, s.message_count, s.first_message, s.indexed_at
+             FROM sessions s
+             LEFT JOIN session_stats ss ON s.id = ss.session_id AND s.source = ss.source
+             WHERE ss.session_id IS NULL
+                OR (s.updated_at IS NOT NULL AND {expr} > ss.computed_at)
+             ORDER BY COALESCE(s.updated_at, s.created_at) DESC",
+            expr = super::stats::UPDATED_AT_EPOCH_SECS_SQL,
+        );
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT s.id, s.source, s.project_id, s.name, s.mode, s.model,
-                        s.created_at, s.updated_at, s.message_count, s.first_message, s.indexed_at
-                 FROM sessions s
-                 LEFT JOIN session_stats ss ON s.id = ss.session_id AND s.source = ss.source
-                 WHERE ss.session_id IS NULL
-                 ORDER BY COALESCE(s.updated_at, s.created_at) DESC",
-            )
+            .prepare(&sql)
             .map_err(|e| format!("cannot prepare: {e}"))?;
 
         let rows = stmt
@@ -147,21 +151,27 @@ impl Db {
         collect_rows(rows)
     }
 
-    /// Return only sessions for a project that don't have stats yet.
+    /// Return sessions for a project that need indexing: either no stats yet,
+    /// or stats are stale.
+    /// The staleness SQL mirrors [`super::stats::StatsRow::is_stale`].
     pub fn list_unindexed_sessions_by_project(
         &self,
         project_id: &str,
     ) -> Result<Vec<SessionRow>, String> {
+        let sql = format!(
+            "SELECT s.id, s.source, s.project_id, s.name, s.mode, s.model,
+                    s.created_at, s.updated_at, s.message_count, s.first_message, s.indexed_at
+             FROM sessions s
+             LEFT JOIN session_stats ss ON s.id = ss.session_id AND s.source = ss.source
+             WHERE s.project_id = ?1
+               AND (ss.session_id IS NULL
+                    OR (s.updated_at IS NOT NULL AND {expr} > ss.computed_at))
+             ORDER BY COALESCE(s.updated_at, s.created_at) DESC",
+            expr = super::stats::UPDATED_AT_EPOCH_SECS_SQL,
+        );
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT s.id, s.source, s.project_id, s.name, s.mode, s.model,
-                        s.created_at, s.updated_at, s.message_count, s.first_message, s.indexed_at
-                 FROM sessions s
-                 LEFT JOIN session_stats ss ON s.id = ss.session_id AND s.source = ss.source
-                 WHERE s.project_id = ?1 AND ss.session_id IS NULL
-                 ORDER BY COALESCE(s.updated_at, s.created_at) DESC",
-            )
+            .prepare(&sql)
             .map_err(|e| format!("cannot prepare: {e}"))?;
 
         let rows = stmt
@@ -354,6 +364,7 @@ mod tests {
             model: Some("gpt-4o".into()),
             input_tokens: Some(100),
             output_tokens: Some(50),
+            computed_at: 3000,
             ..Default::default()
         })
         .unwrap();
@@ -424,5 +435,66 @@ mod tests {
         let claude = db.get_session("session-abc", "claude").unwrap().unwrap();
         assert_eq!(cursor.name.as_deref(), Some("cursor session"));
         assert_eq!(claude.name.as_deref(), Some("claude session"));
+    }
+
+    #[test]
+    fn test_list_unindexed_sessions_returns_stale() {
+        let db = test_db();
+        db.upsert_session(&sample_session()).unwrap();
+
+        use crate::db::stats::StatsRow;
+        db.upsert_stats(&StatsRow {
+            session_id: "session-abc".into(),
+            source: "cursor".into(),
+            model: Some("gpt-4o".into()),
+            input_tokens: Some(100),
+            output_tokens: Some(50),
+            computed_at: 1500,
+            ..Default::default()
+        })
+        .unwrap();
+
+        // Session updated_at (2000) > stats computed_at (1500) → stale
+        let unindexed = db.list_unindexed_sessions().unwrap();
+        assert_eq!(unindexed.len(), 1);
+        assert_eq!(unindexed[0].id, "session-abc");
+    }
+
+    #[test]
+    fn test_list_unindexed_sessions_by_project_returns_stale() {
+        let db = test_db();
+        db.upsert_session(&sample_session()).unwrap();
+
+        use crate::db::stats::StatsRow;
+        db.upsert_stats(&StatsRow {
+            session_id: "session-abc".into(),
+            source: "cursor".into(),
+            input_tokens: Some(100),
+            output_tokens: Some(50),
+            computed_at: 1500,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let unindexed = db
+            .list_unindexed_sessions_by_project("test-project")
+            .unwrap();
+        assert_eq!(unindexed.len(), 1);
+
+        // Non-stale after re-computing with fresh timestamp
+        db.upsert_stats(&StatsRow {
+            session_id: "session-abc".into(),
+            source: "cursor".into(),
+            input_tokens: Some(200),
+            output_tokens: Some(100),
+            computed_at: 3000,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let unindexed = db
+            .list_unindexed_sessions_by_project("test-project")
+            .unwrap();
+        assert!(unindexed.is_empty());
     }
 }

@@ -559,8 +559,6 @@ fn export(id: &str, format: &str, out: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// Index sessions that have no stats yet (blocking).
-/// Capped at 20 to avoid blocking JSON/agent output for too long.
 const INLINE_INDEX_CAP: usize = 20;
 
 /// Compute peer_session_ids for each session by comparing file interactions.
@@ -621,24 +619,37 @@ fn compute_peer_map(
     all_peers
 }
 
+/// Index sessions that have no stats or stale stats (blocking).
+/// Capped at [`INLINE_INDEX_CAP`] to avoid blocking JSON/agent output.
 fn index_missing_sessions(
     sessions: &[crate::tools::cursor::Session],
     stats_map: &mut std::collections::HashMap<(String, String), crate::db::stats::StatsRow>,
 ) {
-    let missing: Vec<_> = sessions
+    let needs_index: Vec<_> = sessions
         .iter()
         .filter(|s| {
-            !s.project_path.is_empty()
-                && !stats_map.contains_key(&(s.session_id.clone(), s.source.clone()))
+            if s.project_path.is_empty() {
+                return false;
+            }
+            let key = (s.session_id.clone(), s.source.clone());
+            match stats_map.get(&key) {
+                None => true,
+                Some(st) => st.is_stale(s.updated_at),
+            }
         })
         .take(INLINE_INDEX_CAP)
         .collect();
 
-    if missing.is_empty() {
+    if needs_index.is_empty() {
         return;
     }
 
-    for s in &missing {
+    let indexed_keys: Vec<(String, String)> = needs_index
+        .iter()
+        .map(|s| (s.session_id.clone(), s.source.clone()))
+        .collect();
+
+    for s in &needs_index {
         if let Err(e) = crate::commands::index::index_single_session(
             &s.session_id,
             &s.source,
@@ -652,11 +663,11 @@ fn index_missing_sessions(
         }
     }
 
-    // Reload stats for the newly indexed sessions.
+    // Reload stats only for the sessions we just re-indexed.
     if let Ok(db) = Db::open() {
-        if let Ok(fresh) = db.get_stats_bulk(&[]) {
-            for (key, val) in fresh {
-                stats_map.entry(key).or_insert(val);
+        for (sid, source) in &indexed_keys {
+            if let Ok(Some(fresh)) = db.get_stats(sid, source) {
+                stats_map.insert((sid.clone(), source.clone()), fresh);
             }
         }
     }
@@ -690,6 +701,7 @@ mod tests {
                 model: Some("claude-opus-4".to_string()),
                 input_tokens: Some(1000),
                 output_tokens: Some(2000),
+                computed_at: 3000,
                 ..Default::default()
             },
         );

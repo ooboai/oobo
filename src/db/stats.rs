@@ -21,6 +21,27 @@ pub struct StatsRow {
     pub computed_at: i64,
 }
 
+impl StatsRow {
+    /// Returns `true` when the session was updated after these stats were computed.
+    /// Mirrors the SQL staleness check in [`UPDATED_AT_EPOCH_SECS_SQL`].
+    pub fn is_stale(&self, updated_at: Option<i64>) -> bool {
+        if let Some(updated) = updated_at {
+            let updated_secs = crate::utils::to_epoch_secs(updated);
+            updated_secs > self.computed_at
+        } else {
+            false
+        }
+    }
+}
+
+/// SQL expression that normalizes `s.updated_at` (which may be in seconds,
+/// milliseconds, or microseconds) to epoch seconds.
+/// Must stay in sync with [`crate::utils::to_epoch_secs`] and [`StatsRow::is_stale`].
+pub const UPDATED_AT_EPOCH_SECS_SQL: &str =
+    "CASE WHEN s.updated_at >= 1000000000000000 THEN s.updated_at / 1000000 \
+          WHEN s.updated_at >= 1000000000000 THEN s.updated_at / 1000 \
+          ELSE s.updated_at END";
+
 /// Aggregated statistics across multiple sessions.
 #[derive(Debug, Clone, Default)]
 pub struct AggregateStats {
@@ -676,5 +697,51 @@ mod tests {
         let daily = db.daily_stats(30).unwrap();
         assert_eq!(daily.len(), 1);
         assert_eq!(daily[0].1.total_input_tokens, 15000);
+    }
+
+    #[test]
+    fn test_is_stale_newer_updated_at() {
+        let stats = StatsRow {
+            computed_at: 3000,
+            ..Default::default()
+        };
+        assert!(stats.is_stale(Some(5000)));
+    }
+
+    #[test]
+    fn test_is_stale_older_updated_at() {
+        let stats = StatsRow {
+            computed_at: 3000,
+            ..Default::default()
+        };
+        assert!(!stats.is_stale(Some(2000)));
+    }
+
+    #[test]
+    fn test_is_stale_equal_timestamps() {
+        let stats = StatsRow {
+            computed_at: 3000,
+            ..Default::default()
+        };
+        assert!(!stats.is_stale(Some(3000)));
+    }
+
+    #[test]
+    fn test_is_stale_none_updated_at() {
+        let stats = StatsRow {
+            computed_at: 3000,
+            ..Default::default()
+        };
+        assert!(!stats.is_stale(None));
+    }
+
+    #[test]
+    fn test_is_stale_millis_normalization() {
+        let stats = StatsRow {
+            computed_at: 1700000000,
+            ..Default::default()
+        };
+        // 1700000001000 ms → 1700000001 secs, which is > 1700000000
+        assert!(stats.is_stale(Some(1700000001000)));
     }
 }

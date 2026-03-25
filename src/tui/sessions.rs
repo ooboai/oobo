@@ -13,6 +13,9 @@ use crate::db::Db;
 use crate::session;
 use crate::tools::cursor::Session;
 
+/// Cap background re-indexing to avoid a burst of work after upgrades or gaps.
+const TUI_BG_INDEX_CAP: usize = 100;
+
 struct SessionRow {
     session: Session,
     #[allow(dead_code)]
@@ -64,7 +67,11 @@ pub fn run_list(sessions: Vec<Session>, show_all: bool) -> Result<(), String> {
 
     let needs_indexing: Vec<(String, String, String)> = rows
         .iter()
-        .filter(|r| r.stats.is_none())
+        .filter(|r| match &r.stats {
+            None => true,
+            Some(st) => st.is_stale(r.session.updated_at),
+        })
+        .take(TUI_BG_INDEX_CAP)
         .map(|r| {
             (
                 r.session.session_id.clone(),
