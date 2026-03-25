@@ -331,7 +331,7 @@ pub fn parse_rich_transcript_lines<'a>(
                         messages.push(TranscriptMessage {
                             role: "assistant".to_string(),
                             text: None,
-                            thinking: Some(truncate_str(&thinking, 2000)),
+                            thinking: Some(thinking),
                             tool_call: None,
                             tool_result: None,
                             timestamp_ms: ts,
@@ -751,16 +751,16 @@ mod tests {
     }
 
     #[test]
-    fn test_rich_transcript_unicode_truncation() {
-        let long_thinking = "思考".repeat(1500); // 3000 chars, well over 2000
+    fn test_rich_transcript_preserves_full_thinking() {
+        let long_thinking = "思考".repeat(1500); // 3000 chars
         let jsonl = format!(
             r#"{{"type":"assistant","message":{{"content":[{{"type":"thinking","thinking":"{long_thinking}"}}]}}}}"#
         );
         let msgs = parse_rich_transcript_lines(jsonl.lines());
         assert_eq!(msgs.len(), 1);
         let thinking = msgs[0].thinking.as_ref().unwrap();
-        assert!(thinking.ends_with("..."));
-        assert!(thinking.chars().count() <= 2004); // 2000 + "..."
+        assert_eq!(thinking.chars().count(), 3000);
+        assert_eq!(thinking, &long_thinking);
     }
 
     #[test]

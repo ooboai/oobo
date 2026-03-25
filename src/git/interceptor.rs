@@ -1112,16 +1112,32 @@ fn parse_transcript_messages(text: &str) -> Vec<payload::TranscriptMessage> {
                 .or_else(|| parsed.get("text").and_then(|t| t.as_str()))
                 .unwrap_or("")
                 .to_string();
-            if text.is_empty() {
+
+            let thinking = parsed
+                .get("thinking")
+                .and_then(|t| {
+                    t.as_str()
+                        .map(String::from)
+                        .or_else(|| t.get("text").and_then(|v| v.as_str()).map(String::from))
+                })
+                .filter(|s| !s.is_empty());
+
+            let timestamp_ms = parsed
+                .get("timestamp")
+                .and_then(|v| v.as_str())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.timestamp_millis());
+
+            if text.is_empty() && thinking.is_none() {
                 return None;
             }
             Some(payload::TranscriptMessage {
                 role,
-                text: Some(text),
-                thinking: None,
+                text: if text.is_empty() { None } else { Some(text) },
+                thinking,
                 tool_call: None,
                 tool_result: None,
-                timestamp_ms: None,
+                timestamp_ms,
             })
         })
         .collect()
@@ -1835,5 +1851,48 @@ mod tests {
             inp > user_inp,
             "input tokens should include system + tool, not just user"
         );
+    }
+
+    #[test]
+    fn test_parse_transcript_messages_extracts_thinking() {
+        let lines = [
+            r#"{"role":"assistant","text":"I see the issue.","thinking":{"text":"Let me analyze this carefully...","duration_ms":1500},"timestamp":"2026-01-15T10:00:01Z"}"#,
+            r#"{"role":"assistant","text":"Here is my fix.","timestamp":"2026-01-15T10:00:05Z"}"#,
+        ];
+        let input = lines.join("\n");
+        let msgs = parse_transcript_messages(&input);
+
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(
+            msgs[0].thinking.as_deref(),
+            Some("Let me analyze this carefully...")
+        );
+        assert_eq!(msgs[0].text.as_deref(), Some("I see the issue."));
+        assert!(msgs[0].timestamp_ms.is_some());
+
+        assert!(msgs[1].thinking.is_none());
+        assert_eq!(msgs[1].text.as_deref(), Some("Here is my fix."));
+    }
+
+    #[test]
+    fn test_parse_transcript_messages_thinking_only_entry() {
+        let input = r#"{"role":"assistant","thinking":{"text":"Internal reasoning step here."}}"#;
+        let msgs = parse_transcript_messages(input);
+
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].text.is_none());
+        assert_eq!(
+            msgs[0].thinking.as_deref(),
+            Some("Internal reasoning step here.")
+        );
+    }
+
+    #[test]
+    fn test_parse_transcript_messages_thinking_as_plain_string() {
+        let input = r#"{"role":"assistant","text":"result","thinking":"plain string thinking"}"#;
+        let msgs = parse_transcript_messages(input);
+
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].thinking.as_deref(), Some("plain string thinking"));
     }
 }
