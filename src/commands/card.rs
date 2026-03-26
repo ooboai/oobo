@@ -761,24 +761,16 @@ fn print_terminal_fancy(c: &CardData) {
 
     let line = |content: &str| {
         let padded = pad(content, W);
-        eprintln!(
-            "  {border_fg}│{reset}  {padded}  {border_fg}│{reset}"
-        );
+        eprintln!("  {border_fg}│{reset}  {padded}  {border_fg}│{reset}");
     };
     let separator = || {
-        eprintln!(
-            "  {border_fg}│  {}│{reset}",
-            "─".repeat(W)
-        );
+        eprintln!("  {border_fg}│  {}│{reset}", "─".repeat(W));
     };
     let blank = || line("");
 
     // top border
     eprintln!();
-    eprintln!(
-        "  {border_fg}┌{}┐{reset}",
-        "─".repeat(W + 4)
-    );
+    eprintln!("  {border_fg}┌{}┐{reset}", "─".repeat(W + 4));
 
     blank();
 
@@ -836,7 +828,7 @@ fn print_terminal_fancy(c: &CardData) {
             .map(|d| d.date.weekday().num_days_from_sunday())
             .unwrap_or(0);
 
-        let total_cols = (c.heatmap.len() as u32 + first_wd + 6) / 7;
+        let total_cols = (c.heatmap.len() as u32 + first_wd).div_ceil(7);
 
         // month labels
         let mut month_positions: Vec<(usize, String)> = Vec::new();
@@ -959,10 +951,7 @@ fn print_terminal_fancy(c: &CardData) {
                 "█".repeat(filled),
                 "░".repeat(empty),
             );
-            let model_str = format!(
-                "{dim}{:<14}{reset} {:>4.0}%  {}",
-                m.name, m.pct, bar,
-            );
+            let model_str = format!("{dim}{:<14}{reset} {:>4.0}%  {}", m.name, m.pct, bar,);
             line(&model_str);
         }
         blank();
@@ -981,10 +970,7 @@ fn print_terminal_fancy(c: &CardData) {
     ));
 
     // bottom border
-    eprintln!(
-        "  {border_fg}└{}┘{reset}",
-        "─".repeat(W + 4)
-    );
+    eprintln!("  {border_fg}└{}┘{reset}", "─".repeat(W + 4));
     eprintln!();
 }
 
