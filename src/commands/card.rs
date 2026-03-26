@@ -657,32 +657,47 @@ fn shorten_model(s: &str) -> String {
 
 // ── Terminal output ──────────────────────────────────────────────────────────
 
+fn use_color() -> bool {
+    use std::io::IsTerminal;
+    std::env::var("NO_COLOR").is_err() && std::io::stderr().is_terminal()
+}
+
 fn print_terminal(c: &CardData) {
+    if !use_color() {
+        print_terminal_plain(c);
+        return;
+    }
+    print_terminal_fancy(c);
+}
+
+fn print_terminal_plain(c: &CardData) {
     let ai_pct_str = c
         .ai_percentage
         .map(|p| format!("{:.0}%", p))
         .unwrap_or_else(|| "n/a".to_string());
 
     eprintln!();
-    eprintln!("  \x1b[1m{}\x1b[0m", c.author);
+    eprintln!("  {}", c.author);
     eprintln!();
 
     let kv = |label: &str, value: &str| {
-        eprintln!("  \x1b[90m{:<16}\x1b[0m {}", label, value);
+        eprintln!("  {:<16} {}", label, value);
     };
 
-    kv("tools", &format!("{}", c.tool_count));
-    kv("sessions", &format!("{}", c.session_count));
+    kv("commits", &format_number(c.ai_commits));
     kv("tokens", &tui::format_tokens(c.total_tokens));
+    kv("sessions", &format!("{}", c.session_count));
+    kv("active days", &format!("{}", c.active_days));
     kv("ai code", &ai_pct_str);
-    kv("projects", &format!("{}", c.project_count));
+    if c.ai_streak > 0 {
+        kv("streak", &format!("{}d", c.ai_streak));
+    }
 
     if !c.top_tools.is_empty() {
         eprintln!();
-        eprintln!("  \x1b[1mtools\x1b[0m");
         for t in &c.top_tools {
             eprintln!(
-                "  \x1b[90m{:<16}\x1b[0m {:>4} sessions   {:>8} tokens",
+                "  {:<16} {:>4} sessions   {:>8} tokens",
                 t.name,
                 t.sessions,
                 tui::format_tokens(t.tokens)
@@ -692,52 +707,318 @@ fn print_terminal(c: &CardData) {
 
     if !c.top_models.is_empty() {
         eprintln!();
-        eprintln!("  \x1b[1mmodels\x1b[0m");
         for m in &c.top_models {
-            eprintln!(
-                "  \x1b[90m{:<20}\x1b[0m {:>4} sessions   {:>5.1}%",
-                m.name, m.sessions, m.pct
-            );
-        }
-    }
-
-    if c.ai_commits > 0 {
-        eprintln!();
-        eprintln!("  \x1b[1mcommits\x1b[0m");
-        if let Some(cpd) = c.commits_per_day {
-            eprintln!("  \x1b[90m{:<16}\x1b[0m {:.1}", "per day", cpd);
-        }
-        eprintln!("  \x1b[90m{:<16}\x1b[0m {}", "active days", c.active_days);
-        eprintln!(
-            "  \x1b[90m{:<16}\x1b[0m {} ({})",
-            "ai-assisted", c.ai_commits, ai_pct_str
-        );
-    }
-
-    if !c.weekly_trend.is_empty() {
-        eprintln!();
-        eprintln!("  \x1b[1mai code trend\x1b[0m");
-        for w in &c.weekly_trend {
-            let bar_len = (w.ai_pct / 5.0).round() as usize;
-            let bar: String = "█".repeat(bar_len.min(20));
-            eprintln!(
-                "  \x1b[90m{:<10}\x1b[0m {:>5.1}%  {}",
-                w.week, w.ai_pct, bar
-            );
+            eprintln!("  {:<16} {:>5.1}%", m.name, m.pct);
         }
     }
 
     eprintln!();
-    if let Some(ref since) = c.active_since {
+    eprintln!(
+        "  oobo v{}                                    oobo.ai",
+        env!("CARGO_PKG_VERSION")
+    );
+    eprintln!();
+}
+
+fn print_terminal_fancy(c: &CardData) {
+    use chrono::Datelike;
+
+    const W: usize = 72;
+    let reset = "\x1b[0m";
+    let bold = "\x1b[1m";
+    let dim = "\x1b[90m";
+
+    fn fg(r: u8, g: u8, b: u8) -> String {
+        format!("\x1b[38;2;{r};{g};{b}m")
+    }
+    let cyan_fg = fg(14, 165, 233);
+    let teal_fg = fg(20, 184, 166);
+    let border_fg = fg(75, 85, 99);
+
+    let pad = |s: &str, width: usize| -> String {
+        let visible_len: usize = {
+            let mut len = 0usize;
+            let mut in_esc = false;
+            for ch in s.chars() {
+                if ch == '\x1b' {
+                    in_esc = true;
+                } else if in_esc {
+                    if ch.is_ascii_alphabetic() {
+                        in_esc = false;
+                    }
+                } else {
+                    len += unicode_width(ch);
+                }
+            }
+            len
+        };
+        if visible_len >= width {
+            s.to_string()
+        } else {
+            format!("{}{}", s, " ".repeat(width - visible_len))
+        }
+    };
+
+    let line = |content: &str| {
+        let padded = pad(content, W);
         eprintln!(
-            "  \x1b[90mtracking since {}  oobo v{}\x1b[0m",
-            since,
-            env!("CARGO_PKG_VERSION")
+            "  {border_fg}│{reset}  {padded}  {border_fg}│{reset}"
         );
+    };
+    let separator = || {
+        eprintln!(
+            "  {border_fg}│  {}│{reset}",
+            "─".repeat(W)
+        );
+    };
+    let blank = || line("");
+
+    // top border
+    eprintln!();
+    eprintln!(
+        "  {border_fg}┌{}┐{reset}",
+        "─".repeat(W + 4)
+    );
+
+    blank();
+
+    // header: name left, stats right
+    let streak_str = if c.ai_streak > 0 {
+        format!(" · {}d 🔥", c.ai_streak)
     } else {
-        eprintln!("  \x1b[90moobo v{}\x1b[0m", env!("CARGO_PKG_VERSION"));
+        String::new()
+    };
+    let stats_right = format!(
+        "{} commits · {} tokens",
+        format_number(c.ai_commits),
+        tui::format_tokens(c.total_tokens),
+    );
+    let stats_right2 = format!(
+        "{} sessions · {} days{}",
+        c.session_count, c.active_days, streak_str,
+    );
+
+    let name_w = c.author.chars().count();
+    let gap1 = W.saturating_sub(name_w + visible_len(&stats_right));
+    line(&format!(
+        "{bold}{}{reset}{}{}{}{}",
+        c.author,
+        " ".repeat(gap1),
+        dim,
+        stats_right,
+        reset,
+    ));
+    let gap2 = W.saturating_sub(visible_len(&stats_right2));
+    line(&format!(
+        "{}{}{}{}",
+        " ".repeat(gap2),
+        dim,
+        stats_right2,
+        reset,
+    ));
+
+    separator();
+    blank();
+
+    // heatmap
+    if !c.heatmap.is_empty() {
+        let max_activity = c
+            .heatmap
+            .iter()
+            .map(|d| d.commits + d.sessions)
+            .max()
+            .unwrap_or(1)
+            .max(1);
+
+        let first_wd = c
+            .heatmap
+            .first()
+            .map(|d| d.date.weekday().num_days_from_sunday())
+            .unwrap_or(0);
+
+        let total_cols = (c.heatmap.len() as u32 + first_wd + 6) / 7;
+
+        // month labels
+        let mut month_positions: Vec<(usize, String)> = Vec::new();
+        let mut last_month = 0u32;
+        for d in &c.heatmap {
+            let m = d.date.month();
+            if m != last_month {
+                let day_offset = (d.date - c.heatmap[0].date).num_days() as u32;
+                let col = (day_offset + first_wd) / 7;
+                month_positions.push((col as usize, d.date.format("%b").to_string()));
+                last_month = m;
+            }
+        }
+        let max_col = total_cols as usize;
+        let mut ml = vec![' '; max_col * 2];
+        for (col, label) in &month_positions {
+            let pos = col * 2;
+            for (i, ch) in label.chars().enumerate() {
+                if pos + i < ml.len() {
+                    ml[pos + i] = ch;
+                }
+            }
+        }
+        let mut month_label: String = ml.iter().collect();
+        if month_label.len() > W {
+            month_label.truncate(W);
+        }
+        line(&format!("{dim}{}{reset}", month_label));
+
+        // grid: 7 rows
+        let bg_r = 45u8;
+        let bg_g = 45u8;
+        let bg_b = 45u8;
+        let teal_base: (f64, f64, f64) = (20.0, 184.0, 166.0);
+        let blue_base: (f64, f64, f64) = (14.0, 165.0, 233.0);
+        let bg_base: (f64, f64, f64) = (bg_r as f64, bg_g as f64, bg_b as f64);
+        let empty_fg = fg(bg_r, bg_g, bg_b);
+
+        let col_limit = total_cols.min(W as u32 / 2);
+        for row in 0..7u32 {
+            let mut row_str = String::new();
+            for col in 0..col_limit {
+                if col > 0 {
+                    row_str.push(' ');
+                }
+                let idx_offset = col * 7 + row;
+                if idx_offset < first_wd {
+                    row_str.push_str(&format!("{}▄{reset}", empty_fg));
+                    continue;
+                }
+                let idx = (idx_offset - first_wd) as usize;
+                if idx >= c.heatmap.len() {
+                    row_str.push_str(&format!("{}▄{reset}", empty_fg));
+                    continue;
+                }
+                let day = &c.heatmap[idx];
+                if day.commits == 0 && day.sessions == 0 {
+                    row_str.push_str(&format!("{}▄{reset}", empty_fg));
+                    continue;
+                }
+
+                let total = day.commits + day.sessions;
+                let ai = (day.ai_assisted + day.sessions).min(total);
+                let ai_pct = ai as f64 / total.max(1) as f64;
+
+                let volume = (total as f64 / max_activity.max(1) as f64).min(1.0);
+                let intensity = match volume {
+                    x if x <= 0.25 => 0.35,
+                    x if x <= 0.50 => 0.55,
+                    x if x <= 0.75 => 0.78,
+                    _ => 1.0,
+                };
+
+                let base = if ai_pct >= 0.5 { blue_base } else { teal_base };
+                let r = (bg_base.0 + (base.0 - bg_base.0) * intensity) as u8;
+                let g = (bg_base.1 + (base.1 - bg_base.1) * intensity) as u8;
+                let b = (bg_base.2 + (base.2 - bg_base.2) * intensity) as u8;
+
+                row_str.push_str(&format!("{}▄{reset}", fg(r, g, b)));
+            }
+            line(&row_str);
+        }
+
+        blank();
+
+        // legend
+        let ai_pct = c.ai_percentage.unwrap_or(0.0);
+        line(&format!(
+            "{cyan_fg}█ {:.0}% AI{reset}       {teal_fg}█ Human{reset}       {dim}█ No activity{reset}",
+            ai_pct,
+        ));
+
+        blank();
+        separator();
+        blank();
     }
+
+    // tools
+    if !c.top_tools.is_empty() {
+        for t in &c.top_tools {
+            let tool_str = format!(
+                "{bold}{:<16}{reset} {dim}{:>4} sessions    {:>8} tokens{reset}",
+                t.name,
+                t.sessions,
+                tui::format_tokens(t.tokens),
+            );
+            line(&tool_str);
+        }
+        blank();
+    }
+
+    // models with bars
+    if !c.top_models.is_empty() {
+        let bar_max = 24usize;
+        for m in &c.top_models {
+            let filled = ((m.pct / 100.0) * bar_max as f64).round() as usize;
+            let empty = bar_max.saturating_sub(filled);
+            let bar = format!(
+                "{cyan_fg}{}{dim}{}{reset}",
+                "█".repeat(filled),
+                "░".repeat(empty),
+            );
+            let model_str = format!(
+                "{dim}{:<14}{reset} {:>4.0}%  {}",
+                m.name, m.pct, bar,
+            );
+            line(&model_str);
+        }
+        blank();
+    }
+
+    // footer
+    separator();
+    let ver = format!("oobo v{}", env!("CARGO_PKG_VERSION"));
+    let site = "oobo.ai";
+    let footer_gap = W.saturating_sub(ver.len() + site.len());
+    line(&format!(
+        "{dim}{}{}{}{reset}",
+        ver,
+        " ".repeat(footer_gap),
+        site,
+    ));
+
+    // bottom border
+    eprintln!(
+        "  {border_fg}└{}┘{reset}",
+        "─".repeat(W + 4)
+    );
     eprintln!();
+}
+
+fn unicode_width(ch: char) -> usize {
+    if ('\u{1100}'..='\u{115F}').contains(&ch)
+        || ('\u{2E80}'..='\u{A4CF}').contains(&ch)
+        || ('\u{AC00}'..='\u{D7A3}').contains(&ch)
+        || ('\u{F900}'..='\u{FAFF}').contains(&ch)
+        || ('\u{FE10}'..='\u{FE6F}').contains(&ch)
+        || ('\u{FF01}'..='\u{FF60}').contains(&ch)
+        || ('\u{FFE0}'..='\u{FFE6}').contains(&ch)
+        || ('\u{1F000}'..='\u{1FAFF}').contains(&ch)
+    {
+        2
+    } else {
+        1
+    }
+}
+
+fn visible_len(s: &str) -> usize {
+    let mut len = 0usize;
+    let mut in_esc = false;
+    for ch in s.chars() {
+        if ch == '\x1b' {
+            in_esc = true;
+        } else if in_esc {
+            if ch.is_ascii_alphabetic() {
+                in_esc = false;
+            }
+        } else {
+            len += unicode_width(ch);
+        }
+    }
+    len
 }
 
 // ── Markdown output ──────────────────────────────────────────────────────────
