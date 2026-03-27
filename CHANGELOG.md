@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.14] - 2026-03-27
+
+### Added
+
+- **Per-line AI/human code attribution** — every commit anchor now records which specific line ranges were written by AI vs. human. Uses a three-point diff (pre-agent → agent snapshot → committed) to compute precise line-level attribution in committed-file coordinates. Data is stored in `line_attributions` on each `FileChange` entry in the anchor JSON.
+- **`oobo blame` command** — new command that displays per-line AI attribution for any file at any commit. Shows colorized output with line numbers, author labels (ai/human), and agent names. Supports `--json` and `--agent` output modes. File path input is normalized (handles `./`, absolute paths) for reliable matching.
+- **Post-rewrite anchor re-keying** — when `git rebase` or `git cherry-pick` rewrites commit history, oobo now automatically copies all anchor data (metadata, session links, transcripts, timeline) from old SHAs to new SHAs by matching tree hashes. Preserves attribution through simple rebases where file content doesn't change.
+- **Modular skill file** — `SKILL.md` restructured into a concise quick-reference with detailed reference docs split into `references/COMMANDS.md`, `references/API_SURFACE.md`, `references/JSON_SCHEMA.md`, and `references/TRUST.md`. Reduces token cost for agents that only need the command table.
+
+### Fixed
+
+- **Developer card: AI percentage showed 0% with no commit data** — `ai_percentage` now returns `None` (displayed as "N/A") when there are zero tracked commits, instead of a misleading "0% AI".
+- **Developer card: AI streak over-counted past idle gaps** — `compute_ai_streak` no longer counts disconnected old AI days that appear after a tail of idle days. Idle days at the end correctly break the streak.
+- **Developer card: SVG stat text misaligned with Unicode** — stat label/value width calculation now uses per-character Unicode width instead of byte length, fixing layout for CJK characters and emoji.
+- **Developer card: earliest session date in wrong timezone** — `earliest_session` now formats dates in the user's local timezone instead of UTC.
+- **Developer card: `--json` included SVG unconditionally** — `oobo card --json` no longer embeds the full SVG string unless writing to a file, reducing payload size for programmatic consumers.
+- **Multi-session snapshot collision silent** — when multiple AI sessions provide file snapshots for the same file, oobo now logs a warning to stderr instead of silently using the last writer's data.
+
 ## [0.1.13] - 2026-03-25
 
 ### Fixed
@@ -269,6 +287,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI/CD pipeline**: multi-platform testing (Ubuntu, macOS, Debian, Alpine) and 6-target release builds
 - **Dual license**: Apache 2.0 and MIT
 
+[0.1.14]: https://github.com/ooboai/oobo/compare/v0.1.13...v0.1.14
+[0.1.13]: https://github.com/ooboai/oobo/compare/v0.1.12...v0.1.13
 [0.1.12]: https://github.com/ooboai/oobo/compare/v0.1.11...v0.1.12
 [0.1.11]: https://github.com/ooboai/oobo/compare/v0.1.10...v0.1.11
 [0.1.10]: https://github.com/ooboai/oobo/compare/v0.1.9...v0.1.10

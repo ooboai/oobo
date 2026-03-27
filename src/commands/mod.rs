@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod anchors;
 pub mod auth;
+pub mod blame;
 pub mod card;
 pub mod check;
 pub mod dash;

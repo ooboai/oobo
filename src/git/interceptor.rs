@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::core::anchor::{
-    Anchor, AuthorType, Contributor, ContributorRole, FileAttribution, FileChange, LinkType,
-    SessionLink, TransparencyMode,
+    Anchor, AuthorType, Contributor, ContributorRole, FileAttribution, FileChange, LineAttribution,
+    LineRange, LinkType, SessionLink, TransparencyMode,
 };
 use crate::git::{commands, detect, proxy};
 use crate::hooks;
@@ -350,7 +350,7 @@ fn enrich_commit(
 
     for (path, added, deleted) in &per_file {
         let pre_blob = pre_agent_lookup.get(path.as_str()).cloned();
-        let (file_ai_add, file_ai_del, file_human_add, file_human_del, attribution, agent) =
+        let (file_ai_add, file_ai_del, file_human_add, file_human_del, attribution, agent, line_attrs) =
             if let Some((agent_blob, agent_name)) = snapshot_lookup.get(path.as_str()) {
                 compute_precise_attribution(
                     cfg,
@@ -362,7 +362,6 @@ fn enrich_commit(
                     agent_name.clone(),
                 )
             } else if ai_file_set.contains(path.as_str()) {
-                // AI edited the file (from bubble data) but no snapshot available.
                 let agent_name = ai_files_touched
                     .iter()
                     .find(|(p, _)| p == path)
@@ -375,9 +374,9 @@ fn enrich_commit(
                         0,
                         Some(FileAttribution::Ai),
                         agent_name,
+                        Vec::new(),
                     )
                 } else {
-                    // No snapshot — honest 50/50 split as best estimate.
                     let ai_a = *added / 2;
                     let ai_d = *deleted / 2;
                     (
@@ -387,12 +386,13 @@ fn enrich_commit(
                         deleted - ai_d,
                         Some(FileAttribution::Mixed),
                         agent_name,
+                        Vec::new(),
                     )
                 }
             } else if is_agent_commit && !has_ai_sessions {
-                (*added, *deleted, 0, 0, Some(FileAttribution::Ai), None)
+                (*added, *deleted, 0, 0, Some(FileAttribution::Ai), None, Vec::new())
             } else {
-                (0, 0, *added, *deleted, Some(FileAttribution::Human), None)
+                (0, 0, *added, *deleted, Some(FileAttribution::Human), None, Vec::new())
             };
 
         ai_added += file_ai_add;
@@ -406,6 +406,7 @@ fn enrich_commit(
             deleted: *deleted,
             attribution,
             agent,
+            line_attributions: line_attrs,
         });
     }
 
@@ -531,6 +532,15 @@ fn build_snapshot_lookups<'a>(
                     .iter()
                     .find(|(p, _)| p == file)
                     .map(|(_, a)| a.clone());
+                if let Some(existing) = post_agent.get(file.as_str()) {
+                    if existing.0 != *blob_hash {
+                        eprintln!(
+                            "oobo: warning: file '{}' has snapshots from multiple sessions \
+                             (using session {})",
+                            file, session.session_id
+                        );
+                    }
+                }
                 post_agent.insert(file.as_str(), (blob_hash.clone(), agent_name));
             }
         }
@@ -563,23 +573,19 @@ fn compute_precise_attribution(
     total_added: u32,
     total_deleted: u32,
     agent_name: Option<String>,
-) -> (u32, u32, u32, u32, Option<FileAttribution>, Option<String>) {
+) -> (
+    u32,
+    u32,
+    u32,
+    u32,
+    Option<FileAttribution>,
+    Option<String>,
+    Vec<LineAttribution>,
+) {
     let committed_blob = proxy::run_git_capture(cfg, &["rev-parse", &format!("HEAD:{file_path}")])
         .unwrap_or_default()
         .trim()
         .to_string();
-
-    // If agent blob matches committed blob → pure AI (human didn't change it after the agent)
-    if !committed_blob.is_empty() && agent_blob == committed_blob {
-        return (
-            total_added,
-            total_deleted,
-            0,
-            0,
-            Some(FileAttribution::Ai),
-            agent_name,
-        );
-    }
 
     // Use pre-agent snapshot if available, otherwise fall back to parent commit blob
     let baseline_blob = if let Some(pre) = pre_agent_blob {
@@ -591,6 +597,25 @@ fn compute_precise_attribution(
             .to_string()
     };
 
+    // If agent blob matches committed blob → pure AI (human didn't change it after the agent)
+    if !committed_blob.is_empty() && agent_blob == committed_blob {
+        let line_attrs = compute_pure_ai_line_attrs(
+            cfg,
+            &baseline_blob,
+            &committed_blob,
+            agent_name.as_deref(),
+        );
+        return (
+            total_added,
+            total_deleted,
+            0,
+            0,
+            Some(FileAttribution::Ai),
+            agent_name,
+            line_attrs,
+        );
+    }
+
     // If agent blob matches baseline → AI changed nothing → pure human
     if !baseline_blob.is_empty() && agent_blob == baseline_blob {
         return (
@@ -600,12 +625,12 @@ fn compute_precise_attribution(
             total_deleted,
             Some(FileAttribution::Human),
             None,
+            Vec::new(),
         );
     }
 
     // AI contribution: baseline → agent_blob
     let ai_stats = if baseline_blob.is_empty() {
-        // New file: baseline doesn't exist. Count lines in the agent's blob.
         count_blob_lines(cfg, agent_blob).map(|n| (n, 0))
     } else {
         diff_blobs_numstat(cfg, &baseline_blob, agent_blob)
@@ -630,6 +655,14 @@ fn compute_precise_attribution(
         Some(FileAttribution::Mixed)
     };
 
+    let line_attrs = compute_mixed_line_attrs(
+        cfg,
+        &baseline_blob,
+        agent_blob,
+        &committed_blob,
+        agent_name.as_deref(),
+    );
+
     (
         ai_add,
         ai_del,
@@ -637,7 +670,128 @@ fn compute_precise_attribution(
         human_del,
         attribution,
         agent_name,
+        line_attrs,
     )
+}
+
+/// Build line attributions for pure AI files (agent_blob == committed_blob).
+/// All added lines (baseline → committed) are AI-authored.
+fn compute_pure_ai_line_attrs(
+    cfg: &Config,
+    baseline_blob: &str,
+    committed_blob: &str,
+    agent_name: Option<&str>,
+) -> Vec<LineAttribution> {
+    let ai_ranges = if baseline_blob.is_empty() {
+        // New file: every line is AI
+        blob_total_range(cfg, committed_blob).map(|r| vec![r]).unwrap_or_default()
+    } else {
+        diff_blobs_added_ranges(cfg, baseline_blob, committed_blob).unwrap_or_default()
+    };
+
+    if ai_ranges.is_empty() {
+        return Vec::new();
+    }
+
+    vec![LineAttribution {
+        author: FileAttribution::Ai,
+        ranges: ai_ranges,
+        agent: agent_name.map(|s| s.to_string()),
+    }]
+}
+
+/// Build line attributions for mixed files (both AI and human contributed).
+/// Uses committed-file coordinates for all ranges:
+/// - all_added = diff(baseline → committed)   → every added line in the commit
+/// - human_modified = diff(agent → committed)  → lines human changed after the agent
+/// - ai_ranges = all_added MINUS human_modified
+fn compute_mixed_line_attrs(
+    cfg: &Config,
+    baseline_blob: &str,
+    agent_blob: &str,
+    committed_blob: &str,
+    agent_name: Option<&str>,
+) -> Vec<LineAttribution> {
+    if committed_blob.is_empty() {
+        return Vec::new();
+    }
+
+    let all_added = if baseline_blob.is_empty() {
+        blob_total_range(cfg, committed_blob).map(|r| vec![r]).unwrap_or_default()
+    } else {
+        diff_blobs_added_ranges(cfg, baseline_blob, committed_blob).unwrap_or_default()
+    };
+
+    if all_added.is_empty() {
+        return Vec::new();
+    }
+
+    let human_ranges =
+        diff_blobs_added_ranges(cfg, agent_blob, committed_blob).unwrap_or_default();
+
+    if human_ranges.is_empty() {
+        return vec![LineAttribution {
+            author: FileAttribution::Ai,
+            ranges: all_added,
+            agent: agent_name.map(|s| s.to_string()),
+        }];
+    }
+
+    let ai_ranges = subtract_ranges(&all_added, &human_ranges);
+
+    let mut attrs = Vec::new();
+    if !ai_ranges.is_empty() {
+        attrs.push(LineAttribution {
+            author: FileAttribution::Ai,
+            ranges: ai_ranges,
+            agent: agent_name.map(|s| s.to_string()),
+        });
+    }
+    if !human_ranges.is_empty() {
+        attrs.push(LineAttribution {
+            author: FileAttribution::Human,
+            ranges: human_ranges,
+            agent: None,
+        });
+    }
+    attrs
+}
+
+/// Subtract `remove` ranges from `source` ranges.
+/// All ranges are sorted, non-overlapping, and 1-indexed inclusive.
+/// Returns the portions of `source` that don't overlap with `remove`.
+fn subtract_ranges(source: &[LineRange], remove: &[LineRange]) -> Vec<LineRange> {
+    if remove.is_empty() {
+        return source.to_vec();
+    }
+
+    let mut result = Vec::new();
+    let mut ri = 0;
+
+    for s in source {
+        let mut cur_start = s.start;
+        let cur_end = s.end;
+
+        while ri < remove.len() && remove[ri].end < cur_start {
+            ri += 1;
+        }
+
+        let mut rj = ri;
+        while rj < remove.len() && remove[rj].start <= cur_end {
+            let r = &remove[rj];
+            if r.start > cur_start {
+                result.push(LineRange::new(cur_start, r.start - 1));
+            }
+            cur_start = r.end + 1;
+            rj += 1;
+        }
+
+        if cur_start <= cur_end {
+            result.push(LineRange::new(cur_start, cur_end));
+        }
+    }
+
+    result
 }
 
 /// Count lines in a git blob object.
@@ -667,6 +821,69 @@ fn diff_blobs_numstat(cfg: &Config, blob_a: &str, blob_b: &str) -> Option<(u32, 
     } else {
         None
     }
+}
+
+/// Diff two blob objects and return the line ranges that were added in blob_b.
+/// Uses `git diff -U0` to get minimal hunks with precise `@@` headers.
+/// Returns Vec<LineRange> representing added lines in blob_b coordinates.
+fn diff_blobs_added_ranges(cfg: &Config, blob_a: &str, blob_b: &str) -> Option<Vec<LineRange>> {
+    if blob_a.is_empty() || blob_b.is_empty() {
+        return None;
+    }
+
+    let output = proxy::run_git_capture(cfg, &["diff", "-U0", blob_a, blob_b]).ok()?;
+    Some(parse_diff_added_ranges(&output))
+}
+
+/// Parse unified diff output (with -U0) and extract added line ranges.
+/// Hunk headers look like: `@@ -old_start[,old_count] +new_start[,new_count] @@`
+fn parse_diff_added_ranges(diff_output: &str) -> Vec<LineRange> {
+    let mut ranges = Vec::new();
+
+    for line in diff_output.lines() {
+        if !line.starts_with("@@") {
+            continue;
+        }
+        if let Some(plus_part) = extract_hunk_plus(line) {
+            let (start, count) = parse_hunk_range(plus_part);
+            if count > 0 {
+                ranges.push(LineRange::new(start, start + count - 1));
+            }
+        }
+    }
+
+    ranges
+}
+
+/// Extract the `+start[,count]` portion from a `@@ ... @@` hunk header.
+fn extract_hunk_plus(hunk_line: &str) -> Option<&str> {
+    let after_at = hunk_line.strip_prefix("@@")?;
+    let plus_idx = after_at.find('+')?;
+    let rest = &after_at[plus_idx + 1..];
+    let end = rest.find(|c: char| c == ' ' || c == '@').unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// Parse a hunk range like "42,5" or "42" into (start, count).
+/// A missing count means 1 (single-line hunk). A count of 0 means pure deletion.
+fn parse_hunk_range(s: &str) -> (u32, u32) {
+    if let Some((start_s, count_s)) = s.split_once(',') {
+        let start = start_s.parse::<u32>().unwrap_or(1);
+        let count = count_s.parse::<u32>().unwrap_or(1);
+        (start, count)
+    } else {
+        let start = s.parse::<u32>().unwrap_or(1);
+        (start, 1)
+    }
+}
+
+/// Get all line numbers in a blob (1..=line_count) as a single LineRange.
+fn blob_total_range(cfg: &Config, blob: &str) -> Option<LineRange> {
+    let count = count_blob_lines(cfg, blob)?;
+    if count == 0 {
+        return None;
+    }
+    Some(LineRange::new(1, count))
 }
 
 /// Get the parent commit's author timestamp (Unix epoch seconds).
@@ -1894,5 +2111,183 @@ mod tests {
 
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].thinking.as_deref(), Some("plain string thinking"));
+    }
+
+    // ── Line attribution tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_parse_diff_added_ranges_single_hunk() {
+        let diff = "\
+diff --git a/blob1 b/blob2
+--- a/blob1
++++ b/blob2
+@@ -1,3 +1,5 @@
+ existing line
++new line 1
++new line 2
+ another existing
+";
+        let ranges = parse_diff_added_ranges(diff);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 1);
+        assert_eq!(ranges[0].end, 5);
+    }
+
+    #[test]
+    fn test_parse_diff_added_ranges_multiple_hunks() {
+        let diff = "\
+@@ -0,0 +1,3 @@
++line1
++line2
++line3
+@@ -10,0 +14,2 @@
++inserted1
++inserted2
+";
+        let ranges = parse_diff_added_ranges(diff);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].start, 1);
+        assert_eq!(ranges[0].end, 3);
+        assert_eq!(ranges[1].start, 14);
+        assert_eq!(ranges[1].end, 15);
+    }
+
+    #[test]
+    fn test_parse_diff_added_ranges_single_line() {
+        let diff = "@@ -5,0 +6 @@\n+one new line\n";
+        let ranges = parse_diff_added_ranges(diff);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start, 6);
+        assert_eq!(ranges[0].end, 6);
+    }
+
+    #[test]
+    fn test_parse_diff_added_ranges_deletion_only() {
+        let diff = "@@ -1,3 +1,0 @@\n-deleted1\n-deleted2\n-deleted3\n";
+        let ranges = parse_diff_added_ranges(diff);
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn test_parse_diff_added_ranges_empty() {
+        assert!(parse_diff_added_ranges("").is_empty());
+    }
+
+    #[test]
+    fn test_extract_hunk_plus_standard() {
+        assert_eq!(extract_hunk_plus("@@ -1,3 +4,5 @@"), Some("4,5"));
+    }
+
+    #[test]
+    fn test_extract_hunk_plus_no_count() {
+        assert_eq!(extract_hunk_plus("@@ -1 +4 @@"), Some("4"));
+    }
+
+    #[test]
+    fn test_extract_hunk_plus_with_context() {
+        assert_eq!(
+            extract_hunk_plus("@@ -1,3 +4,5 @@ fn main()"),
+            Some("4,5")
+        );
+    }
+
+    #[test]
+    fn test_parse_hunk_range_with_count() {
+        assert_eq!(parse_hunk_range("42,5"), (42, 5));
+    }
+
+    #[test]
+    fn test_parse_hunk_range_no_count() {
+        assert_eq!(parse_hunk_range("42"), (42, 1));
+    }
+
+    #[test]
+    fn test_parse_hunk_range_zero_count() {
+        assert_eq!(parse_hunk_range("10,0"), (10, 0));
+    }
+
+    #[test]
+    fn test_subtract_ranges_no_overlap() {
+        let source = vec![LineRange { start: 1, end: 5 }, LineRange { start: 10, end: 15 }];
+        let remove = vec![LineRange { start: 6, end: 9 }];
+        let result = subtract_ranges(&source, &remove);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], LineRange { start: 1, end: 5 });
+        assert_eq!(result[1], LineRange { start: 10, end: 15 });
+    }
+
+    #[test]
+    fn test_subtract_ranges_full_overlap() {
+        let source = vec![LineRange { start: 5, end: 10 }];
+        let remove = vec![LineRange { start: 3, end: 12 }];
+        let result = subtract_ranges(&source, &remove);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_subtract_ranges_partial_overlap() {
+        let source = vec![LineRange { start: 1, end: 10 }];
+        let remove = vec![LineRange { start: 4, end: 6 }];
+        let result = subtract_ranges(&source, &remove);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], LineRange { start: 1, end: 3 });
+        assert_eq!(result[1], LineRange { start: 7, end: 10 });
+    }
+
+    #[test]
+    fn test_subtract_ranges_empty_remove() {
+        let source = vec![LineRange { start: 1, end: 5 }];
+        let result = subtract_ranges(&source, &[]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], LineRange { start: 1, end: 5 });
+    }
+
+    #[test]
+    fn test_subtract_ranges_multiple_removals() {
+        let source = vec![LineRange { start: 1, end: 20 }];
+        let remove = vec![
+            LineRange { start: 3, end: 5 },
+            LineRange { start: 10, end: 12 },
+        ];
+        let result = subtract_ranges(&source, &remove);
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], LineRange { start: 1, end: 2 });
+        assert_eq!(result[1], LineRange { start: 6, end: 9 });
+        assert_eq!(result[2], LineRange { start: 13, end: 20 });
+    }
+
+    #[test]
+    fn test_subtract_ranges_adjacent_no_overlap() {
+        let source = vec![LineRange { start: 6, end: 10 }];
+        let remove = vec![LineRange { start: 1, end: 5 }];
+        let result = subtract_ranges(&source, &remove);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], LineRange { start: 6, end: 10 });
+    }
+
+    #[test]
+    fn test_subtract_ranges_shared_boundary() {
+        let source = vec![LineRange { start: 5, end: 15 }];
+        let remove = vec![LineRange { start: 5, end: 10 }];
+        let result = subtract_ranges(&source, &remove);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], LineRange { start: 11, end: 15 });
+    }
+
+    #[test]
+    fn test_subtract_ranges_single_point_exact() {
+        let source = vec![LineRange { start: 5, end: 5 }];
+        let remove = vec![LineRange { start: 5, end: 5 }];
+        let result = subtract_ranges(&source, &remove);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_subtract_ranges_remove_tail() {
+        let source = vec![LineRange { start: 1, end: 10 }];
+        let remove = vec![LineRange { start: 8, end: 10 }];
+        let result = subtract_ranges(&source, &remove);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], LineRange { start: 1, end: 7 });
     }
 }

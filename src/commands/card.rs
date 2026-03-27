@@ -37,7 +37,9 @@ pub fn run(mode: OutputMode, out: Option<String>, format: &str) -> Result<(), St
         project_count,
         session_count: global.session_count,
         total_tokens,
-        ai_percentage: ai_headline.as_ref().map(|a| a.ai_percentage),
+        ai_percentage: ai_headline
+            .as_ref()
+            .and_then(|a| if a.total_commits > 0 { Some(a.ai_percentage) } else { None }),
         ai_commits: ai_headline.as_ref().map(|a| a.total_commits).unwrap_or(0),
         commits_per_day: productivity.as_ref().map(|p| p.commits_per_day()),
         active_days: productivity.as_ref().map(|p| p.active_days).unwrap_or(0),
@@ -79,7 +81,7 @@ pub fn run(mode: OutputMode, out: Option<String>, format: &str) -> Result<(), St
 
     match format {
         "json" => {
-            print_json(&card);
+            print_json(&card, true);
             return Ok(());
         }
         "md" => {
@@ -104,7 +106,7 @@ pub fn run(mode: OutputMode, out: Option<String>, format: &str) -> Result<(), St
     if is_structured && !is_svg {
         match mode {
             OutputMode::Agent => print_agent_compact(&card),
-            _ => print_json(&card),
+            _ => print_json(&card, false),
         }
     } else if !is_structured {
         print_terminal(&card);
@@ -278,10 +280,10 @@ fn compute_ai_streak(heatmap: &[DayCell]) -> i64 {
             streak += 1;
         } else if day.commits > 0 {
             break;
+        } else if streak > 0 {
+            continue;
         } else {
-            if streak > 0 {
-                continue;
-            }
+            break;
         }
     }
     streak
@@ -324,12 +326,12 @@ fn render_svg(card: &CardData) -> String {
             r#"<text x="{sx}" y="{}" font-size="9" fill="{MUTED_LIGHT}" text-anchor="end">{label}</text>"#,
             y
         ));
-        sx -= (label.len() as i32) * 5 + 6;
+        sx -= (str_width(label) as i32) * 5 + 6;
         svg_body.push_str(&format!(
             r#"<text x="{sx}" y="{}" font-size="12" font-weight="bold" fill="{DARK}" text-anchor="end">{val}</text>"#,
             y
         ));
-        sx -= (val.len() as i32) * 7 + 16;
+        sx -= (str_width(val) as i32) * 7 + 16;
     }
 
     y += 12;
@@ -354,15 +356,21 @@ fn render_svg(card: &CardData) -> String {
         .unwrap_or(1)
         .max(1);
 
+    let first_wd = card
+        .heatmap
+        .first()
+        .map(|c| c.date.weekday().num_days_from_sunday())
+        .unwrap_or(0);
+
     // Month labels
     if !card.heatmap.is_empty() {
         let mut last_month = 0u32;
         for c in &card.heatmap {
             let m = c.date.month();
             if m != last_month {
-                let day_offset = (c.date - card.heatmap[0].date).num_days();
-                let week_col = day_offset / 7;
-                let x = grid_left as i64 + week_col * step as i64;
+                let day_offset = (c.date - card.heatmap[0].date).num_days() as u32;
+                let week_col = (day_offset + first_wd) / 7;
+                let x = grid_left as u32 + week_col * step as u32;
                 svg_body.push_str(&format!(
                     r#"<text x="{x}" y="{}" font-size="10" fill="{MUTED_LIGHT}">{}</text>"#,
                     y,
@@ -386,11 +394,6 @@ fn render_svg(card: &CardData) -> String {
 
     // Grid cells
     let mut gradient_defs = String::new();
-    let first_wd = card
-        .heatmap
-        .first()
-        .map(|c| c.date.weekday().num_days_from_sunday())
-        .unwrap_or(0);
     for (i, day) in card.heatmap.iter().enumerate() {
         let offset = i as u32 + first_wd;
         let col = offset / 7;
@@ -412,13 +415,16 @@ fn render_svg(card: &CardData) -> String {
     let legend_y = y + 18;
 
     // AI percentage badge
-    let ai_pct = card.ai_percentage.unwrap_or(0.0);
+    let ai_badge_label = card
+        .ai_percentage
+        .map(|p| format!("{p:.0}% AI"))
+        .unwrap_or_else(|| "N/A".to_string());
     svg_body.push_str(&format!(
         r#"<rect x="{pad}" y="{}" width="64" height="20" rx="10" fill="{CYAN}" opacity="0.15"/>"#,
         legend_y - 14
     ));
     svg_body.push_str(&format!(
-        r#"<text x="{}" y="{}" font-size="10" font-weight="bold" fill="{CYAN}" text-anchor="middle">{ai_pct:.0}% AI</text>"#,
+        r#"<text x="{}" y="{}" font-size="10" font-weight="bold" fill="{CYAN}" text-anchor="middle">{ai_badge_label}</text>"#,
         pad + 32, legend_y
     ));
 
@@ -638,7 +644,11 @@ fn earliest_session(db: &Db) -> Option<String> {
         .flatten()
         .and_then(|ts| {
             let ts = crate::utils::to_epoch_secs(ts);
-            chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.format("%Y-%m-%d").to_string())
+            chrono::DateTime::from_timestamp(ts, 0).map(|dt| {
+                dt.with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d")
+                    .to_string()
+            })
         })
 }
 
@@ -915,10 +925,12 @@ fn print_terminal_fancy(c: &CardData) {
         blank();
 
         // legend
-        let ai_pct = c.ai_percentage.unwrap_or(0.0);
+        let ai_pct_legend = c
+            .ai_percentage
+            .map(|p| format!("{:.0}% AI", p))
+            .unwrap_or_else(|| "N/A".to_string());
         line(&format!(
-            "{cyan_fg}█ {:.0}% AI{reset}       {teal_fg}█ Human{reset}       {dim}█ No activity{reset}",
-            ai_pct,
+            "{cyan_fg}█ {ai_pct_legend}{reset}       {teal_fg}█ Human{reset}       {dim}█ No activity{reset}",
         ));
 
         blank();
@@ -972,6 +984,10 @@ fn print_terminal_fancy(c: &CardData) {
     // bottom border
     eprintln!("  {border_fg}└{}┘{reset}", "─".repeat(W + 4));
     eprintln!();
+}
+
+fn str_width(s: &str) -> usize {
+    s.chars().map(unicode_width).sum()
 }
 
 fn unicode_width(ch: char) -> usize {
@@ -1067,7 +1083,7 @@ fn render_markdown(c: &CardData) -> String {
         md.push_str("\n## Commit Profile\n\n");
         md.push_str("| Metric | Value |\n");
         md.push_str("|--------|-------|\n");
-        md.push_str(&format!("| AI-Assisted Commits | {} |\n", c.ai_commits));
+        md.push_str(&format!("| Commits | {} |\n", c.ai_commits));
         md.push_str(&format!("| AI Code | {} |\n", ai_pct_str));
         if let Some(cpd) = c.commits_per_day {
             md.push_str(&format!("| Commits/Day | {:.1} |\n", cpd));
@@ -1135,7 +1151,7 @@ fn print_agent_compact(c: &CardData) {
     }
 }
 
-fn print_json(c: &CardData) {
+fn print_json(c: &CardData, include_svg: bool) {
     let tools: Vec<serde_json::Value> = c
         .top_tools
         .iter()
@@ -1171,9 +1187,7 @@ fn print_json(c: &CardData) {
         })
         .collect();
 
-    let svg = render_svg(c);
-
-    let json = serde_json::json!({
+    let mut json = serde_json::json!({
         "author": c.author,
         "tool_count": c.tool_count,
         "project_count": c.project_count,
@@ -1187,10 +1201,14 @@ fn print_json(c: &CardData) {
         "tools": tools,
         "models": models,
         "weekly_trend": trend,
-        "svg": svg,
         "oobo_version": env!("CARGO_PKG_VERSION"),
         "generated_at": chrono::Utc::now().to_rfc3339(),
     });
+
+    if include_svg {
+        let svg = render_svg(c);
+        json["svg"] = serde_json::Value::String(svg);
+    }
 
     crate::utils::print_json(&json);
 }
@@ -1377,5 +1395,182 @@ mod tests {
         assert!(svg.contains("500.0K"));
         assert!(svg.contains("Cursor"));
         assert!(svg.ends_with("</svg>\n"));
+    }
+
+    #[test]
+    fn test_render_svg_no_ai_data_shows_na() {
+        let card = CardData {
+            author: "TestDev".to_string(),
+            tool_count: 1,
+            project_count: 1,
+            session_count: 5,
+            total_tokens: 1000,
+            ai_percentage: None,
+            ai_commits: 0,
+            commits_per_day: None,
+            active_days: 1,
+            active_since: None,
+            ai_streak: 0,
+            top_tools: vec![],
+            top_models: vec![],
+            weekly_trend: vec![],
+            heatmap: vec![],
+        };
+
+        let svg = render_svg(&card);
+        assert!(svg.contains("N/A"), "SVG should show N/A when ai_percentage is None");
+        assert!(!svg.contains("0% AI"), "SVG should not show 0% AI when there's no data");
+    }
+
+    #[test]
+    fn test_streak_breaks_on_idle_before_ai_activity() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 27).unwrap();
+
+        // No human-only firewall between old AI and idle tail.
+        // Old buggy code: idle → fall through → idle → fall through → AI → streak=1
+        // Fixed code: idle → break → streak=0
+        let heatmap = vec![
+            DayCell { date: today - chrono::Duration::days(2), commits: 0, ai_assisted: 1, sessions: 0 },
+            DayCell { date: today - chrono::Duration::days(1), commits: 0, ai_assisted: 0, sessions: 0 },
+            DayCell { date: today, commits: 0, ai_assisted: 0, sessions: 0 },
+        ];
+
+        let streak = compute_ai_streak(&heatmap);
+        assert_eq!(streak, 0, "idle days at the end should not count old disconnected AI activity");
+    }
+
+    #[test]
+    fn test_streak_counts_consecutive_ai_days() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 27).unwrap();
+
+        let heatmap = vec![
+            DayCell { date: today - chrono::Duration::days(3), commits: 0, ai_assisted: 0, sessions: 0 },
+            DayCell { date: today - chrono::Duration::days(2), commits: 0, ai_assisted: 1, sessions: 0 },
+            DayCell { date: today - chrono::Duration::days(1), commits: 0, ai_assisted: 0, sessions: 2 },
+            DayCell { date: today, commits: 0, ai_assisted: 1, sessions: 1 },
+        ];
+
+        let streak = compute_ai_streak(&heatmap);
+        assert_eq!(streak, 3, "three consecutive AI days should give streak of 3");
+    }
+
+    #[test]
+    fn test_streak_skips_gaps_within_active_streak() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 27).unwrap();
+
+        let heatmap = vec![
+            DayCell { date: today - chrono::Duration::days(3), commits: 0, ai_assisted: 0, sessions: 1 },
+            DayCell { date: today - chrono::Duration::days(2), commits: 0, ai_assisted: 0, sessions: 0 },
+            DayCell { date: today - chrono::Duration::days(1), commits: 0, ai_assisted: 0, sessions: 0 },
+            DayCell { date: today, commits: 0, ai_assisted: 0, sessions: 1 },
+        ];
+
+        let streak = compute_ai_streak(&heatmap);
+        assert_eq!(streak, 2, "idle gaps within a streak should be skipped");
+    }
+
+    #[test]
+    fn test_streak_human_only_day_breaks_streak() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 27).unwrap();
+
+        // today: AI, day -1: human-only (commits but no AI), day -2: AI
+        // The human-only day should stop the streak at 1.
+        let heatmap = vec![
+            DayCell { date: today - chrono::Duration::days(2), commits: 0, ai_assisted: 0, sessions: 1 },
+            DayCell { date: today - chrono::Duration::days(1), commits: 5, ai_assisted: 0, sessions: 0 },
+            DayCell { date: today, commits: 0, ai_assisted: 0, sessions: 1 },
+        ];
+
+        let streak = compute_ai_streak(&heatmap);
+        assert_eq!(streak, 1, "human-only commit day should break the AI streak");
+    }
+
+    #[test]
+    fn test_render_markdown_commit_label() {
+        let card = CardData {
+            author: "TestDev".to_string(),
+            tool_count: 1,
+            project_count: 1,
+            session_count: 10,
+            total_tokens: 1000,
+            ai_percentage: Some(30.0),
+            ai_commits: 50,
+            commits_per_day: Some(2.0),
+            active_days: 10,
+            active_since: None,
+            ai_streak: 0,
+            top_tools: vec![],
+            top_models: vec![],
+            weekly_trend: vec![],
+            heatmap: vec![],
+        };
+
+        let md = render_markdown(&card);
+        assert!(md.contains("| Commits | 50 |"), "should use 'Commits' not 'AI-Assisted Commits'");
+        assert!(!md.contains("AI-Assisted Commits"), "old mislabel should not appear");
+    }
+
+    #[test]
+    fn test_svg_month_labels_use_first_wd_offset() {
+        // Jan 1 2026 is Thursday (first_wd=4). The Feb label should be placed
+        // using (day_offset + first_wd) / 7, not day_offset / 7.
+        // Feb 1 is day_offset=31.
+        // Old (buggy): week_col = 31 / 7 = 4 → x = 60 + 4*14 = 116
+        // New (fixed): week_col = (31 + 4) / 7 = 5 → x = 60 + 5*14 = 130
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let mut heatmap = Vec::new();
+        for i in 0..60 {
+            heatmap.push(DayCell {
+                date: start + chrono::Duration::days(i),
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 0,
+            });
+        }
+
+        let first_wd = start.weekday().num_days_from_sunday();
+        assert_eq!(first_wd, 4, "Jan 1 2026 should be Thursday (4 days from Sunday)");
+
+        let card = CardData {
+            author: "Test".to_string(),
+            tool_count: 0,
+            project_count: 0,
+            session_count: 0,
+            total_tokens: 0,
+            ai_percentage: None,
+            ai_commits: 0,
+            commits_per_day: None,
+            active_days: 0,
+            active_since: None,
+            ai_streak: 0,
+            top_tools: vec![],
+            top_models: vec![],
+            weekly_trend: vec![],
+            heatmap,
+        };
+
+        let svg = render_svg(&card);
+
+        let grid_left: u32 = 32 + 28; // pad + 28
+        let step: u32 = 14; // cell(11) + gap(3)
+        let feb_day_offset: u32 = 31;
+        let correct_col = (feb_day_offset + first_wd) / 7; // 5
+        let buggy_col = feb_day_offset / 7; // 4
+        assert_ne!(correct_col, buggy_col, "formulas should differ for this date");
+
+        let correct_x = grid_left + correct_col * step;
+        let buggy_x = grid_left + buggy_col * step;
+
+        let correct_tag = format!("x=\"{}\"", correct_x);
+        let buggy_tag = format!("x=\"{}\"", buggy_x);
+
+        // Find the Feb label and verify its x-coordinate
+        assert!(svg.contains("Feb"), "SVG should contain Feb label");
+        let feb_pos = svg.find("Feb").unwrap();
+        let label_region = &svg[feb_pos.saturating_sub(80)..feb_pos];
+        assert!(label_region.contains(&correct_tag),
+            "Feb label should be at x={correct_x} (col {correct_col}), not x={buggy_x} (col {buggy_col})");
+        assert!(!label_region.contains(&buggy_tag),
+            "Feb label should not be at the old buggy position x={buggy_x}");
     }
 }

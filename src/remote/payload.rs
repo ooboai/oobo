@@ -182,6 +182,7 @@ mod tests {
                 deleted: 0,
                 attribution: Some(FileAttribution::Ai),
                 agent: Some("claude".into()),
+                line_attributions: Vec::new(),
             }],
             ai_added: 24,
             ai_deleted: 0,

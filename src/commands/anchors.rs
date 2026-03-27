@@ -354,6 +354,7 @@ mod tests {
                 deleted: 5,
                 attribution: Some(crate::core::anchor::FileAttribution::Ai),
                 agent: Some("cursor".into()),
+                line_attributions: Vec::new(),
             }],
             ai_added: 50,
             ai_deleted: 5,

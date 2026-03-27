@@ -69,6 +69,32 @@ pub enum FileAttribution {
     Mixed,
 }
 
+/// A contiguous range of lines (1-indexed, inclusive on both ends).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+impl LineRange {
+    pub fn new(start: u32, end: u32) -> Self {
+        debug_assert!(
+            start <= end,
+            "LineRange invariant violated: start ({start}) > end ({end})"
+        );
+        Self { start, end }
+    }
+}
+
+/// Per-line attribution block: a set of line ranges sharing the same author.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineAttribution {
+    pub author: FileAttribution,
+    pub ranges: Vec<LineRange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+}
+
 /// Per-file change metadata within a commit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChange {
@@ -82,6 +108,13 @@ pub struct FileChange {
     /// Which agent touched this file (if attribution is ai or mixed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// Per-line AI/human attribution for lines added in this commit.
+    /// Ranges are in committed-file coordinates (1-indexed) and only cover
+    /// lines that were added or modified in this commit. Lines unchanged from
+    /// the parent commit are not represented. Empty when blob snapshots are
+    /// not available (e.g., no active AI session at commit time).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub line_attributions: Vec<LineAttribution>,
 }
 
 /// Anchor metadata — the enriched commit primitive.
@@ -373,6 +406,7 @@ mod tests {
                 deleted: 3,
                 attribution: Some(FileAttribution::Ai),
                 agent: Some("cursor".into()),
+                line_attributions: Vec::new(),
             }],
             ai_added: 10,
             ai_deleted: 3,

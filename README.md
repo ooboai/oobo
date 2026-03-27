@@ -180,6 +180,14 @@ oobo anchors -n 20               # show last 20 commits
 oobo a --agent                   # compact output (short alias)
 ```
 
+### Code attribution
+
+```bash
+oobo blame src/main.rs           # per-line AI/human attribution at HEAD
+oobo blame src/main.rs abc123    # at a specific commit
+oobo blame src/main.rs --json    # structured JSON output
+```
+
 ### Analytics
 
 ```bash

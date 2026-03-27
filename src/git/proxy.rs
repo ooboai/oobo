@@ -81,10 +81,24 @@ pub fn run_and_intercept(cfg: &Config, args: &[&str]) -> Result<i32, String> {
         std::env::set_var("OOBO_INTERCEPTED", "1");
     }
 
+    let pre_rewrite_map = if is_rewrite_op(args) && cfg.telemetry.enabled {
+        capture_pre_rewrite_commits(cfg)
+    } else {
+        Vec::new()
+    };
+
     let exit_code = run_git(cfg, args)?;
 
     if exit_code != 0 {
         return Ok(exit_code);
+    }
+
+    if !pre_rewrite_map.is_empty() {
+        if let Some(root) = project_root(cfg) {
+            if let Err(e) = super::orphan::rekey_anchors(&root, &pre_rewrite_map) {
+                log_error(&format!("anchor rekey error: {e}"));
+            }
+        }
     }
 
     // For clone, resolve the new directory; for everything else, use cwd.
@@ -263,6 +277,31 @@ fn log_error(msg: &str) {
     {
         use std::io::Write;
         let _ = f.write_all(line.as_bytes());
+    }
+}
+
+fn is_rewrite_op(args: &[&str]) -> bool {
+    matches!(
+        commands::subcommand_name(args),
+        Some("rebase" | "cherry-pick")
+    )
+}
+
+/// Capture current branch's commit hash → tree hash mapping before a rewrite.
+/// After the rewrite, we match by tree hash to find old→new SHA pairs.
+fn capture_pre_rewrite_commits(cfg: &Config) -> Vec<(String, String)> {
+    let output = run_git_capture(cfg, &["log", "--format=%H %T", "HEAD"]);
+    match output {
+        Ok(text) => text
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.splitn(2, ' ');
+                let hash = parts.next()?.to_string();
+                let tree = parts.next()?.to_string();
+                Some((hash, tree))
+            })
+            .collect(),
+        Err(_) => Vec::new(),
     }
 }
 

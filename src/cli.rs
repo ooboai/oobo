@@ -121,6 +121,21 @@ pub enum Command {
         limit: usize,
     },
 
+    /// Show per-line AI/human attribution for a file
+    #[command(
+        display_order = 3,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo blame src/main.rs          Show AI attribution for file at HEAD\n  \
+                       oobo blame src/main.rs abc123   Show attribution at a specific commit\n  \
+                       oobo blame src/main.rs --json   JSON output"
+    )]
+    Blame {
+        /// File path to show attribution for
+        file: String,
+        /// Commit hash (defaults to HEAD)
+        commit: Option<String>,
+    },
+
     /// Share a session (redacted) -- save locally or upload
     #[command(
         display_order = 3,
@@ -251,7 +266,7 @@ pub enum Command {
         #[arg(long)]
         out: Option<String>,
         /// Output format: png (default), svg, md, json
-        #[arg(long, default_value = "png")]
+        #[arg(long, default_value = "png", value_parser = ["png", "svg", "md", "json"])]
         format: String,
     },
 
@@ -528,6 +543,7 @@ const OOBO_SUBCOMMANDS: &[&str] = &[
     "hooks",
     "anchors",
     "a",
+    "blame",
     "share",
     "inspect",
     "sync",
@@ -672,6 +688,10 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
         }
         Some(Command::Anchors { limit }) => {
             crate::commands::anchors::run(&cfg, limit, mode)?;
+            Ok(0)
+        }
+        Some(Command::Blame { file, commit }) => {
+            crate::commands::blame::run(&cfg, &file, commit.as_deref(), mode)?;
             Ok(0)
         }
         Some(Command::Inspect { fix }) => {

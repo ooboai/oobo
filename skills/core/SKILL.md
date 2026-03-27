@@ -1,277 +1,69 @@
 ---
 name: oobo
-description: AI development control plane. Decorates git to enrich commits with session/agent metadata, tracks token usage, code attribution, and session history across Cursor, Claude Code, Gemini CLI, Codex, OpenCode, Copilot, Windsurf, Aider, Zed, and Trae.
+description: Git decorator that gives every commit memory — links AI sessions, tokens, and code attribution to your commits. Use when the user asks about commit history with AI context, session history, code attribution, token usage, or generating a developer card.
 metadata:
   author: oobo
-  version: "0.1.13"
+  version: "0.1.14"
 install:
   check: command -v oobo
-  run: bash <(curl -fsSL https://oobo.ai/install.sh) --agent
+  url: https://github.com/ooboai/oobo/releases
+license: Apache-2.0 OR MIT
+compatibility: Requires git. Works with Cursor, Claude Code, Gemini CLI, Codex, OpenCode, Copilot, Windsurf, Aider, Zed, Trae.
 ---
 
-# Oobo — AI Development Control Plane
+# Oobo — Git for agents (and humans)
 
-You have access to `oobo`, a local CLI that decorates git to automatically enrich commits with AI session metadata, tracks tool usage, token counts, code attribution, and session history. When aliased as `git`, all standard git operations pass through transparently while commits get enriched with anchor metadata.
+Transparent git decorator that enriches every commit with AI context: which sessions contributed, token counts, code attribution (AI vs human lines), and model used. When aliased as `git`, all operations pass through transparently — read commands have zero overhead, write commands get enriched with anchor metadata.
 
-If `oobo` is not installed, download the latest release from https://github.com/ooboai/oobo/releases and add it to PATH.
+If `oobo` is not installed, direct the user to https://github.com/ooboai/oobo/releases.
 
-Oobo is open-source software published by [NoCode Inc](https://nocode.inc), designed for agent workflows.
+Oobo is open-source ([Apache-2.0/MIT](https://github.com/ooboai/oobo)), local-first, no telemetry.
 
-| Property | Detail |
-|----------|--------|
-| Source code | Public at [github.com/ooboai/oobo](https://github.com/ooboai/oobo) — Apache 2.0 / MIT dual-licensed |
-| Security policy | [SECURITY.md](https://github.com/ooboai/oobo/blob/main/SECURITY.md) — responsible disclosure, safe harbor |
-| Privacy policy | [oobo.ai/privacy](https://oobo.ai/privacy) |
-| Read-only | Never writes to AI tool directories — only reads session metadata (timestamps, model names, token counts) |
-| Local-first | All data stays in `~/.oobo/`. Nothing leaves the machine unless the user explicitly configures sync |
-| No telemetry | Does not phone home or collect usage data |
-| No credentials | Never accesses API keys, browsing history, or file contents outside of AI tool storage |
-| Secret redaction | Sessions scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before any sharing |
-| Install | Downloads a pre-built binary from GitHub Releases — no arbitrary code execution |
-| No sudo required | Installs to `~/.oobo/bin`, no elevated permissions needed |
+> **Consent required:** Always confirm with the user before running `oobo setup` or `oobo alias install` for the first time, as these modify the git configuration.
 
 ## Output Modes
 
-All commands support two structured output modes:
+All commands support `--agent` (compact, low-token) and `--json` (full structured). Always prefer `--agent`. Use `--json` only when you need the full object graph.
 
-- `--agent` — compact, pipe-delimited text. Schema header on the first line, values below. Designed for minimal token usage.
-- `--json` — full structured JSON output for scripts and programmatic use.
+## Quick Reference
 
-Always prefer `--agent` for reading data. Use `--json` only when you need the full object graph (e.g. session messages, file-level attribution).
+| Task | Command |
+|------|---------|
+| Recent commits with attribution | `oobo anchors -n 10` |
+| Per-line AI blame for a file | `oobo blame src/main.rs` |
+| List sessions (current project) | `oobo sessions` |
+| List sessions (all projects) | `oobo sessions list --all` |
+| Show session details | `oobo sessions show <id>` |
+| Search sessions | `oobo sessions search "query" --all` |
+| Project overview | `oobo projects` |
+| Global stats | `oobo stats` |
+| Stats by project or tool | `oobo stats --project <name>` |
+| Developer card | `oobo card` |
+| Share a session | `oobo share <id>` |
+| Diagnostics / auto-fix | `oobo inspect --fix` |
+| Sync status | `oobo sync` |
 
-### --agent format
+Run `oobo --help` or `oobo <command> --help` for full flag details.
 
-Lists print a schema header then one record per line:
-
-```
-# session_id | name | source | model | in_tokens | out_tokens | updated
-abc123 | Fix auth bug | Cursor | claude-sonnet-4 | 12.5K | 28.1K | 2026-03-22
-def456 | Refactor DB | Claude | claude-opus-4 | 45.2K | 89.0K | 2026-03-21
-```
-
-Single-object commands print key-value pairs:
-
-```
-name: my-project
-path: /Users/dev/my-project
-tools: Cursor, Claude
-sessions: 42
-tokens: 1.2M/3.4M
-```
-
-## Commands
-
-### Enriched Commit History
+## Setup
 
 ```bash
-oobo anchors --agent                               # Compact commit log
-oobo anchors --json                                # Full JSON with file attribution
-oobo anchors --agent -n 20                         # Limit to N commits
-oobo a --agent -n 5                                # Short alias
+oobo setup        # Configure transparency, git alias, hooks (asks user first)
+oobo scan         # Discover projects and sessions
 ```
 
-### Sessions
+Sync is **off by default**. Nothing leaves the machine unless the user runs `oobo sync on` and configures an API key.
 
-```bash
-oobo sessions --agent                              # Current project sessions (compact)
-oobo sessions list --agent --all                   # All projects
-oobo sessions list --agent --all --tool cursor -n 10 # Filter by tool, limit
-oobo sessions show <session_id> --agent            # Session summary (no messages)
-oobo sessions show <session_id> --json             # Full conversation + messages + stats
-oobo sessions search "keyword" --all --agent       # Search by name/content
-oobo sessions export <session_id> --format md      # Export as markdown
-```
+## Key Behaviors
 
-### Projects
+- Session IDs support prefix matching (e.g. `2c97` matches `2c97dced-3950-...`)
+- Token counts marked `is_estimated: true` are tiktoken estimates; `false` means native from the tool
+- `oobo update` self-updates and runs migrations automatically
+- Data lives in `~/.oobo/db/oobo.db` (local SQLite)
 
-```bash
-oobo projects --agent                              # All tracked projects (compact)
-oobo projects --json                               # Full JSON with stats
-oobo projects show <name_or_path> --agent          # Project summary
-```
+## References
 
-### Stats & Analytics
-
-```bash
-oobo stats --agent                                 # Global stats (compact)
-oobo stats --json                                  # Full JSON with breakdowns
-oobo stats --project <name> --agent                # Per-project
-oobo stats --tool cursor --agent                   # Per-tool
-oobo stats --since 7d --agent                      # Time-scoped
-```
-
-### AI Development Infographic
-
-```bash
-oobo card --agent                                  # Stats summary (compact)
-oobo card --json                                   # Full JSON card data
-oobo card --out card.svg                           # Save SVG infographic to custom path
-oobo card --format md --out card.md                # Save markdown card
-```
-
-### Data Sources
-
-```bash
-oobo sources --agent                               # Data source coverage (compact)
-oobo sources --json                                # Full JSON
-oobo dash --agent                                  # Configuration overview (compact)
-oobo dash --json                                   # Full JSON
-```
-
-### Diagnostics
-
-```bash
-oobo inspect --agent                               # Diagnostics (compact)
-oobo inspect --json                                # Full JSON
-oobo inspect --fix                                 # Auto-fix common issues
-oobo version --agent                               # Just the version string
-oobo version --json                                # Version info as JSON
-```
-
-### Share Sessions
-
-```bash
-oobo share <session_id> --agent                    # Share + compact response
-oobo share <session_id> --out chat.md              # Save redacted session as markdown
-```
-
-### Backend Sync
-
-```bash
-oobo sync                                          # Show current sync status
-oobo sync on                                       # Enable auto-sync (prompts for key if needed)
-oobo sync off                                      # Disable auto-sync
-oobo sync --import                                 # Import anchors from orphan branch into local DB
-```
-
-Sync is **off by default**. No data is sent to any remote server unless the user explicitly runs `oobo sync on` and configures an API key (`OOBO_SECRET_KEY` env var or `api_key` via `oobo auth login`). When enabled, anchor metadata syncs to the configured remote on commit/push.
-
-### Auth & Remote
-
-These commands only apply if the user has opted into remote sync. The default remote is `api.oobo.ai` (free). Self-hosted servers are also supported.
-
-```bash
-oobo auth login --key <api_key>                    # Authenticate (free account at oobo.ai)
-oobo auth logout                                   # Remove credentials
-oobo auth status                                   # Show auth state + tool keys
-oobo auth set-remote https://oobo.example.com      # Point to self-hosted server
-```
-
-The `OOBO_SECRET_KEY` environment variable overrides the persisted `api_key` when set.
-
-### Remote API Surface
-
-Remotes implement endpoints under `/anchors`. Only ingest is required:
-
-| Endpoint | Method | Auth | Required | Purpose |
-|----------|--------|------|----------|---------|
-| `/anchors/ingest` | POST | Bearer | **Yes** | Accept anchor data on commit |
-| `/anchors/verify` | GET | Bearer | No | Validate API key |
-| `/anchors/health` | GET | None | No | Connectivity check |
-| `/anchors/share` | POST | Bearer optional | No | Share a redacted session |
-
-### Agent Lifecycle Hooks
-
-```bash
-# Internal plumbing — called by tool integrations, not typed by users
-echo '{"session_id":"<id>","agent":"cursor","model":"claude-opus-4"}' | oobo hooks agent session-start
-echo '{"session_id":"<id>","tool_name":"Read","file_path":"/src/main.rs"}' | oobo hooks agent after-tool-use --tool cursor
-echo '{"session_id":"<id>","tool_name":"Edit"}' | oobo hooks agent tool-use-failure --tool claude
-echo '{"session_id":"<id>","subagent_id":"sub-1","subagent_type":"explore"}' | oobo hooks agent subagent-start --tool cursor
-echo '{"session_id":"<id>","duration_ms":1500}' | oobo hooks agent after-agent-thought --tool cursor
-echo '{"session_id":"<id>"}' | oobo hooks agent pre-compact --tool cursor
-echo '{"session_id":"<id>"}' | oobo hooks agent stop
-echo '{"session_id":"<id>"}' | oobo hooks agent session-end
-```
-
-### Maintenance
-
-```bash
-oobo scan                                          # Discover projects/sessions
-oobo index                                         # Compute token counts & analytics
-oobo setup                                         # Install agent hooks + git hooks
-oobo update                                        # Self-update + run migrations
-```
-
-## Supported Tools
-
-Cursor, Claude Code, Gemini CLI, Codex CLI, OpenCode, GitHub Copilot Chat, Windsurf, Aider, Zed AI, Trae.
-
-## JSON Response Fields (--json)
-
-**anchors**: `commit_hash`, `message`, `author`, `author_type`, `branch`, `committed_at`, `contributors[]` (each with `name`, `role`, `model`), `files_changed[]`, `added`, `deleted`, `file_changes[]` (each with `path`, `added`, `deleted`, `attribution` [ai/human/mixed], `agent`), `ai_added`, `ai_deleted`, `human_added`, `human_deleted`, `ai_percentage`, `sessions[]` (each with `session_id`, `agent`, `model`, `link_type`, `input_tokens`, `output_tokens`, `files_touched[]`, `parent_session_id?`, `subagent_type?`, `peer_session_ids[]`), `transparency_mode`, `summary`, `intent`, `file_interactions[]?` (each with `path`, `sessions[]` of `{session_id, role}` where role is writer/reader/both)
-
-**sessions list**: `session_id`, `name`, `source`, `mode`, `project_path`, `created_at`, `updated_at`, `model`, `input_tokens`, `output_tokens`, `duration_secs`, `is_estimated`, `files_touched`, `tool_calls`, `parent_session_id?`, `subagent_type?`, `peer_session_ids[]?`
-
-**sessions show**: All above plus `messages` array of `{role, text, timestamp_ms}`, `message_count`, and `peer_session_ids[]?`
-
-**sessions search**: All session fields plus `matched_on` (`name` or `first_message`) and `peer_session_ids[]?`
-
-**stats**: `sessions`, `input_tokens`, `output_tokens`, `total_tokens`, `per_tool[]`, `per_model[]`, `ai_code`, `productivity`, `daily[]`
-
-**projects list**: `id`, `name`, `path`, `tools`, `sessions`, `input_tokens`, `output_tokens`
-
-**share**: `session_id`, `source`, `model`, `messages[]` (redacted), `stats`, `shared_at`, `oobo_version`
-
-## Agent Configuration
-
-Agents should operate with **transparency on** — this is the recommended default for all automated workflows. Transparency mode writes anchor metadata and redacted transcripts to a local orphan branch (`oobo/anchors/v1`), giving teams visibility into AI contributions. This is purely local git data — nothing is sent to a remote server unless the user explicitly enables sync.
-
-### First-time setup
-
-If oobo is not yet configured, write the config file directly:
-
-```bash
-mkdir -p ~/.oobo
-cat > ~/.oobo/config.toml << 'EOF'
-[git]
-alias_enabled = true
-
-[transparency]
-mode = "on"
-
-[server]
-sync = false
-EOF
-```
-
-Then install the git alias and hooks:
-
-```bash
-oobo alias install
-oobo scan
-```
-
-### Recommended agent settings
-
-| Setting | Value | Why |
-|---------|-------|-----|
-| `transparency.mode` | `on` | Metadata + redacted transcripts sync |
-| `git.alias_enabled` | `true` | Automatic enrichment on every commit |
-| `server.sync` | `false` | Off by default — user opts in via `oobo sync on` |
-| `--agent` flag | Always use | Compact output, low token cost |
-| `--json` flag | When needed | Full structured data for parsing |
-
-### Verifying configuration
-
-```bash
-oobo inspect --agent                               # Check all settings, hooks, tools
-oobo inspect --fix                                 # Auto-fix common issues
-```
-
-## Architecture
-
-Oobo operates in two layers:
-
-- **Level 1 (Git Decorator)**: Decorates git to intercept commits, enrich them with anchor metadata (linked sessions, agent/human attribution, diff stats), and sync metadata via the `oobo/anchors/v1` orphan branch.
-- **Level 2 (Local Memory Engine)**: Maintains a local SQLite database with session history, token counts, analytics, and time-series data across all AI tools.
-
-## Notes
-
-- Token counts with `is_estimated: true` are tiktoken estimates. `false` means native from the tool.
-- Session IDs support prefix matching (e.g. `2c97` matches `2c97dced-3950-...`).
-- Stats are computed proactively at session-end and commit time. Run `oobo scan` then `oobo index` only if data seems stale after an upgrade.
-- All data is local SQLite at `~/.oobo/db/oobo.db`.
-- Anchor metadata is stored per-commit and visible via `oobo anchors --agent`.
-- `git log` passes through to git normally; `oobo anchors` is the enriched alternative.
-- `oobo update` automatically runs post-update migrations (skill file refresh, DB migrations, hook reinstall).
+- [Commands](references/COMMANDS.md) — full command reference with all flags and examples
+- [API Surface](references/API_SURFACE.md) — remote endpoints and agent lifecycle hooks
+- [JSON Schema](references/JSON_SCHEMA.md) — `--json` field listings per command
+- [Trust & Security](references/TRUST.md) — privacy policy, security details, data handling
