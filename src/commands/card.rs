@@ -37,9 +37,13 @@ pub fn run(mode: OutputMode, out: Option<String>, format: &str) -> Result<(), St
         project_count,
         session_count: global.session_count,
         total_tokens,
-        ai_percentage: ai_headline
-            .as_ref()
-            .and_then(|a| if a.total_commits > 0 { Some(a.ai_percentage) } else { None }),
+        ai_percentage: ai_headline.as_ref().and_then(|a| {
+            if a.total_commits > 0 {
+                Some(a.ai_percentage)
+            } else {
+                None
+            }
+        }),
         ai_commits: ai_headline.as_ref().map(|a| a.total_commits).unwrap_or(0),
         commits_per_day: productivity.as_ref().map(|p| p.commits_per_day()),
         active_days: productivity.as_ref().map(|p| p.active_days).unwrap_or(0),
@@ -1418,8 +1422,14 @@ mod tests {
         };
 
         let svg = render_svg(&card);
-        assert!(svg.contains("N/A"), "SVG should show N/A when ai_percentage is None");
-        assert!(!svg.contains("0% AI"), "SVG should not show 0% AI when there's no data");
+        assert!(
+            svg.contains("N/A"),
+            "SVG should show N/A when ai_percentage is None"
+        );
+        assert!(
+            !svg.contains("0% AI"),
+            "SVG should not show 0% AI when there's no data"
+        );
     }
 
     #[test]
@@ -1430,13 +1440,31 @@ mod tests {
         // Old buggy code: idle → fall through → idle → fall through → AI → streak=1
         // Fixed code: idle → break → streak=0
         let heatmap = vec![
-            DayCell { date: today - chrono::Duration::days(2), commits: 0, ai_assisted: 1, sessions: 0 },
-            DayCell { date: today - chrono::Duration::days(1), commits: 0, ai_assisted: 0, sessions: 0 },
-            DayCell { date: today, commits: 0, ai_assisted: 0, sessions: 0 },
+            DayCell {
+                date: today - chrono::Duration::days(2),
+                commits: 0,
+                ai_assisted: 1,
+                sessions: 0,
+            },
+            DayCell {
+                date: today - chrono::Duration::days(1),
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 0,
+            },
+            DayCell {
+                date: today,
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 0,
+            },
         ];
 
         let streak = compute_ai_streak(&heatmap);
-        assert_eq!(streak, 0, "idle days at the end should not count old disconnected AI activity");
+        assert_eq!(
+            streak, 0,
+            "idle days at the end should not count old disconnected AI activity"
+        );
     }
 
     #[test]
@@ -1444,14 +1472,37 @@ mod tests {
         let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 27).unwrap();
 
         let heatmap = vec![
-            DayCell { date: today - chrono::Duration::days(3), commits: 0, ai_assisted: 0, sessions: 0 },
-            DayCell { date: today - chrono::Duration::days(2), commits: 0, ai_assisted: 1, sessions: 0 },
-            DayCell { date: today - chrono::Duration::days(1), commits: 0, ai_assisted: 0, sessions: 2 },
-            DayCell { date: today, commits: 0, ai_assisted: 1, sessions: 1 },
+            DayCell {
+                date: today - chrono::Duration::days(3),
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 0,
+            },
+            DayCell {
+                date: today - chrono::Duration::days(2),
+                commits: 0,
+                ai_assisted: 1,
+                sessions: 0,
+            },
+            DayCell {
+                date: today - chrono::Duration::days(1),
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 2,
+            },
+            DayCell {
+                date: today,
+                commits: 0,
+                ai_assisted: 1,
+                sessions: 1,
+            },
         ];
 
         let streak = compute_ai_streak(&heatmap);
-        assert_eq!(streak, 3, "three consecutive AI days should give streak of 3");
+        assert_eq!(
+            streak, 3,
+            "three consecutive AI days should give streak of 3"
+        );
     }
 
     #[test]
@@ -1459,10 +1510,30 @@ mod tests {
         let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 27).unwrap();
 
         let heatmap = vec![
-            DayCell { date: today - chrono::Duration::days(3), commits: 0, ai_assisted: 0, sessions: 1 },
-            DayCell { date: today - chrono::Duration::days(2), commits: 0, ai_assisted: 0, sessions: 0 },
-            DayCell { date: today - chrono::Duration::days(1), commits: 0, ai_assisted: 0, sessions: 0 },
-            DayCell { date: today, commits: 0, ai_assisted: 0, sessions: 1 },
+            DayCell {
+                date: today - chrono::Duration::days(3),
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 1,
+            },
+            DayCell {
+                date: today - chrono::Duration::days(2),
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 0,
+            },
+            DayCell {
+                date: today - chrono::Duration::days(1),
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 0,
+            },
+            DayCell {
+                date: today,
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 1,
+            },
         ];
 
         let streak = compute_ai_streak(&heatmap);
@@ -1476,13 +1547,31 @@ mod tests {
         // today: AI, day -1: human-only (commits but no AI), day -2: AI
         // The human-only day should stop the streak at 1.
         let heatmap = vec![
-            DayCell { date: today - chrono::Duration::days(2), commits: 0, ai_assisted: 0, sessions: 1 },
-            DayCell { date: today - chrono::Duration::days(1), commits: 5, ai_assisted: 0, sessions: 0 },
-            DayCell { date: today, commits: 0, ai_assisted: 0, sessions: 1 },
+            DayCell {
+                date: today - chrono::Duration::days(2),
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 1,
+            },
+            DayCell {
+                date: today - chrono::Duration::days(1),
+                commits: 5,
+                ai_assisted: 0,
+                sessions: 0,
+            },
+            DayCell {
+                date: today,
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 1,
+            },
         ];
 
         let streak = compute_ai_streak(&heatmap);
-        assert_eq!(streak, 1, "human-only commit day should break the AI streak");
+        assert_eq!(
+            streak, 1,
+            "human-only commit day should break the AI streak"
+        );
     }
 
     #[test]
@@ -1506,8 +1595,14 @@ mod tests {
         };
 
         let md = render_markdown(&card);
-        assert!(md.contains("| Commits | 50 |"), "should use 'Commits' not 'AI-Assisted Commits'");
-        assert!(!md.contains("AI-Assisted Commits"), "old mislabel should not appear");
+        assert!(
+            md.contains("| Commits | 50 |"),
+            "should use 'Commits' not 'AI-Assisted Commits'"
+        );
+        assert!(
+            !md.contains("AI-Assisted Commits"),
+            "old mislabel should not appear"
+        );
     }
 
     #[test]
@@ -1529,7 +1624,10 @@ mod tests {
         }
 
         let first_wd = start.weekday().num_days_from_sunday();
-        assert_eq!(first_wd, 4, "Jan 1 2026 should be Thursday (4 days from Sunday)");
+        assert_eq!(
+            first_wd, 4,
+            "Jan 1 2026 should be Thursday (4 days from Sunday)"
+        );
 
         let card = CardData {
             author: "Test".to_string(),
@@ -1556,7 +1654,10 @@ mod tests {
         let feb_day_offset: u32 = 31;
         let correct_col = (feb_day_offset + first_wd) / 7; // 5
         let buggy_col = feb_day_offset / 7; // 4
-        assert_ne!(correct_col, buggy_col, "formulas should differ for this date");
+        assert_ne!(
+            correct_col, buggy_col,
+            "formulas should differ for this date"
+        );
 
         let correct_x = grid_left + correct_col * step;
         let buggy_x = grid_left + buggy_col * step;
@@ -1570,7 +1671,9 @@ mod tests {
         let label_region = &svg[feb_pos.saturating_sub(80)..feb_pos];
         assert!(label_region.contains(&correct_tag),
             "Feb label should be at x={correct_x} (col {correct_col}), not x={buggy_x} (col {buggy_col})");
-        assert!(!label_region.contains(&buggy_tag),
-            "Feb label should not be at the old buggy position x={buggy_x}");
+        assert!(
+            !label_region.contains(&buggy_tag),
+            "Feb label should not be at the old buggy position x={buggy_x}"
+        );
     }
 }

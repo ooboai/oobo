@@ -1311,7 +1311,9 @@ fn test_oobo_blame_json_output() {
                 .stdin
                 .take()
                 .unwrap()
-                .write_all(br#"{"session_id":"blame-test","agent":"cursor","model":"claude-opus-4"}"#)
+                .write_all(
+                    br#"{"session_id":"blame-test","agent":"cursor","model":"claude-opus-4"}"#,
+                )
                 .unwrap();
             child.wait_with_output()
         })

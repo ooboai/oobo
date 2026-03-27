@@ -350,50 +350,73 @@ fn enrich_commit(
 
     for (path, added, deleted) in &per_file {
         let pre_blob = pre_agent_lookup.get(path.as_str()).cloned();
-        let (file_ai_add, file_ai_del, file_human_add, file_human_del, attribution, agent, line_attrs) =
-            if let Some((agent_blob, agent_name)) = snapshot_lookup.get(path.as_str()) {
-                compute_precise_attribution(
-                    cfg,
-                    path,
-                    agent_blob,
-                    pre_blob.as_deref(),
+        let (
+            file_ai_add,
+            file_ai_del,
+            file_human_add,
+            file_human_del,
+            attribution,
+            agent,
+            line_attrs,
+        ) = if let Some((agent_blob, agent_name)) = snapshot_lookup.get(path.as_str()) {
+            compute_precise_attribution(
+                cfg,
+                path,
+                agent_blob,
+                pre_blob.as_deref(),
+                *added,
+                *deleted,
+                agent_name.clone(),
+            )
+        } else if ai_file_set.contains(path.as_str()) {
+            let agent_name = ai_files_touched
+                .iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, a)| a.clone());
+            if is_agent_commit {
+                (
                     *added,
                     *deleted,
-                    agent_name.clone(),
+                    0,
+                    0,
+                    Some(FileAttribution::Ai),
+                    agent_name,
+                    Vec::new(),
                 )
-            } else if ai_file_set.contains(path.as_str()) {
-                let agent_name = ai_files_touched
-                    .iter()
-                    .find(|(p, _)| p == path)
-                    .map(|(_, a)| a.clone());
-                if is_agent_commit {
-                    (
-                        *added,
-                        *deleted,
-                        0,
-                        0,
-                        Some(FileAttribution::Ai),
-                        agent_name,
-                        Vec::new(),
-                    )
-                } else {
-                    let ai_a = *added / 2;
-                    let ai_d = *deleted / 2;
-                    (
-                        ai_a,
-                        ai_d,
-                        added - ai_a,
-                        deleted - ai_d,
-                        Some(FileAttribution::Mixed),
-                        agent_name,
-                        Vec::new(),
-                    )
-                }
-            } else if is_agent_commit && !has_ai_sessions {
-                (*added, *deleted, 0, 0, Some(FileAttribution::Ai), None, Vec::new())
             } else {
-                (0, 0, *added, *deleted, Some(FileAttribution::Human), None, Vec::new())
-            };
+                let ai_a = *added / 2;
+                let ai_d = *deleted / 2;
+                (
+                    ai_a,
+                    ai_d,
+                    added - ai_a,
+                    deleted - ai_d,
+                    Some(FileAttribution::Mixed),
+                    agent_name,
+                    Vec::new(),
+                )
+            }
+        } else if is_agent_commit && !has_ai_sessions {
+            (
+                *added,
+                *deleted,
+                0,
+                0,
+                Some(FileAttribution::Ai),
+                None,
+                Vec::new(),
+            )
+        } else {
+            (
+                0,
+                0,
+                *added,
+                *deleted,
+                Some(FileAttribution::Human),
+                None,
+                Vec::new(),
+            )
+        };
 
         ai_added += file_ai_add;
         ai_deleted += file_ai_del;
@@ -599,12 +622,8 @@ fn compute_precise_attribution(
 
     // If agent blob matches committed blob → pure AI (human didn't change it after the agent)
     if !committed_blob.is_empty() && agent_blob == committed_blob {
-        let line_attrs = compute_pure_ai_line_attrs(
-            cfg,
-            &baseline_blob,
-            &committed_blob,
-            agent_name.as_deref(),
-        );
+        let line_attrs =
+            compute_pure_ai_line_attrs(cfg, &baseline_blob, &committed_blob, agent_name.as_deref());
         return (
             total_added,
             total_deleted,
@@ -684,7 +703,9 @@ fn compute_pure_ai_line_attrs(
 ) -> Vec<LineAttribution> {
     let ai_ranges = if baseline_blob.is_empty() {
         // New file: every line is AI
-        blob_total_range(cfg, committed_blob).map(|r| vec![r]).unwrap_or_default()
+        blob_total_range(cfg, committed_blob)
+            .map(|r| vec![r])
+            .unwrap_or_default()
     } else {
         diff_blobs_added_ranges(cfg, baseline_blob, committed_blob).unwrap_or_default()
     };
@@ -717,7 +738,9 @@ fn compute_mixed_line_attrs(
     }
 
     let all_added = if baseline_blob.is_empty() {
-        blob_total_range(cfg, committed_blob).map(|r| vec![r]).unwrap_or_default()
+        blob_total_range(cfg, committed_blob)
+            .map(|r| vec![r])
+            .unwrap_or_default()
     } else {
         diff_blobs_added_ranges(cfg, baseline_blob, committed_blob).unwrap_or_default()
     };
@@ -726,8 +749,7 @@ fn compute_mixed_line_attrs(
         return Vec::new();
     }
 
-    let human_ranges =
-        diff_blobs_added_ranges(cfg, agent_blob, committed_blob).unwrap_or_default();
+    let human_ranges = diff_blobs_added_ranges(cfg, agent_blob, committed_blob).unwrap_or_default();
 
     if human_ranges.is_empty() {
         return vec![LineAttribution {
@@ -2185,10 +2207,7 @@ diff --git a/blob1 b/blob2
 
     #[test]
     fn test_extract_hunk_plus_with_context() {
-        assert_eq!(
-            extract_hunk_plus("@@ -1,3 +4,5 @@ fn main()"),
-            Some("4,5")
-        );
+        assert_eq!(extract_hunk_plus("@@ -1,3 +4,5 @@ fn main()"), Some("4,5"));
     }
 
     #[test]
@@ -2208,7 +2227,10 @@ diff --git a/blob1 b/blob2
 
     #[test]
     fn test_subtract_ranges_no_overlap() {
-        let source = vec![LineRange { start: 1, end: 5 }, LineRange { start: 10, end: 15 }];
+        let source = vec![
+            LineRange { start: 1, end: 5 },
+            LineRange { start: 10, end: 15 },
+        ];
         let remove = vec![LineRange { start: 6, end: 9 }];
         let result = subtract_ranges(&source, &remove);
         assert_eq!(result.len(), 2);

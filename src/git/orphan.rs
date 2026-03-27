@@ -335,9 +335,7 @@ pub fn rekey_anchors(
                     }
                 }
 
-                if let Some(content) =
-                    read_from_branch(project_root, file_path)
-                {
+                if let Some(content) = read_from_branch(project_root, file_path) {
                     entries.push((new_path, content));
                 }
             }

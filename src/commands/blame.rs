@@ -15,14 +15,23 @@ pub fn run(cfg: &Config, file: &str, commit: Option<&str>, mode: OutputMode) -> 
 
     let normalized = normalize_file_path(file, &project_root);
 
-    let anchor = orphan::read_anchor(&project_root, &commit_hash)
-        .ok_or_else(|| format!("no anchor metadata for commit {}", &commit_hash[..7.min(commit_hash.len())]))?;
+    let anchor = orphan::read_anchor(&project_root, &commit_hash).ok_or_else(|| {
+        format!(
+            "no anchor metadata for commit {}",
+            &commit_hash[..7.min(commit_hash.len())]
+        )
+    })?;
 
     let file_change = anchor
         .file_changes
         .iter()
         .find(|fc| fc.path == normalized)
-        .ok_or_else(|| format!("file '{normalized}' not found in commit {}", &commit_hash[..7.min(commit_hash.len())]))?;
+        .ok_or_else(|| {
+            format!(
+                "file '{normalized}' not found in commit {}",
+                &commit_hash[..7.min(commit_hash.len())]
+            )
+        })?;
 
     if mode == OutputMode::Json {
         let j = serde_json::to_string_pretty(file_change).map_err(|e| format!("json: {e}"))?;
@@ -105,9 +114,7 @@ fn print_tui_output(
                     .unwrap_or_else(|| " ai      ".to_string());
                 ("ai   ", "\x1b[36m", agent_label)
             }
-            Some((FileAttribution::Human, _)) => {
-                ("human", "\x1b[33m", "         ".to_string())
-            }
+            Some((FileAttribution::Human, _)) => ("human", "\x1b[33m", "         ".to_string()),
             Some((FileAttribution::Mixed, agent)) => {
                 let agent_label = agent
                     .as_ref()
