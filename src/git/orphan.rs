@@ -342,7 +342,7 @@ pub fn rekey_anchors(
                 }
             }
 
-            if let Some(ref db) = crate::db::Db::open().ok() {
+            if let Ok(ref db) = crate::db::Db::open() {
                 if let Some(mut anchor) = read_anchor(project_root, old_hash) {
                     anchor.commit_hash = new_hash.to_string();
                     let raw = serde_json::to_string(&anchor).unwrap_or_default();

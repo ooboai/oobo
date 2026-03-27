@@ -860,7 +860,7 @@ fn extract_hunk_plus(hunk_line: &str) -> Option<&str> {
     let after_at = hunk_line.strip_prefix("@@")?;
     let plus_idx = after_at.find('+')?;
     let rest = &after_at[plus_idx + 1..];
-    let end = rest.find(|c: char| c == ' ' || c == '@').unwrap_or(rest.len());
+    let end = rest.find([' ', '@']).unwrap_or(rest.len());
     Some(&rest[..end])
 }
 
