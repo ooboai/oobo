@@ -422,7 +422,7 @@ impl Db {
         let total_output: i64 = self
             .conn
             .query_row(
-                "SELECT COALESCE(SUM(output_tokens), 0) FROM session_stats",
+                "SELECT COALESCE(SUM(output_tokens), 0) FROM session_stats WHERE model IS NOT NULL AND model != ''",
                 [],
                 |r| r.get(0),
             )

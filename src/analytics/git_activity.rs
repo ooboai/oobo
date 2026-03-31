@@ -338,7 +338,29 @@ impl Db {
             )
             .map_err(|e| format!("cannot compute productivity summary: {e}"))?;
 
-        Ok(row)
+        let session_days: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(DISTINCT d) FROM (
+                    SELECT date(CASE WHEN COALESCE(updated_at, created_at) >= 1000000000000000 THEN COALESCE(updated_at, created_at) / 1000000
+                                     WHEN COALESCE(updated_at, created_at) >= 1000000000000 THEN COALESCE(updated_at, created_at) / 1000
+                                     ELSE COALESCE(updated_at, created_at) END,
+                                'unixepoch', 'localtime') AS d
+                    FROM sessions
+                    WHERE COALESCE(updated_at, created_at) IS NOT NULL
+                      AND COALESCE(updated_at, created_at) > 0
+                    UNION
+                    SELECT date FROM git_activity
+                )",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(row.active_days);
+
+        Ok(ProductivitySummary {
+            active_days: session_days,
+            ..row
+        })
     }
 }
 

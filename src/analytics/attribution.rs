@@ -4,7 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::db::ai_commits::AiCommitRow;
 use crate::db::Db;
 
-const SESSION_BUFFER_SECS: i64 = 300; // 5 minutes after session end
+const SESSION_BUFFER_SECS: i64 = 900; // 15 minutes after session end
+const MIN_SESSION_DURATION_SECS: i64 = 3600; // assume at least 1h for sessions missing updated_at
 
 pub fn run_attribution(db: &Db, force: bool) -> Result<(usize, usize), String> {
     let projects = db.list_projects()?;
@@ -128,6 +129,99 @@ pub fn run_attribution(db: &Db, force: bool) -> Result<(usize, usize), String> {
         }
     }
 
+    // Pass 2: process any anchors not already covered by git-log scan above.
+    // This catches commits on merged branches that --first-parent skips.
+    {
+        let mut stmt = db
+            .conn
+            .prepare(
+                "SELECT a.commit_hash, a.raw_json FROM anchors a
+                 WHERE a.raw_json IS NOT NULL",
+            )
+            .map_err(|e| format!("cannot query anchors: {e}"))?;
+
+        let anchors: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| format!("anchor query error: {e}"))?
+            .flatten()
+            .collect();
+
+        for (hash, json) in &anchors {
+            if !force {
+                let exists: i64 = db
+                    .conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM ai_commits WHERE commit_hash = ?1 AND source LIKE 'anchor:%'",
+                        rusqlite::params![hash],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                if exists > 0 {
+                    continue;
+                }
+            }
+
+            let anchor: crate::core::anchor::Anchor = match serde_json::from_str(json) {
+                Ok(a) => a,
+                Err(_) => continue,
+            };
+
+            let ai_added = anchor.ai_added as i64;
+            let human_added = anchor.human_added as i64;
+            if anchor.file_changes.is_empty() && ai_added == 0 && human_added == 0 {
+                continue;
+            }
+
+            let source = if !anchor.session_ids.is_empty() {
+                let agents: Vec<&str> = anchor
+                    .contributors
+                    .iter()
+                    .filter(|c| c.role == crate::core::anchor::ContributorRole::Agent)
+                    .map(|c| c.name.as_str())
+                    .collect();
+                if agents.is_empty() {
+                    "anchor:assisted".to_string()
+                } else {
+                    format!("anchor:{}", agents.join("+"))
+                }
+            } else {
+                "anchor:human".to_string()
+            };
+
+            let row = AiCommitRow {
+                commit_hash: hash.clone(),
+                branch_name: anchor.branch,
+                project_id: None,
+                commit_message: Some(anchor.message),
+                commit_date: None,
+                lines_added: anchor.added as i64,
+                lines_deleted: anchor.deleted as i64,
+                ai_lines_added: ai_added,
+                ai_lines_deleted: anchor.ai_deleted as i64,
+                tab_lines_added: 0,
+                tab_lines_deleted: 0,
+                human_lines_added: human_added,
+                human_lines_deleted: anchor.human_deleted as i64,
+                ai_percentage: anchor.ai_percentage,
+                source,
+                ingested_at: now,
+            };
+
+            db.upsert_ai_commit(&row)?;
+
+            if anchor.committed_at > 0 {
+                db.conn
+                    .execute(
+                        "UPDATE ai_commits SET commit_epoch = ?1, commit_date = ?2 WHERE commit_hash = ?3 AND branch_name = ?4",
+                        rusqlite::params![anchor.committed_at, epoch_to_date_string(anchor.committed_at), hash, row.branch_name],
+                    )
+                    .ok();
+            }
+
+            total_attributed += 1;
+        }
+    }
+
     Ok((total_attributed, total_skipped))
 }
 
@@ -142,7 +236,7 @@ fn attribution_from_anchor(
     let anchor_json: String = db
         .conn
         .query_row(
-            "SELECT data FROM anchors WHERE commit_hash = ?1",
+            "SELECT raw_json FROM anchors WHERE commit_hash = ?1",
             rusqlite::params![commit.hash],
             |r| r.get(0),
         )
@@ -233,7 +327,11 @@ fn build_session_windows(db: &Db) -> Result<Vec<SessionWindow>, String> {
         };
 
         let start = normalize_epoch(created);
-        let end = normalize_epoch(updated.unwrap_or(created)) + SESSION_BUFFER_SECS;
+        let raw_end = match updated {
+            Some(u) if u != created => normalize_epoch(u),
+            _ => start + MIN_SESSION_DURATION_SECS,
+        };
+        let end = raw_end + SESSION_BUFFER_SECS;
 
         if end <= start {
             continue;
@@ -573,6 +671,50 @@ mod tests {
 
         let windows = build_session_windows(&db).unwrap();
         assert!(windows.is_empty());
+    }
+
+    #[test]
+    fn test_build_session_windows_min_duration_for_missing_updated_at() {
+        use crate::db::projects::ProjectRow;
+        use crate::db::sessions::SessionRow;
+        use crate::db::Db;
+
+        let db = Db::open_in_memory().unwrap();
+        db.upsert_project(&ProjectRow {
+            id: "proj".into(),
+            path: "/proj".into(),
+            name: "proj".into(),
+            git_remote: None,
+            discovered_at: 1000,
+            last_seen_at: 1000,
+            last_scanned_at: 0,
+            tools: vec![],
+        })
+        .unwrap();
+
+        db.upsert_session(&SessionRow {
+            id: "s-no-update".into(),
+            source: "cursor".into(),
+            project_id: "proj".into(),
+            name: None,
+            mode: None,
+            model: None,
+            created_at: Some(5000),
+            updated_at: None,
+            message_count: 1,
+            first_message: None,
+            indexed_at: 0,
+        })
+        .unwrap();
+
+        let windows = build_session_windows(&db).unwrap();
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].start_epoch, 5000);
+        assert_eq!(
+            windows[0].end_epoch,
+            5000 + MIN_SESSION_DURATION_SECS + SESSION_BUFFER_SECS,
+            "sessions without updated_at should use minimum duration"
+        );
     }
 
     #[test]

@@ -49,6 +49,7 @@ impl Db {
                  ON CONFLICT(commit_hash, branch_name) DO UPDATE SET
                     project_id = COALESCE(excluded.project_id, ai_commits.project_id),
                     commit_message = COALESCE(excluded.commit_message, ai_commits.commit_message),
+                    commit_date = COALESCE(excluded.commit_date, ai_commits.commit_date),
                     lines_added = excluded.lines_added,
                     lines_deleted = excluded.lines_deleted,
                     ai_lines_added = excluded.ai_lines_added,
@@ -58,6 +59,7 @@ impl Db {
                     human_lines_added = excluded.human_lines_added,
                     human_lines_deleted = excluded.human_lines_deleted,
                     ai_percentage = excluded.ai_percentage,
+                    source = excluded.source,
                     ingested_at = excluded.ingested_at",
                 params![
                     row.commit_hash,
@@ -84,7 +86,11 @@ impl Db {
 
     pub fn ai_commit_count(&self) -> Result<i64, String> {
         self.conn
-            .query_row("SELECT COUNT(*) FROM ai_commits", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(DISTINCT commit_hash) FROM ai_commits",
+                [],
+                |r| r.get(0),
+            )
             .map_err(|e| format!("cannot count ai_commits: {e}"))
     }
 
@@ -158,22 +164,27 @@ impl Db {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT
-                strftime('%Y-W%W', COALESCE(
-                    datetime(commit_epoch, 'unixepoch'),
-                    datetime(commit_date)
-                )) AS week,
-                COUNT(*),
-                COALESCE(SUM(lines_added), 0),
-                COALESCE(SUM(ai_lines_added), 0),
-                COALESCE(SUM(human_lines_added), 0),
-                COALESCE(AVG(ai_percentage), 0.0)
-             FROM ai_commits
-             WHERE commit_epoch IS NOT NULL OR commit_date IS NOT NULL
-             GROUP BY week
-             HAVING week IS NOT NULL
-             ORDER BY week DESC
-             LIMIT ?1",
+                "SELECT week, COUNT(*), COALESCE(SUM(lines_added), 0),
+                    COALESCE(SUM(ai_lines_added), 0), COALESCE(SUM(human_lines_added), 0),
+                    COALESCE(AVG(ai_pct), 0.0)
+                 FROM (
+                    SELECT commit_hash,
+                        strftime('%Y-W%W', COALESCE(
+                            datetime(commit_epoch, 'unixepoch'),
+                            datetime(commit_date)
+                        )) AS week,
+                        MAX(lines_added) AS lines_added,
+                        MAX(ai_lines_added) AS ai_lines_added,
+                        MAX(human_lines_added) AS human_lines_added,
+                        MAX(ai_percentage) AS ai_pct
+                    FROM ai_commits
+                    WHERE commit_epoch IS NOT NULL OR commit_date IS NOT NULL
+                    GROUP BY commit_hash
+                    HAVING week IS NOT NULL
+                 )
+                 GROUP BY week
+                 ORDER BY week DESC
+                 LIMIT ?1",
             )
             .map_err(|e| format!("cannot prepare weekly trend: {e}"))?;
 
@@ -198,22 +209,27 @@ impl Db {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT
-                strftime('%Y-%m', COALESCE(
-                    datetime(commit_epoch, 'unixepoch'),
-                    datetime(commit_date)
-                )) AS month,
-                COUNT(*),
-                COALESCE(SUM(lines_added), 0),
-                COALESCE(SUM(ai_lines_added), 0),
-                COALESCE(SUM(human_lines_added), 0),
-                COALESCE(AVG(ai_percentage), 0.0)
-             FROM ai_commits
-             WHERE commit_epoch IS NOT NULL OR commit_date IS NOT NULL
-             GROUP BY month
-             HAVING month IS NOT NULL
-             ORDER BY month DESC
-             LIMIT ?1",
+                "SELECT month, COUNT(*), COALESCE(SUM(lines_added), 0),
+                    COALESCE(SUM(ai_lines_added), 0), COALESCE(SUM(human_lines_added), 0),
+                    COALESCE(AVG(ai_pct), 0.0)
+                 FROM (
+                    SELECT commit_hash,
+                        strftime('%Y-%m', COALESCE(
+                            datetime(commit_epoch, 'unixepoch'),
+                            datetime(commit_date)
+                        )) AS month,
+                        MAX(lines_added) AS lines_added,
+                        MAX(ai_lines_added) AS ai_lines_added,
+                        MAX(human_lines_added) AS human_lines_added,
+                        MAX(ai_percentage) AS ai_pct
+                    FROM ai_commits
+                    WHERE commit_epoch IS NOT NULL OR commit_date IS NOT NULL
+                    GROUP BY commit_hash
+                    HAVING month IS NOT NULL
+                 )
+                 GROUP BY month
+                 ORDER BY month DESC
+                 LIMIT ?1",
             )
             .map_err(|e| format!("cannot prepare monthly trend: {e}"))?;
 
@@ -243,17 +259,20 @@ impl Db {
             match (since_epoch, until_epoch) {
                 (Some(s), Some(u)) => (
                     "SELECT COUNT(*), COALESCE(SUM(lines_added), 0), COALESCE(SUM(ai_lines_added), 0), COALESCE(SUM(human_lines_added), 0)
-                     FROM ai_commits WHERE commit_epoch >= ?1 AND commit_epoch <= ?2",
+                     FROM (SELECT commit_hash, MAX(lines_added) AS lines_added, MAX(ai_lines_added) AS ai_lines_added, MAX(human_lines_added) AS human_lines_added
+                           FROM ai_commits WHERE source != 'correlation:human' AND commit_epoch >= ?1 AND commit_epoch <= ?2 GROUP BY commit_hash)",
                     vec![Box::new(s), Box::new(u)],
                 ),
                 (Some(s), None) => (
                     "SELECT COUNT(*), COALESCE(SUM(lines_added), 0), COALESCE(SUM(ai_lines_added), 0), COALESCE(SUM(human_lines_added), 0)
-                     FROM ai_commits WHERE commit_epoch >= ?1",
+                     FROM (SELECT commit_hash, MAX(lines_added) AS lines_added, MAX(ai_lines_added) AS ai_lines_added, MAX(human_lines_added) AS human_lines_added
+                           FROM ai_commits WHERE source != 'correlation:human' AND commit_epoch >= ?1 GROUP BY commit_hash)",
                     vec![Box::new(s)],
                 ),
                 _ => (
                     "SELECT COUNT(*), COALESCE(SUM(lines_added), 0), COALESCE(SUM(ai_lines_added), 0), COALESCE(SUM(human_lines_added), 0)
-                     FROM ai_commits",
+                     FROM (SELECT commit_hash, MAX(lines_added) AS lines_added, MAX(ai_lines_added) AS ai_lines_added, MAX(human_lines_added) AS human_lines_added
+                           FROM ai_commits WHERE source != 'correlation:human' GROUP BY commit_hash)",
                     vec![],
                 ),
             };
