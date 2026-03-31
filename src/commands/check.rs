@@ -13,9 +13,11 @@ pub fn run(fix: bool, mode: OutputMode) -> Result<(), String> {
         check_tools(),
     ];
 
-    if fix {
+        if fix {
         for check in &mut checks {
-            if check.status == Status::Fail && check.fix_fn.is_some() {
+            if (check.status == Status::Fail || check.status == Status::Warn)
+                && check.fix_fn.is_some()
+            {
                 let fix_fn = check.fix_fn.take().unwrap();
                 match fix_fn() {
                     Ok(msg) => {
@@ -324,15 +326,11 @@ fn check_stale_sessions() -> CheckResult {
 
     if !stale.is_empty() {
         let stale_count = stale.len();
-        let root_clone = root.clone();
         CheckResult {
             name: "session state".into(),
             status: Status::Warn,
-            detail: format!("{stale_count} stale session file(s) (>24h old)"),
-            fix_fn: Some(Box::new(move || {
-                crate::hooks::state::cleanup_stale(&root_clone, stale_threshold);
-                Ok(format!("{stale_count} stale files removed"))
-            })),
+            detail: format!("{stale_count} stale session file(s) (>24h old) — harmless, data preserved for indexing"),
+            fix_fn: None,
         }
     } else {
         let with_wt = all.iter().filter(|s| s.worktree.is_some()).count();
