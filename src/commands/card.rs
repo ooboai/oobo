@@ -44,7 +44,7 @@ pub fn run(mode: OutputMode, out: Option<String>, format: &str) -> Result<(), St
                 None
             }
         }),
-        ai_commits: ai_headline.as_ref().map(|a| a.total_commits).unwrap_or(0),
+        ai_commits: db.ai_commit_count().unwrap_or(0),
         commits_per_day: productivity.as_ref().map(|p| p.commits_per_day()),
         active_days: productivity.as_ref().map(|p| p.active_days).unwrap_or(0),
         active_since: earliest,
@@ -274,18 +274,25 @@ fn build_heatmap(db: &Db) -> Vec<DayCell> {
 }
 
 /// Current streak of consecutive days with AI usage (sessions or AI-assisted
-/// commits) going backwards from today.  Days with zero activity are skipped
-/// once the streak has started (weekends, vacations).
+/// commits) going backwards from today.  Idle days (no commits, no sessions)
+/// are tolerated up to 2 consecutive days (e.g. weekends), but longer gaps
+/// break the streak.
 fn compute_ai_streak(heatmap: &[DayCell]) -> i64 {
     let mut streak: i64 = 0;
+    let mut idle_run: i64 = 0;
+    const MAX_IDLE_GAP: i64 = 2;
     for day in heatmap.iter().rev() {
         let has_ai = day.ai_assisted > 0 || day.sessions > 0;
         if has_ai {
             streak += 1;
+            idle_run = 0;
         } else if day.commits > 0 {
             break;
         } else if streak > 0 {
-            continue;
+            idle_run += 1;
+            if idle_run > MAX_IDLE_GAP {
+                break;
+            }
         } else {
             break;
         }
@@ -844,7 +851,9 @@ fn print_terminal_fancy(c: &CardData) {
 
         let total_cols = (c.heatmap.len() as u32 + first_wd).div_ceil(7);
 
-        // month labels
+        // month labels — only for the visible portion of the grid
+        let col_limit = total_cols.min(W as u32 / 2);
+        let col_start = total_cols.saturating_sub(col_limit);
         let mut month_positions: Vec<(usize, String)> = Vec::new();
         let mut last_month = 0u32;
         for d in &c.heatmap {
@@ -852,12 +861,15 @@ fn print_terminal_fancy(c: &CardData) {
             if m != last_month {
                 let day_offset = (d.date - c.heatmap[0].date).num_days() as u32;
                 let col = (day_offset + first_wd) / 7;
-                month_positions.push((col as usize, d.date.format("%b").to_string()));
+                if col >= col_start {
+                    month_positions
+                        .push(((col - col_start) as usize, d.date.format("%b").to_string()));
+                }
                 last_month = m;
             }
         }
-        let max_col = total_cols as usize;
-        let mut ml = vec![' '; max_col * 2];
+        let visible_cols = col_limit as usize;
+        let mut ml = vec![' '; visible_cols * 2];
         for (col, label) in &month_positions {
             let pos = col * 2;
             for (i, ch) in label.chars().enumerate() {
@@ -881,11 +893,10 @@ fn print_terminal_fancy(c: &CardData) {
         let bg_base: (f64, f64, f64) = (bg_r as f64, bg_g as f64, bg_b as f64);
         let empty_fg = fg(bg_r, bg_g, bg_b);
 
-        let col_limit = total_cols.min(W as u32 / 2);
         for row in 0..7u32 {
             let mut row_str = String::new();
-            for col in 0..col_limit {
-                if col > 0 {
+            for col in col_start..col_start + col_limit {
+                if col > col_start {
                     row_str.push(' ');
                 }
                 let idx_offset = col * 7 + row;
@@ -958,7 +969,8 @@ fn print_terminal_fancy(c: &CardData) {
 
     // models with bars
     if !c.top_models.is_empty() {
-        let bar_max = 24usize;
+        let name_col = 22usize;
+        let bar_max = W.saturating_sub(name_col + 8);
         for m in &c.top_models {
             let filled = ((m.pct / 100.0) * bar_max as f64).round() as usize;
             let empty = bar_max.saturating_sub(filled);
@@ -967,7 +979,13 @@ fn print_terminal_fancy(c: &CardData) {
                 "█".repeat(filled),
                 "░".repeat(empty),
             );
-            let model_str = format!("{dim}{:<14}{reset} {:>4.0}%  {}", m.name, m.pct, bar,);
+            let model_str = format!(
+                "{dim}{:<width$}{reset}{} {:>3.0}%",
+                m.name,
+                bar,
+                m.pct,
+                width = name_col,
+            );
             line(&model_str);
         }
         blank();
@@ -1571,6 +1589,50 @@ mod tests {
         assert_eq!(
             streak, 1,
             "human-only commit day should break the AI streak"
+        );
+    }
+
+    #[test]
+    fn test_streak_breaks_on_long_idle_gap() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 27).unwrap();
+
+        let heatmap = vec![
+            DayCell {
+                date: today - chrono::Duration::days(4),
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 1,
+            },
+            DayCell {
+                date: today - chrono::Duration::days(3),
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 0,
+            },
+            DayCell {
+                date: today - chrono::Duration::days(2),
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 0,
+            },
+            DayCell {
+                date: today - chrono::Duration::days(1),
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 0,
+            },
+            DayCell {
+                date: today,
+                commits: 0,
+                ai_assisted: 0,
+                sessions: 1,
+            },
+        ];
+
+        let streak = compute_ai_streak(&heatmap);
+        assert_eq!(
+            streak, 1,
+            "3 consecutive idle days should break the streak"
         );
     }
 
