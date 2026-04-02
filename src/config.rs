@@ -31,6 +31,16 @@ pub struct Config {
     #[serde(default)]
     pub gemini: ToolConfig,
     #[serde(default)]
+    pub kiro: ToolConfig,
+    #[serde(default, rename = "continue")]
+    pub continue_dev: ToolConfig,
+    #[serde(default)]
+    pub droid: ToolConfig,
+    #[serde(default)]
+    pub junie: ToolConfig,
+    #[serde(default)]
+    pub amp: ToolConfig,
+    #[serde(default)]
     pub telemetry: TelemetryConfig,
     #[serde(default)]
     pub scan: ScanConfig,
@@ -199,14 +209,17 @@ impl Config {
     pub fn load_or_default() -> Self {
         let path = Self::config_path();
         let mut cfg = if path.exists() {
-            match fs::read_to_string(&path) {
-                Ok(contents) => match toml::from_str(&contents) {
-                    Ok(cfg) => cfg,
-                    Err(e) => {
-                        eprintln!("oobo: warning: invalid config at {}: {e}", path.display());
-                        Self::default()
+            match fs::read(&path) {
+                Ok(bytes) => {
+                    let contents = strip_utf8_bom(&bytes);
+                    match toml::from_str(contents) {
+                        Ok(cfg) => cfg,
+                        Err(e) => {
+                            eprintln!("oobo: warning: invalid config at {}: {e}", path.display());
+                            Self::default()
+                        }
                     }
-                },
+                }
                 Err(e) => {
                     eprintln!("oobo: warning: cannot read {}: {e}", path.display());
                     Self::default()
@@ -261,6 +274,11 @@ impl Config {
             || !self.opencode.api_key.is_empty()
             || !self.aider.api_key.is_empty()
             || !self.trae.api_key.is_empty()
+            || !self.kiro.api_key.is_empty()
+            || !self.continue_dev.api_key.is_empty()
+            || !self.droid.api_key.is_empty()
+            || !self.junie.api_key.is_empty()
+            || !self.amp.api_key.is_empty()
     }
 
     /// True when sync is enabled and an API key is available.
@@ -307,6 +325,11 @@ impl Config {
             "codex" => self.codex.enabled = enabled,
             "opencode" => self.opencode.enabled = enabled,
             "gemini" => self.gemini.enabled = enabled,
+            "kiro" => self.kiro.enabled = enabled,
+            "continue" => self.continue_dev.enabled = enabled,
+            "droid" => self.droid.enabled = enabled,
+            "junie" => self.junie.enabled = enabled,
+            "amp" => self.amp.enabled = enabled,
             _ => {}
         }
     }
@@ -325,9 +348,21 @@ impl Config {
     }
 }
 
+/// Strip UTF-8 BOM if present. PowerShell 5.1 writes UTF-8 with BOM by default.
+fn strip_utf8_bom(data: &[u8]) -> &str {
+    let stripped = data.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(data);
+    std::str::from_utf8(stripped).unwrap_or("")
+}
+
 /// Find the real git binary, skipping any `oobo` alias.
 pub fn find_real_git() -> Option<String> {
-    // `which -a git` lists all git binaries in PATH
+    #[cfg(target_os = "windows")]
+    let output = std::process::Command::new("where.exe")
+        .arg("git")
+        .output()
+        .ok()?;
+
+    #[cfg(not(target_os = "windows"))]
     let output = std::process::Command::new("which")
         .arg("-a")
         .arg("git")
@@ -342,12 +377,26 @@ pub fn find_real_git() -> Option<String> {
         }
         if let Ok(resolved) = fs::canonicalize(line) {
             let name = resolved.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name == "oobo" {
+            if name == "oobo" || name == "oobo.exe" {
                 continue;
             }
         }
         return Some(line.to_string());
     }
+
+    #[cfg(target_os = "windows")]
+    {
+        for candidate in &[
+            r"C:\Program Files\Git\cmd\git.exe",
+            r"C:\Program Files\Git\bin\git.exe",
+            r"C:\Program Files (x86)\Git\cmd\git.exe",
+        ] {
+            if std::path::Path::new(candidate).exists() {
+                return Some((*candidate).to_string());
+            }
+        }
+    }
+
     None
 }
 
@@ -428,6 +477,11 @@ mod tests {
                 enabled: true,
                 api_key: String::new(),
             },
+            kiro: ToolConfig::default(),
+            continue_dev: ToolConfig::default(),
+            droid: ToolConfig::default(),
+            junie: ToolConfig::default(),
+            amp: ToolConfig::default(),
             telemetry: TelemetryConfig {
                 enabled: true,
                 send_diffs: true,
@@ -534,5 +588,102 @@ mod tests {
         let mut cfg = Config::default();
         cfg.trae.api_key = "sk-trae".to_string();
         assert!(cfg.has_any_key());
+    }
+
+    #[test]
+    fn test_has_any_key_includes_new_agents() {
+        for setter in [
+            |c: &mut Config| c.kiro.api_key = "k".into(),
+            |c: &mut Config| c.continue_dev.api_key = "k".into(),
+            |c: &mut Config| c.droid.api_key = "k".into(),
+            |c: &mut Config| c.junie.api_key = "k".into(),
+            |c: &mut Config| c.amp.api_key = "k".into(),
+        ] {
+            let mut cfg = Config::default();
+            assert!(!cfg.has_any_key());
+            setter(&mut cfg);
+            assert!(cfg.has_any_key());
+        }
+    }
+
+    #[test]
+    fn test_continue_toml_key_rename() {
+        let mut cfg = Config::default();
+        cfg.continue_dev.enabled = false;
+        let toml_str = toml::to_string_pretty(&cfg).unwrap();
+        // Serialized TOML should use "continue" not "continue_dev"
+        assert!(
+            toml_str.contains("[continue]"),
+            "expected [continue] in TOML, got: {toml_str}"
+        );
+        assert!(
+            !toml_str.contains("continue_dev"),
+            "found 'continue_dev' in TOML, should be 'continue'"
+        );
+
+        // Deserialize back
+        let loaded: Config = toml::from_str(&toml_str).unwrap();
+        assert!(!loaded.continue_dev.enabled);
+    }
+
+    #[test]
+    fn test_set_tool_enabled_all_new_agents() {
+        let mut cfg = Config::default();
+        for key in ["kiro", "continue", "droid", "junie", "amp"] {
+            assert!(
+                match key {
+                    "kiro" => cfg.kiro.enabled,
+                    "continue" => cfg.continue_dev.enabled,
+                    "droid" => cfg.droid.enabled,
+                    "junie" => cfg.junie.enabled,
+                    "amp" => cfg.amp.enabled,
+                    _ => unreachable!(),
+                },
+                "{key} should default to enabled"
+            );
+            cfg.set_tool_enabled(key, false);
+            assert!(
+                !match key {
+                    "kiro" => cfg.kiro.enabled,
+                    "continue" => cfg.continue_dev.enabled,
+                    "droid" => cfg.droid.enabled,
+                    "junie" => cfg.junie.enabled,
+                    "amp" => cfg.amp.enabled,
+                    _ => unreachable!(),
+                },
+                "{key} should be disabled after set_tool_enabled(false)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_config_partial_toml_with_only_continue() {
+        let toml_str = r#"
+[continue]
+enabled = false
+"#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert!(!cfg.continue_dev.enabled);
+        assert!(cfg.kiro.enabled);
+        assert!(cfg.droid.enabled);
+        assert!(cfg.junie.enabled);
+        assert!(cfg.amp.enabled);
+    }
+
+    #[test]
+    fn test_strip_utf8_bom() {
+        let mut data = vec![0xEF, 0xBB, 0xBF];
+        data.extend_from_slice(b"[server]\nurl = \"https://example.com\"\n");
+        let contents = super::strip_utf8_bom(&data);
+        let cfg: Config = toml::from_str(contents).unwrap();
+        assert_eq!(cfg.server.url, "https://example.com");
+    }
+
+    #[test]
+    fn test_strip_utf8_bom_without_bom() {
+        let data = b"[server]\nurl = \"https://example.com\"\n";
+        let contents = super::strip_utf8_bom(data);
+        let cfg: Config = toml::from_str(contents).unwrap();
+        assert_eq!(cfg.server.url, "https://example.com");
     }
 }

@@ -13,7 +13,11 @@ fn zed_data_dir() -> Option<PathBuf> {
     {
         dirs::data_dir().map(|d| d.join("zed"))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "windows")]
+    {
+        dirs::data_local_dir().map(|d| d.join("Zed"))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         None
     }
@@ -292,7 +296,11 @@ pub mod telemetry {
         {
             dirs::home_dir().map(|h| h.join(".local/share/zed/logs/telemetry.log"))
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(target_os = "windows")]
+        {
+            dirs::data_local_dir().map(|d| d.join("Zed/logs/telemetry.log"))
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         {
             None
         }

@@ -90,17 +90,29 @@ mod tests {
 
     #[test]
     fn test_uri_to_path() {
+        #[cfg(unix)]
         assert_eq!(
             uri_to_path("file:///home/user/projects/my-app"),
             "/home/user/projects/my-app"
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            uri_to_path("file:///C:/Users/user/projects/my-app"),
+            "C:\\Users\\user\\projects\\my-app"
         );
     }
 
     #[test]
     fn test_uri_to_path_encoded() {
+        #[cfg(unix)]
         assert_eq!(
             uri_to_path("file:///home/user/My%20Projects/app"),
             "/home/user/My Projects/app"
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            uri_to_path("file:///C:/Users/user/My%20Projects/app"),
+            "C:\\Users\\user\\My Projects\\app"
         );
     }
 }

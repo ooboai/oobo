@@ -49,29 +49,25 @@ pub fn strip_absolute_paths(text: &str, project_root: &str) -> String {
 /// a single path value — stripping the project root or replacing the home
 /// directory prefix.
 pub fn sanitize_path(path: &str, project_root: &str) -> String {
-    if !path.starts_with('/') {
+    let p = std::path::Path::new(path);
+    if !path.starts_with('/') && !p.is_absolute() {
         return path.to_string();
     }
 
     if !project_root.is_empty() {
-        let root_slash = if project_root.ends_with('/') {
-            project_root.to_string()
-        } else {
-            format!("{project_root}/")
-        };
-        if path.starts_with(&root_slash) {
-            return path[root_slash.len()..].to_string();
-        }
-        if path == project_root {
-            return ".".to_string();
+        let root = std::path::Path::new(project_root);
+        if let Ok(rel) = p.strip_prefix(root) {
+            let s = rel.to_string_lossy();
+            if s.is_empty() {
+                return ".".to_string();
+            }
+            return s.replace('\\', "/");
         }
     }
 
     if let Some(home) = dirs::home_dir() {
-        let home_str = home.to_string_lossy();
-        let home_slash = format!("{home_str}/");
-        if path.starts_with(home_slash.as_str()) {
-            return format!("~/{}", &path[home_slash.len()..]);
+        if let Ok(rel) = p.strip_prefix(&home) {
+            return format!("~/{}", rel.to_string_lossy().replace('\\', "/"));
         }
     }
 
@@ -509,19 +505,28 @@ mod tests {
 
     #[test]
     fn test_sanitize_path_home_fallback() {
-        let root = "/Users/teddy/dev/projects/myapp";
         let home = dirs::home_dir().unwrap();
         let home_str = home.to_string_lossy();
-        let path = format!("{home_str}/.config/other.toml");
-        let result = sanitize_path(&path, root);
+        let root = format!("{home_str}/dev/projects/myapp");
+        let path = home.join(".config/other.toml");
+        let result = sanitize_path(path.to_str().unwrap(), &root);
         assert_eq!(result, "~/.config/other.toml");
     }
 
     #[test]
     fn test_sanitize_path_unrelated_absolute() {
-        let root = "/Users/teddy/dev/projects/myapp";
-        let path = "/etc/hosts";
-        assert_eq!(sanitize_path(path, root), "/etc/hosts");
+        #[cfg(unix)]
+        {
+            let root = "/Users/teddy/dev/projects/myapp";
+            let path = "/etc/hosts";
+            assert_eq!(sanitize_path(path, root), "/etc/hosts");
+        }
+        #[cfg(windows)]
+        {
+            let root = "C:\\Users\\teddy\\dev\\projects\\myapp";
+            let path = "C:\\Windows\\System32\\hosts";
+            assert_eq!(sanitize_path(path, root), "C:\\Windows\\System32\\hosts");
+        }
     }
 
     // ── sanitize_for_public tests ──

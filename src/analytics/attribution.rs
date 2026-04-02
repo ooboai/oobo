@@ -463,7 +463,10 @@ fn current_branch(project_path: &str) -> Option<String> {
         .ok()?;
 
     if output.status.success() {
-        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let branch = String::from_utf8_lossy(&output.stdout)
+            .replace('\r', "")
+            .trim()
+            .to_string();
         if !branch.is_empty() && branch != "HEAD" {
             return Some(branch);
         }

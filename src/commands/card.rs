@@ -1630,10 +1630,7 @@ mod tests {
         ];
 
         let streak = compute_ai_streak(&heatmap);
-        assert_eq!(
-            streak, 1,
-            "3 consecutive idle days should break the streak"
-        );
+        assert_eq!(streak, 1, "3 consecutive idle days should break the streak");
     }
 
     #[test]

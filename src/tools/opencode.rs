@@ -12,7 +12,11 @@ fn opencode_data_dir() -> Option<PathBuf> {
     {
         dirs::data_dir().map(|d| d.join("opencode"))
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "windows")]
+    {
+        dirs::data_local_dir().map(|d| d.join("opencode"))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         None
     }

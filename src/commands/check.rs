@@ -13,7 +13,7 @@ pub fn run(fix: bool, mode: OutputMode) -> Result<(), String> {
         check_tools(),
     ];
 
-        if fix {
+    if fix {
         for check in &mut checks {
             if (check.status == Status::Fail || check.status == Status::Warn)
                 && check.fix_fn.is_some()

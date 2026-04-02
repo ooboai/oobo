@@ -119,7 +119,10 @@ fn resolve_worktree(project_root: &str) -> Option<String> {
         .ok()?;
 
     if output.status.success() {
-        let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let raw = String::from_utf8_lossy(&output.stdout)
+            .replace('\r', "")
+            .trim()
+            .to_string();
         let canonical = std::fs::canonicalize(&raw)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or(raw);
@@ -633,7 +636,10 @@ pub fn snapshot_pre_agent_state(project_root: &str, session_id: &str) -> Result<
 
         if let Ok(o) = output {
             if o.status.success() {
-                let hash = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                let hash = String::from_utf8_lossy(&o.stdout)
+                    .replace('\r', "")
+                    .trim()
+                    .to_string();
                 if !hash.is_empty() {
                     snapshots.insert(file.clone(), hash);
                 }
@@ -693,7 +699,10 @@ pub fn snapshot_session_files(
 
         if let Ok(o) = output {
             if o.status.success() {
-                let hash = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                let hash = String::from_utf8_lossy(&o.stdout)
+                    .replace('\r', "")
+                    .trim()
+                    .to_string();
                 if !hash.is_empty() {
                     snapshots.insert(file.clone(), hash);
                 }
@@ -748,6 +757,18 @@ mod tests {
             .stderr(std::process::Stdio::null())
             .status()
             .unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let _ = std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
     }
 
     #[test]

@@ -93,7 +93,12 @@ fn install_latest(tag: &str) -> Result<(), String> {
     if target == "unknown" || target.is_empty() {
         return Err("prebuilt binaries are not available for this platform".to_string());
     }
-    let asset_name = format!("oobo-{tag}-{target}.tar.gz");
+
+    #[cfg(target_os = "windows")]
+    let (asset_name, is_zip) = (format!("oobo-{tag}-{target}.zip"), true);
+    #[cfg(not(target_os = "windows"))]
+    let (asset_name, is_zip) = (format!("oobo-{tag}-{target}.tar.gz"), false);
+
     let url = format!("https://github.com/{REPO}/releases/download/{tag}/{asset_name}");
 
     let client = reqwest::blocking::Client::builder()
@@ -123,17 +128,25 @@ fn install_latest(tag: &str) -> Result<(), String> {
     let archive_path = tmp_dir.join(&asset_name);
     std::fs::write(&archive_path, &bytes).map_err(|e| format!("cannot write archive: {e}"))?;
 
-    let status = std::process::Command::new("tar")
-        .args(["xzf", &archive_path.to_string_lossy()])
-        .current_dir(&tmp_dir)
-        .status()
-        .map_err(|e| format!("cannot extract archive: {e}"))?;
-
-    if !status.success() {
-        return Err("tar extraction failed".to_string());
+    if is_zip {
+        extract_zip(&archive_path, &tmp_dir)?;
+    } else {
+        let status = std::process::Command::new("tar")
+            .args(["xzf", &archive_path.to_string_lossy()])
+            .current_dir(&tmp_dir)
+            .status()
+            .map_err(|e| format!("cannot extract archive: {e}"))?;
+        if !status.success() {
+            return Err("tar extraction failed".to_string());
+        }
     }
 
-    let new_binary = tmp_dir.join("oobo");
+    #[cfg(target_os = "windows")]
+    let binary_name = "oobo.exe";
+    #[cfg(not(target_os = "windows"))]
+    let binary_name = "oobo";
+
+    let new_binary = tmp_dir.join(binary_name);
     if !new_binary.exists() {
         return Err("binary not found in archive".to_string());
     }
@@ -151,6 +164,38 @@ fn install_latest(tag: &str) -> Result<(), String> {
     let _ = std::fs::remove_file(&backup);
     let _ = std::fs::remove_dir_all(&tmp_dir);
 
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn extract_zip(archive: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    let file = std::fs::File::open(archive).map_err(|e| format!("cannot open zip archive: {e}"))?;
+    let mut zip =
+        zip::ZipArchive::new(file).map_err(|e| format!("cannot read zip archive: {e}"))?;
+    for i in 0..zip.len() {
+        let mut entry = zip
+            .by_index(i)
+            .map_err(|e| format!("zip entry error: {e}"))?;
+        let name = entry.name().replace('\\', "/");
+        let name = name.trim_start_matches('/');
+        if name.contains("..") || name.is_empty() {
+            continue;
+        }
+        let out_path = dest.join(name);
+        if !out_path.starts_with(dest) {
+            continue;
+        }
+        let mut out_file =
+            std::fs::File::create(&out_path).map_err(|e| format!("cannot create file: {e}"))?;
+        std::io::copy(&mut entry, &mut out_file)
+            .map_err(|e| format!("cannot extract file: {e}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+fn extract_zip(_archive: &std::path::Path, _dest: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
@@ -173,11 +218,22 @@ fn current_target() -> String {
         let libc = if is_musl() { "musl" } else { "gnu" };
         format!("aarch64-unknown-linux-{libc}")
     }
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        "x86_64-pc-windows-msvc".into()
+    }
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    {
+        // No ARM64 Windows release artifact; x86_64 runs via emulation
+        "x86_64-pc-windows-msvc".into()
+    }
     #[cfg(not(any(
         all(target_os = "macos", target_arch = "aarch64"),
         all(target_os = "macos", target_arch = "x86_64"),
         all(target_os = "linux", target_arch = "x86_64"),
         all(target_os = "linux", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "windows", target_arch = "aarch64"),
     )))]
     {
         "unknown".into()
