@@ -422,7 +422,10 @@ fn make_relative(abs_path: &str, project_root: &str) -> String {
     let root = std::fs::canonicalize(project_root)
         .unwrap_or_else(|_| std::path::PathBuf::from(project_root));
     abs.strip_prefix(&root)
-        .map(|p| p.to_string_lossy().to_string())
+        .map(|p| {
+            let s = p.to_string_lossy().to_string();
+            s.replace('\\', "/")
+        })
         .unwrap_or_else(|_| abs_path.to_string())
 }
 

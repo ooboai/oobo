@@ -59,6 +59,12 @@ pub fn send(title: &str, message: &str) {
             .stderr(std::process::Stdio::null())
             .spawn();
     }
+    #[cfg(target_os = "windows")]
+    {
+        // Windows toast notifications require an external dependency (winrt/win32).
+        // Silently skip for now — notifications are non-critical functionality.
+        let _ = (title, message);
+    }
 }
 
 #[cfg(target_os = "macos")]

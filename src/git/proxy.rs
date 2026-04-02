@@ -35,7 +35,10 @@ pub fn run_git_capture(cfg: &Config, args: &[&str]) -> Result<String, String> {
         .map_err(|e| format!("failed to run {git_path}: {e}"))?;
 
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .replace('\r', "")
+            .trim()
+            .to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         Err(format!(
@@ -66,7 +69,12 @@ pub fn project_root_from(cwd: &str) -> String {
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .replace('\r', "")
+                .trim()
+                .to_string()
+        })
         .unwrap_or_else(|| cwd.to_string())
 }
 

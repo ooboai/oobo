@@ -19,6 +19,23 @@ pub fn install_all_agent_hooks() -> Vec<String> {
     if let Some(msg) = install_opencode_hooks() {
         installed.push(msg);
     }
+    if let Some(msg) = install_kiro_hooks() {
+        installed.push(msg);
+    }
+    if let Some(msg) = install_continue_hooks() {
+        installed.push(msg);
+    }
+    if let Some(msg) = install_droid_hooks() {
+        installed.push(msg);
+    }
+
+    // Amp: Uses the ACP (Agent Communication Protocol) for integrations.
+    // No hooks.json or settings.json equivalent exists. Lifecycle events
+    // would need to go through the ACP wire protocol.
+    //
+    // Junie: JetBrains beta tool. No documented hook/plugin system yet.
+    // Junie imports from .claude/ settings, so Claude hooks may partially
+    // cover Junie sessions when both are installed.
 
     installed
 }
@@ -172,6 +189,107 @@ fn install_opencode_hooks() -> Option<String> {
         return None;
     }
     Some(format!("OpenCode plugin → {}", path.display()))
+}
+
+// Kiro — ~/.kiro/agents/oobo.json (Kiro agent config format)
+
+fn install_kiro_hooks() -> Option<String> {
+    let dir = dirs::home_dir()?.join(".kiro/agents");
+    let path = dir.join("oobo.json");
+
+    let agent_config = serde_json::json!({
+        "name": "oobo",
+        "description": "oobo lifecycle hooks for session and tool tracking",
+        "hooks": {
+            "agentSpawn": [
+                { "command": "oobo hooks agent session-start --tool kiro" }
+            ],
+            "userPromptSubmit": [
+                { "command": "oobo hooks agent before-submit-prompt --tool kiro" }
+            ],
+            "postToolUse": [
+                { "command": "oobo hooks agent after-tool-use --tool kiro" }
+            ],
+            "stop": [
+                { "command": "oobo hooks agent stop --tool kiro" }
+            ]
+        }
+    });
+
+    if path.exists() {
+        if let Ok(existing) = fs::read_to_string(&path) {
+            if existing.contains("oobo hooks agent") {
+                return Some(format!(
+                    "Kiro agent hooks → {} (already installed)",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    fs::create_dir_all(&dir).ok()?;
+    let json = serde_json::to_string_pretty(&agent_config).ok()?;
+    fs::write(&path, json).ok()?;
+    Some(format!("Kiro agent hooks → {}", path.display()))
+}
+
+// Continue — ~/.continue/settings.json (Claude Code-compatible format)
+
+fn install_continue_hooks() -> Option<String> {
+    let path = dirs::home_dir()?.join(".continue/settings.json");
+    let oobo_hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent session-start --tool continue"}]
+            }],
+            "UserPromptSubmit": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent before-submit-prompt --tool continue"}]
+            }],
+            "PostToolUse": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent after-tool-use --tool continue"}]
+            }],
+            "PostToolUseFailure": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent tool-use-failure --tool continue"}]
+            }],
+            "Stop": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent stop --tool continue"}]
+            }],
+            "SessionEnd": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent session-end --tool continue"}]
+            }]
+        }
+    });
+
+    merge_claude_hooks_file(&path, &oobo_hooks)?;
+    Some(format!("Continue hooks → {}", path.display()))
+}
+
+// Factory Droid — ~/.factory/settings.json (Claude Code-compatible format)
+
+fn install_droid_hooks() -> Option<String> {
+    let path = dirs::home_dir()?.join(".factory/settings.json");
+    let oobo_hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent session-start --tool droid"}]
+            }],
+            "PostToolUse": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent after-tool-use --tool droid"}]
+            }],
+            "PostToolUseFailure": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent tool-use-failure --tool droid"}]
+            }],
+            "Stop": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent stop --tool droid"}]
+            }],
+            "SessionEnd": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent session-end --tool droid"}]
+            }]
+        }
+    });
+
+    merge_claude_hooks_file(&path, &oobo_hooks)?;
+    Some(format!("Factory Droid hooks → {}", path.display()))
 }
 
 // Helpers
@@ -420,6 +538,33 @@ pub fn check_installed_hooks() -> Vec<String> {
         let opencode_plugin = config_dir.join("opencode/plugins/oobo.ts");
         if opencode_plugin.exists() {
             found.push("opencode".into());
+        }
+    }
+
+    let kiro_hooks = home.join(".kiro/agents/oobo.json");
+    if kiro_hooks.exists() {
+        if let Ok(c) = fs::read_to_string(&kiro_hooks) {
+            if c.contains("oobo") {
+                found.push("kiro".into());
+            }
+        }
+    }
+
+    let continue_settings = home.join(".continue/settings.json");
+    if continue_settings.exists() {
+        if let Ok(c) = fs::read_to_string(&continue_settings) {
+            if c.contains("oobo") {
+                found.push("continue".into());
+            }
+        }
+    }
+
+    let droid_settings = home.join(".factory/settings.json");
+    if droid_settings.exists() {
+        if let Ok(c) = fs::read_to_string(&droid_settings) {
+            if c.contains("oobo") {
+                found.push("droid".into());
+            }
         }
     }
 

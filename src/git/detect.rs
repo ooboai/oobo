@@ -149,7 +149,10 @@ fn resolve_git_path(project_root: &str, flag: &str) -> std::path::PathBuf {
 
     if let Ok(o) = output {
         if o.status.success() {
-            let raw = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let raw = String::from_utf8_lossy(&o.stdout)
+                .replace('\r', "")
+                .trim()
+                .to_string();
             let p = std::path::Path::new(&raw);
             if p.is_absolute() {
                 return p.to_path_buf();

@@ -31,6 +31,8 @@ jobs:
             os: ubuntu-latest
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -69,22 +71,32 @@ jobs:
           else
             cargo build --release --target ${{ matrix.target }}
           fi
+        shell: bash
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
           AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
 
-      - name: Package
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
           tar -czf ../../../oobo-${{ github.ref_name }}-${{ matrix.target }}.tar.gz oobo
           cd ../../..
 
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/oobo.exe" -DestinationPath "oobo-${{ github.ref_name }}-${{ matrix.target }}.zip"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: oobo-${{ matrix.target }}
-          path: oobo-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+          path: |
+            oobo-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+            oobo-${{ github.ref_name }}-${{ matrix.target }}.zip
 
   release:
     name: Create Release
@@ -98,8 +110,90 @@ jobs:
         with:
           merge-multiple: true
 
+      - name: Generate checksums
+        run: |
+          sha256sum oobo-*.tar.gz oobo-*.zip 2>/dev/null > checksums.sha256 || true
+          cat checksums.sha256
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: oobo-*.tar.gz
+          files: |
+            oobo-*.tar.gz
+            oobo-*.zip
+            checksums.sha256
           generate_release_notes: true
+
+  homebrew:
+    name: Update Homebrew Formula
+    needs: release
+    if: always() && !cancelled() && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Compute SHA256 and update formula
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+
+          # Compute SHA256 for each artifact
+          sha_aarch64_darwin=$(sha256sum "oobo-${TAG}-aarch64-apple-darwin.tar.gz" | cut -d' ' -f1)
+          sha_x86_64_darwin=$(sha256sum "oobo-${TAG}-x86_64-apple-darwin.tar.gz" | cut -d' ' -f1)
+          sha_aarch64_linux=$(sha256sum "oobo-${TAG}-aarch64-unknown-linux-musl.tar.gz" | cut -d' ' -f1)
+          sha_x86_64_linux=$(sha256sum "oobo-${TAG}-x86_64-unknown-linux-musl.tar.gz" | cut -d' ' -f1)
+
+          # Clone the tap
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/ooboai/homebrew-tap.git" tap
+          cd tap
+          mkdir -p Formula
+
+          # Generate Formula/oobo.rb
+          cat > Formula/oobo.rb << FORMULA
+          class Oobo < Formula
+            desc "AI coding analytics — track sessions, tokens, attribution across all your AI tools"
+            homepage "https://oobo.ai"
+            version "${VERSION}"
+            license "Apache-2.0"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/ooboai/oobo/releases/download/${TAG}/oobo-${TAG}-aarch64-apple-darwin.tar.gz"
+                sha256 "${sha_aarch64_darwin}"
+              end
+              on_intel do
+                url "https://github.com/ooboai/oobo/releases/download/${TAG}/oobo-${TAG}-x86_64-apple-darwin.tar.gz"
+                sha256 "${sha_x86_64_darwin}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/ooboai/oobo/releases/download/${TAG}/oobo-${TAG}-aarch64-unknown-linux-musl.tar.gz"
+                sha256 "${sha_aarch64_linux}"
+              end
+              on_intel do
+                url "https://github.com/ooboai/oobo/releases/download/${TAG}/oobo-${TAG}-x86_64-unknown-linux-musl.tar.gz"
+                sha256 "${sha_x86_64_linux}"
+              end
+            end
+
+            def install
+              bin.install "oobo"
+            end
+
+            test do
+              assert_match "oobo", shell_output("#{bin}/oobo --version")
+            end
+          end
+          FORMULA
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/oobo.rb
+          git commit -m "Update oobo to ${VERSION}"
+          git push

@@ -191,7 +191,10 @@ fn detect_git_remote(project_path: &str) -> Option<String> {
         .ok()?;
 
     if output.status.success() {
-        let remote = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let remote = String::from_utf8_lossy(&output.stdout)
+            .replace('\r', "")
+            .trim()
+            .to_string();
         if !remote.is_empty() {
             return Some(remote);
         }

@@ -7,6 +7,13 @@ use tempfile::TempDir;
 
 // ── Fixture helpers ─────────────────────────────────────────────────────────
 
+/// Return a fresh TempDir to use as OOBO_HOME in tests that call `oobo commit`.
+/// Passing this to every oobo invocation prevents test commits from being
+/// synced to the backend (the isolated config has no API key / sync disabled).
+fn isolated_oobo_home() -> TempDir {
+    TempDir::new().unwrap()
+}
+
 fn create_test_vscdb(dir: &Path, composers_json: &str) {
     let db_path = dir.join("state.vscdb");
     let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -287,6 +294,11 @@ fn test_config_save_and_load() {
             enabled: true,
             api_key: String::new(),
         },
+        kiro: oobo::config::ToolConfig::default(),
+        continue_dev: oobo::config::ToolConfig::default(),
+        droid: oobo::config::ToolConfig::default(),
+        junie: oobo::config::ToolConfig::default(),
+        amp: oobo::config::ToolConfig::default(),
         telemetry: oobo::config::TelemetryConfig {
             enabled: true,
             send_diffs: true,
@@ -404,6 +416,7 @@ fn test_subcommand_extraction() {
 #[test]
 fn test_git_proxy_passthrough() {
     let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
 
     // Initialize a git repo
     Command::new("git")
@@ -436,6 +449,7 @@ fn test_git_proxy_passthrough() {
     // Use oobo as git decorator to commit
     let output = Command::new(oobo_binary())
         .args(["commit", "-m", "test commit via oobo"])
+        .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
         .output()
         .unwrap();
@@ -635,6 +649,7 @@ fn test_git_log_passes_through() {
 #[test]
 fn test_e2e_commit_creates_anchor() {
     let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
 
     Command::new("git")
         .args(["init"])
@@ -663,6 +678,7 @@ fn test_e2e_commit_creates_anchor() {
 
     let commit_output = Command::new(oobo_binary())
         .args(["commit", "-m", "initial commit"])
+        .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
         .output()
         .unwrap();
@@ -675,6 +691,7 @@ fn test_e2e_commit_creates_anchor() {
 
     let log_output = Command::new(oobo_binary())
         .args(["anchors", "--json"])
+        .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
         .output()
         .unwrap();
@@ -1264,6 +1281,7 @@ fn test_alias_install_uninstall_roundtrip() {
 #[test]
 fn test_oobo_blame_json_output() {
     let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
 
     Command::new("git")
         .args(["init"])
@@ -1293,6 +1311,7 @@ fn test_oobo_blame_json_output() {
 
     let commit1 = Command::new(oobo_binary())
         .args(["commit", "-m", "initial"])
+        .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
         .output()
         .unwrap();
@@ -1301,6 +1320,7 @@ fn test_oobo_blame_json_output() {
     // Start a session, then modify the file, snapshot, commit
     let start = Command::new(oobo_binary())
         .args(["hooks", "agent", "session-start"])
+        .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -1330,6 +1350,7 @@ fn test_oobo_blame_json_output() {
     // Snapshot the file (simulates stop hook snapshotting)
     let stop = Command::new(oobo_binary())
         .args(["hooks", "agent", "stop"])
+        .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -1356,6 +1377,7 @@ fn test_oobo_blame_json_output() {
 
     let commit2 = Command::new(oobo_binary())
         .args(["commit", "-m", "add hello"])
+        .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
         .output()
         .unwrap();
@@ -1368,6 +1390,7 @@ fn test_oobo_blame_json_output() {
     // Run blame --json
     let blame_output = Command::new(oobo_binary())
         .args(["blame", "src.rs", "--json"])
+        .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
         .output()
         .unwrap();

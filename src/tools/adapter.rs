@@ -259,7 +259,12 @@ impl Tool for AiderTool {
             .output()
             .ok()
             .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .replace('\r', "")
+                    .trim()
+                    .to_string()
+            })
             .unwrap_or_else(|| {
                 std::env::current_dir()
                     .map(|p| p.to_string_lossy().to_string())
@@ -574,5 +579,235 @@ impl Tool for ZedTool {
 
     fn extract_native_stats(&self, session: &Session) -> Option<NativeStats> {
         crate::tools::zed::telemetry::extract_native_stats(&session.session_id)
+    }
+}
+
+// Kiro
+
+pub struct KiroTool;
+
+impl Tool for KiroTool {
+    fn name(&self) -> &'static str {
+        "kiro"
+    }
+    fn display_name(&self) -> &'static str {
+        "Kiro"
+    }
+    fn config_key(&self) -> &'static str {
+        "kiro"
+    }
+    fn category(&self) -> &'static str {
+        "ide"
+    }
+    fn enabled(&self, cfg: &Config) -> bool {
+        cfg.kiro.enabled
+    }
+
+    fn sessions_for_project(&self, project_path: &str) -> Result<Vec<Session>, String> {
+        crate::tools::kiro::sessions_for_project(project_path)
+    }
+
+    fn all_sessions(&self) -> Result<Vec<Session>, String> {
+        crate::tools::kiro::all_sessions()
+    }
+
+    fn find_transcript(&self, project_path: &str, session_id: &str) -> Option<PathBuf> {
+        crate::tools::kiro::transcript::find_transcript_path(project_path, session_id)
+    }
+
+    fn parse_messages(&self, path: &Path) -> Vec<Message> {
+        crate::tools::kiro::transcript::parse_messages(path)
+    }
+
+    fn count_messages(&self, project_path: &str, session_id: &str) -> u32 {
+        crate::tools::kiro::transcript::count_messages(project_path, session_id)
+    }
+
+    fn read_transcript(&self, path: &Path, max_messages: u32) -> String {
+        crate::tools::kiro::transcript::read_transcript(path, max_messages)
+    }
+}
+
+// Continue
+
+pub struct ContinueTool;
+
+impl Tool for ContinueTool {
+    fn name(&self) -> &'static str {
+        "continue"
+    }
+    fn display_name(&self) -> &'static str {
+        "Continue"
+    }
+    fn config_key(&self) -> &'static str {
+        "continue"
+    }
+    fn category(&self) -> &'static str {
+        "ide"
+    }
+    fn enabled(&self, cfg: &Config) -> bool {
+        cfg.continue_dev.enabled
+    }
+
+    fn sessions_for_project(&self, project_path: &str) -> Result<Vec<Session>, String> {
+        crate::tools::continue_dev::sessions_for_project(project_path)
+    }
+
+    fn all_sessions(&self) -> Result<Vec<Session>, String> {
+        crate::tools::continue_dev::all_sessions()
+    }
+
+    fn find_transcript(&self, project_path: &str, session_id: &str) -> Option<PathBuf> {
+        crate::tools::continue_dev::transcript::find_transcript_path(project_path, session_id)
+    }
+
+    fn parse_messages(&self, path: &Path) -> Vec<Message> {
+        crate::tools::continue_dev::transcript::parse_messages(path)
+    }
+
+    fn count_messages(&self, project_path: &str, session_id: &str) -> u32 {
+        crate::tools::continue_dev::transcript::count_messages(project_path, session_id)
+    }
+
+    fn read_transcript(&self, path: &Path, max_messages: u32) -> String {
+        crate::tools::continue_dev::transcript::read_transcript(path, max_messages)
+    }
+}
+
+// Factory Droid
+
+pub struct DroidTool;
+
+impl Tool for DroidTool {
+    fn name(&self) -> &'static str {
+        "droid"
+    }
+    fn display_name(&self) -> &'static str {
+        "Factory Droid"
+    }
+    fn config_key(&self) -> &'static str {
+        "droid"
+    }
+    fn category(&self) -> &'static str {
+        "cli"
+    }
+    fn enabled(&self, cfg: &Config) -> bool {
+        cfg.droid.enabled
+    }
+
+    fn sessions_for_project(&self, project_path: &str) -> Result<Vec<Session>, String> {
+        crate::tools::droid::sessions_for_project(project_path)
+    }
+
+    fn all_sessions(&self) -> Result<Vec<Session>, String> {
+        crate::tools::droid::all_sessions()
+    }
+
+    fn find_transcript(&self, project_path: &str, session_id: &str) -> Option<PathBuf> {
+        crate::tools::droid::transcript::find_transcript_path(project_path, session_id)
+    }
+
+    fn parse_messages(&self, path: &Path) -> Vec<Message> {
+        crate::tools::droid::transcript::parse_messages(path)
+    }
+
+    fn count_messages(&self, project_path: &str, session_id: &str) -> u32 {
+        crate::tools::droid::transcript::count_messages(project_path, session_id)
+    }
+
+    fn read_transcript(&self, path: &Path, max_messages: u32) -> String {
+        crate::tools::droid::transcript::read_transcript(path, max_messages)
+    }
+}
+
+// Junie
+
+pub struct JunieTool;
+
+impl Tool for JunieTool {
+    fn name(&self) -> &'static str {
+        "junie"
+    }
+    fn display_name(&self) -> &'static str {
+        "Junie"
+    }
+    fn config_key(&self) -> &'static str {
+        "junie"
+    }
+    fn category(&self) -> &'static str {
+        "ide"
+    }
+    fn enabled(&self, cfg: &Config) -> bool {
+        cfg.junie.enabled
+    }
+
+    fn sessions_for_project(&self, project_path: &str) -> Result<Vec<Session>, String> {
+        crate::tools::junie::sessions_for_project(project_path)
+    }
+
+    fn all_sessions(&self) -> Result<Vec<Session>, String> {
+        crate::tools::junie::all_sessions()
+    }
+
+    fn find_transcript(&self, project_path: &str, session_id: &str) -> Option<PathBuf> {
+        crate::tools::junie::transcript::find_transcript_path(project_path, session_id)
+    }
+
+    fn parse_messages(&self, path: &Path) -> Vec<Message> {
+        crate::tools::junie::transcript::parse_messages(path)
+    }
+
+    fn count_messages(&self, project_path: &str, session_id: &str) -> u32 {
+        crate::tools::junie::transcript::count_messages(project_path, session_id)
+    }
+
+    fn read_transcript(&self, path: &Path, max_messages: u32) -> String {
+        crate::tools::junie::transcript::read_transcript(path, max_messages)
+    }
+}
+
+// Amp
+
+pub struct AmpTool;
+
+impl Tool for AmpTool {
+    fn name(&self) -> &'static str {
+        "amp"
+    }
+    fn display_name(&self) -> &'static str {
+        "Amp"
+    }
+    fn config_key(&self) -> &'static str {
+        "amp"
+    }
+    fn category(&self) -> &'static str {
+        "cli"
+    }
+    fn enabled(&self, cfg: &Config) -> bool {
+        cfg.amp.enabled
+    }
+
+    fn sessions_for_project(&self, project_path: &str) -> Result<Vec<Session>, String> {
+        crate::tools::amp::sessions_for_project(project_path)
+    }
+
+    fn all_sessions(&self) -> Result<Vec<Session>, String> {
+        crate::tools::amp::all_sessions()
+    }
+
+    fn find_transcript(&self, project_path: &str, session_id: &str) -> Option<PathBuf> {
+        crate::tools::amp::transcript::find_transcript_path(project_path, session_id)
+    }
+
+    fn parse_messages(&self, path: &Path) -> Vec<Message> {
+        crate::tools::amp::transcript::parse_messages(path)
+    }
+
+    fn count_messages(&self, project_path: &str, session_id: &str) -> u32 {
+        crate::tools::amp::transcript::count_messages(project_path, session_id)
+    }
+
+    fn read_transcript(&self, path: &Path, max_messages: u32) -> String {
+        crate::tools::amp::transcript::read_transcript(path, max_messages)
     }
 }

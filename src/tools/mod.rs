@@ -3,11 +3,16 @@ use crate::core::tool::ToolRegistry;
 mod adapter;
 
 pub mod aider;
+pub mod amp;
 pub mod claude;
 pub mod codex;
+pub mod continue_dev;
 pub mod copilot;
 pub mod cursor;
+pub mod droid;
 pub mod gemini;
+pub mod junie;
+pub mod kiro;
 pub mod opencode;
 pub mod trae;
 pub mod vscode_fork;
@@ -29,6 +34,11 @@ pub fn registry() -> ToolRegistry {
         Box::new(OpenCodeTool),
         Box::new(TraeTool),
         Box::new(ZedTool),
+        Box::new(KiroTool),
+        Box::new(ContinueTool),
+        Box::new(DroidTool),
+        Box::new(JunieTool),
+        Box::new(AmpTool),
     ])
 }
 
@@ -40,7 +50,19 @@ mod tests {
     fn test_registry_has_all_tools() {
         let reg = registry();
         let names = reg.tool_names();
-        assert_eq!(names.len(), 10, "expected 10 tools, got {}", names.len());
+        // Must match the number of Box::new(...) entries in registry()
+        let expected = [
+            "cursor", "claude", "gemini", "windsurf", "aider", "copilot", "codex", "opencode",
+            "trae", "zed", "kiro", "continue", "droid", "junie", "amp",
+        ];
+        assert_eq!(
+            names.len(),
+            expected.len(),
+            "registry has {} tools, expected {}: {:?}",
+            names.len(),
+            expected.len(),
+            names,
+        );
     }
 
     #[test]
@@ -83,7 +105,7 @@ mod tests {
         let reg = registry();
         let keys = [
             "cursor", "claude", "gemini", "windsurf", "aider", "copilot", "codex", "opencode",
-            "trae", "zed",
+            "trae", "zed", "kiro", "continue", "droid", "junie", "amp",
         ];
         for key in keys {
             assert!(

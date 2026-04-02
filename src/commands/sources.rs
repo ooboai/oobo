@@ -287,6 +287,31 @@ fn gather_tool_sources(db: &Db) -> Result<Vec<ToolSource>, String> {
         ),
         ("zed", "Zed", false, "local sessions (tiktoken est.)"),
         ("gemini", "Gemini CLI", true, "local JSON (native tokens)"),
+        ("kiro", "Kiro", false, "local SQLite (metadata only)"),
+        (
+            "continue",
+            "Continue",
+            false,
+            "local JSONL sessions (tiktoken est.)",
+        ),
+        (
+            "droid",
+            "Factory Droid",
+            false,
+            "local JSONL sessions (tiktoken est.)",
+        ),
+        (
+            "junie",
+            "Junie",
+            false,
+            "local session files (tiktoken est.)",
+        ),
+        (
+            "amp",
+            "Amp",
+            false,
+            "local thread JSON files (tiktoken est.)",
+        ),
     ];
 
     let aider_has_analytics = crate::tools::aider::analytics::has_analytics_log();

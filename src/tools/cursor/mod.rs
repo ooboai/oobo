@@ -57,7 +57,12 @@ pub fn get_project_root() -> String {
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .replace('\r', "")
+                .trim()
+                .to_string()
+        })
         .unwrap_or_else(|| {
             std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())
