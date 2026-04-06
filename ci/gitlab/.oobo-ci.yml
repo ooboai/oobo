@@ -1,0 +1,77 @@
+# oobo GitLab CI — AI contribution context on merge requests
+#
+# Usage: include this template in your .gitlab-ci.yml:
+#
+#   include:
+#     - remote: 'https://raw.githubusercontent.com/ooboai/oobo/main/ci/gitlab/.oobo-ci.yml'
+#
+# Requirements:
+#   - CI/CD variable GITLAB_TOKEN with 'api' scope (for posting MR notes)
+#   - Pipeline must run on merge_request_event (or the MR variables won't be set)
+#
+# Optional variables:
+#   OOBO_VERSION: pin a specific version (default: latest)
+
+oobo-pr-context:
+  stage: .post
+  image: debian:bookworm-slim
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+  variables:
+    GIT_DEPTH: 0
+    GIT_STRATEGY: clone
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq curl git ca-certificates > /dev/null 2>&1
+    - |
+      if [ -n "$OOBO_VERSION" ]; then
+        OOBO_VERSION="$OOBO_VERSION" curl -fsSL https://oobo.ai/install.sh | bash -s -- --agent
+      else
+        curl -fsSL https://oobo.ai/install.sh | bash -s -- --agent
+      fi
+    - export PATH="$HOME/.oobo/bin:$PATH"
+  script:
+    - |
+      # Fetch the anchor branch
+      git fetch origin oobo/anchors/v1:oobo/anchors/v1 2>/dev/null || true
+
+      # Generate PR summary markdown
+      BASE="origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      BODY=$(oobo pr --base "$BASE" --head HEAD 2>/dev/null || true)
+
+      if [ -z "$BODY" ]; then
+        echo "oobo: no AI context found for this MR"
+        exit 0
+      fi
+
+      # Post or update MR note
+      TAG="<!-- oobo-pr-summary -->"
+      API_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/notes"
+
+      # Find existing oobo note
+      EXISTING_ID=$(curl -s --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+        "${API_URL}?per_page=100" \
+        | python3 -c "
+      import sys, json
+      notes = json.load(sys.stdin)
+      for n in notes:
+          if '${TAG}' in n.get('body', ''):
+              print(n['id'])
+              break
+      " 2>/dev/null || true)
+
+      ESCAPED_BODY=$(echo "$BODY" | python3 -c "import sys,urllib.parse; print(urllib.parse.quote(sys.stdin.read()))")
+
+      if [ -n "$EXISTING_ID" ]; then
+        curl -s --request PUT \
+          --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+          --data "body=${ESCAPED_BODY}" \
+          "${API_URL}/${EXISTING_ID}" > /dev/null
+        echo "oobo: updated existing MR note"
+      else
+        curl -s --request POST \
+          --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+          --data "body=${ESCAPED_BODY}" \
+          "${API_URL}" > /dev/null
+        echo "oobo: posted MR note"
+      fi
+  allow_failure: true

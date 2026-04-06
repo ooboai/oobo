@@ -7,6 +7,7 @@ pub mod check;
 pub mod dash;
 pub mod ignore;
 pub mod index;
+pub mod pr;
 pub mod projects;
 pub mod scan;
 pub mod sessions;

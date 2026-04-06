@@ -124,6 +124,27 @@ jobs:
             checksums.sha256
           generate_release_notes: true
 
+  update-action-tag:
+    name: Update Action v1 Tag
+    needs: release
+    if: always() && !cancelled() && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update v1 major version tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          MAJOR=$(echo "$TAG" | grep -oE '^v[0-9]+')
+          if [ -z "$MAJOR" ]; then
+            MAJOR="v1"
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -fa "$MAJOR" -m "Update $MAJOR tag to $TAG"
+          git push origin "$MAJOR" --force
+
   homebrew:
     name: Update Homebrew Formula
     needs: release

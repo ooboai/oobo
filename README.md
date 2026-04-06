@@ -243,6 +243,14 @@ oobo auth status                 # show auth state
 oobo auth set-remote <url>       # point to a self-hosted server
 ```
 
+### PR / MR context
+
+```bash
+oobo pr                          # AI contribution summary for current branch
+oobo pr --base origin/main       # explicit base ref
+oobo pr --json                   # full JSON output
+```
+
 ### Maintenance
 
 ```bash
@@ -251,6 +259,57 @@ oobo index                       # compute token counts and analytics
 oobo inspect --fix               # diagnose and auto-repair issues
 oobo update                      # check for updates and self-update
 ```
+
+---
+
+## CI Integration
+
+Automatically post AI contribution context on every pull request. When a team member opens a PR, oobo reads the anchor metadata for those commits and drops a comment showing AI%, tools used, tokens consumed, and per-file attribution.
+
+### GitHub Actions
+
+```yaml
+# .github/workflows/oobo.yml
+name: AI Context
+on: [pull_request]
+jobs:
+  oobo:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ooboai/oobo@v1
+```
+
+### GitLab CI
+
+```yaml
+# .gitlab-ci.yml
+include:
+  - remote: 'https://raw.githubusercontent.com/ooboai/oobo/main/ci/gitlab/.oobo-ci.yml'
+```
+
+Requires a `GITLAB_TOKEN` CI/CD variable with `api` scope.
+
+### Travis CI, CircleCI, Buildkite, Jenkins
+
+Use the generic CI script — it auto-detects the platform and posts the comment:
+
+```yaml
+# Travis CI
+after_success:
+  - curl -fsSL https://raw.githubusercontent.com/ooboai/oobo/main/ci/oobo-ci.sh | bash
+
+# CircleCI
+steps:
+  - checkout
+  - run: curl -fsSL https://raw.githubusercontent.com/ooboai/oobo/main/ci/oobo-ci.sh | bash
+```
+
+Set `GITHUB_TOKEN` or `GITLAB_TOKEN` as a CI environment variable for the comment to be posted.
 
 ---
 

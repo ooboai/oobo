@@ -189,6 +189,25 @@ pub enum Command {
     #[command(display_order = 7)]
     Unignore,
 
+    /// AI contribution summary for a range of commits (PR/MR context)
+    #[command(
+        display_order = 9,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo pr                              Auto-detect base from CI env\n  \
+                       oobo pr --base origin/main            Explicit base ref\n  \
+                       oobo pr --base abc123 --head def456   Explicit range\n  \
+                       oobo pr --json                        Full JSON output\n  \
+                       oobo pr --agent                       Compact output"
+    )]
+    Pr {
+        /// Base ref (auto-detected from CI env vars, falls back to origin/main)
+        #[arg(long)]
+        base: Option<String>,
+        /// Head ref (default: HEAD)
+        #[arg(long)]
+        head: Option<String>,
+    },
+
     /// Control per-repo transcript transparency [on, off, reset]
     #[command(
         display_order = 8,
@@ -546,6 +565,7 @@ const OOBO_SUBCOMMANDS: &[&str] = &[
     "blame",
     "share",
     "inspect",
+    "pr",
     "sync",
     "ignore",
     "unignore",
@@ -692,6 +712,10 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
         }
         Some(Command::Blame { file, commit }) => {
             crate::commands::blame::run(&cfg, &file, commit.as_deref(), mode)?;
+            Ok(0)
+        }
+        Some(Command::Pr { base, head }) => {
+            crate::commands::pr::run(&cfg, base.as_deref(), head.as_deref(), mode)?;
             Ok(0)
         }
         Some(Command::Inspect { fix }) => {

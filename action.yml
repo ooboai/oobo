@@ -1,0 +1,111 @@
+name: "oobo PR Context"
+description: "Post AI contribution context on pull requests — shows AI%, tools, tokens, and per-file attribution"
+author: "oobo"
+
+branding:
+  icon: "git-pull-request"
+  color: "purple"
+
+inputs:
+  version:
+    description: "oobo version to install (e.g. v0.1.14). Defaults to latest."
+    required: false
+    default: "latest"
+  base:
+    description: "Base ref for the commit range. Auto-detected from the PR event by default."
+    required: false
+    default: ""
+  head:
+    description: "Head ref for the commit range. Defaults to HEAD."
+    required: false
+    default: "HEAD"
+  token:
+    description: "GitHub token with pull-requests:write permission."
+    required: false
+    default: ${{ github.token }}
+  comment-tag:
+    description: "Hidden HTML tag used to identify and update the PR comment. Change to post separate comments."
+    required: false
+    default: "oobo-pr-summary"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install oobo
+      shell: bash
+      env:
+        OOBO_VERSION: ${{ inputs.version }}
+        OOBO_NO_MODIFY_PATH: "1"
+      run: |
+        if [ "$OOBO_VERSION" = "latest" ]; then
+          curl -fsSL https://oobo.ai/install.sh | bash -s -- --agent
+        else
+          OOBO_VERSION="$OOBO_VERSION" curl -fsSL https://oobo.ai/install.sh | bash -s -- --agent
+        fi
+        echo "$HOME/.oobo/bin" >> "$GITHUB_PATH"
+
+    - name: Fetch anchor branch
+      shell: bash
+      run: |
+        git fetch origin oobo/anchors/v1:oobo/anchors/v1 2>/dev/null || true
+
+    - name: Generate PR summary
+      id: summary
+      shell: bash
+      env:
+        INPUT_BASE: ${{ inputs.base }}
+        INPUT_HEAD: ${{ inputs.head }}
+      run: |
+        BASE_ARG=""
+        HEAD_ARG=""
+        if [ -n "$INPUT_BASE" ]; then
+          BASE_ARG="--base $INPUT_BASE"
+        fi
+        if [ -n "$INPUT_HEAD" ] && [ "$INPUT_HEAD" != "HEAD" ]; then
+          HEAD_ARG="--head $INPUT_HEAD"
+        fi
+
+        BODY=$("$HOME/.oobo/bin/oobo" pr $BASE_ARG $HEAD_ARG 2>/dev/null || true)
+
+        if [ -z "$BODY" ]; then
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::oobo: no AI context found for this PR"
+          exit 0
+        fi
+
+        # Write body to a temp file to avoid delimiter issues
+        TMPFILE=$(mktemp)
+        echo "$BODY" > "$TMPFILE"
+        echo "body_file=$TMPFILE" >> "$GITHUB_OUTPUT"
+        echo "skip=false" >> "$GITHUB_OUTPUT"
+
+    - name: Post or update PR comment
+      if: steps.summary.outputs.skip != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        COMMENT_TAG: ${{ inputs.comment-tag }}
+        BODY_FILE: ${{ steps.summary.outputs.body_file }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+      run: |
+        TAG="<!-- ${COMMENT_TAG} -->"
+        BODY=$(cat "$BODY_FILE")
+
+        # Find existing comment with our tag
+        EXISTING=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+          --jq ".[] | select(.body | contains(\"${TAG}\")) | .id" \
+          2>/dev/null | head -1)
+
+        if [ -n "$EXISTING" ]; then
+          gh api "repos/${REPO}/issues/comments/${EXISTING}" \
+            -X PATCH \
+            -f body="${BODY}" \
+            --silent
+          echo "::notice::oobo: updated existing PR comment"
+        else
+          gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+            -f body="${BODY}" \
+            --silent
+          echo "::notice::oobo: posted PR comment"
+        fi
