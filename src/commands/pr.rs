@@ -343,9 +343,7 @@ fn model_cost_per_million(model: &str) -> Option<(f64, f64)> {
 
 fn format_cost(cost: f64) -> String {
     if cost < 0.01 {
-        format!("<$0.01")
-    } else if cost < 1.0 {
-        format!("${:.2}", cost)
+        "<$0.01".to_string()
     } else {
         format!("${:.2}", cost)
     }
@@ -507,7 +505,7 @@ fn print_agent(summary: &PrSummary) {
         .unwrap_or_else(|| "n/a".into());
     let cost = summary
         .estimated_cost
-        .map(|c| format_cost(c))
+        .map(format_cost)
         .unwrap_or_else(|| "n/a".into());
     println!(
         "commits: {} | with_anchors: {} | ai: {} | sessions: {} | tokens: {} | cost: {} | tools: {}",
@@ -649,35 +647,27 @@ mod tests {
         }
     }
 
-    fn empty_agg_state() -> (
-        u64, u64, u64, u64, u64, u64, u64, u64,
-        HashSet<String>, HashSet<String>, usize,
-        HashMap<String, usize>, HashMap<String, FileSummary>,
-    ) {
-        (0, 0, 0, 0, 0, 0, 0, 0,
-         HashSet::new(), HashSet::new(), 0,
-         HashMap::new(), HashMap::new())
+    #[derive(Default)]
+    struct TestAgg {
+        ta: u64, td: u64, aa: u64, ad: u64,
+        ha: u64, hd: u64, ti: u64, to: u64,
+        tools: HashSet<String>, models: HashSet<String>,
+        sc: usize, atc: HashMap<String, usize>,
+        fm: HashMap<String, FileSummary>,
     }
 
-    fn run_accumulate(anchor: &Anchor, links: &[SessionLink]) -> (
-        u64, u64, u64, u64, u64, u64, u64, u64,
-        HashSet<String>, HashSet<String>, usize,
-        HashMap<String, usize>, HashMap<String, FileSummary>,
-    ) {
-        let (
-            mut ta, mut td, mut aa, mut ad, mut ha, mut hd, mut ti, mut to,
-            mut tools, mut models, mut sc, mut atc, mut fm,
-        ) = empty_agg_state();
+    fn run_accumulate(anchor: &Anchor, links: &[SessionLink]) -> TestAgg {
+        let mut a = TestAgg::default();
         accumulate_anchor(anchor, links, &mut AggState {
-            total_added: &mut ta, total_deleted: &mut td,
-            ai_added: &mut aa, ai_deleted: &mut ad,
-            human_added: &mut ha, human_deleted: &mut hd,
-            total_input_tokens: &mut ti, total_output_tokens: &mut to,
-            tools: &mut tools, models: &mut models,
-            session_count: &mut sc, author_type_counts: &mut atc,
-            file_map: &mut fm,
+            total_added: &mut a.ta, total_deleted: &mut a.td,
+            ai_added: &mut a.aa, ai_deleted: &mut a.ad,
+            human_added: &mut a.ha, human_deleted: &mut a.hd,
+            total_input_tokens: &mut a.ti, total_output_tokens: &mut a.to,
+            tools: &mut a.tools, models: &mut a.models,
+            session_count: &mut a.sc, author_type_counts: &mut a.atc,
+            file_map: &mut a.fm,
         });
-        (ta, td, aa, ad, ha, hd, ti, to, tools, models, sc, atc, fm)
+        a
     }
 
     // ── format_cost ─────────────────────────────────────────────────────
@@ -931,23 +921,22 @@ mod tests {
             make_session_link("cursor", Some("claude-sonnet-4"), Some(5000), Some(3000)),
         ];
 
-        let (ta, td, aa, ad, ha, hd, ti, to, tools, models, sc, atc, fm) =
-            run_accumulate(&anchor, &links);
+        let a = run_accumulate(&anchor, &links);
 
-        assert_eq!(ta, 100);
-        assert_eq!(td, 20);
-        assert_eq!(aa, 80);
-        assert_eq!(ad, 15);
-        assert_eq!(ha, 20);
-        assert_eq!(hd, 5);
-        assert_eq!(ti, 5000);
-        assert_eq!(to, 3000);
-        assert_eq!(sc, 1);
-        assert!(tools.contains("Cursor"));
-        assert!(models.contains("claude-sonnet-4"));
-        assert_eq!(atc.get("assisted"), Some(&1));
-        assert_eq!(fm.len(), 1);
-        let file = fm.get("src/main.rs").unwrap();
+        assert_eq!(a.ta, 100);
+        assert_eq!(a.td, 20);
+        assert_eq!(a.aa, 80);
+        assert_eq!(a.ad, 15);
+        assert_eq!(a.ha, 20);
+        assert_eq!(a.hd, 5);
+        assert_eq!(a.ti, 5000);
+        assert_eq!(a.to, 3000);
+        assert_eq!(a.sc, 1);
+        assert!(a.tools.contains("Cursor"));
+        assert!(a.models.contains("claude-sonnet-4"));
+        assert_eq!(a.atc.get("assisted"), Some(&1));
+        assert_eq!(a.fm.len(), 1);
+        let file = a.fm.get("src/main.rs").unwrap();
         assert_eq!(file.added, 100);
         assert_eq!(file.ai_added, 100);
         assert_eq!(file.attribution.as_deref(), Some("ai"));
@@ -966,18 +955,17 @@ mod tests {
         );
         let links = vec![];
 
-        let (_, _, aa, ad, _, _, ti, to, tools, models, sc, atc, fm) =
-            run_accumulate(&anchor, &links);
+        let a = run_accumulate(&anchor, &links);
 
-        assert_eq!(aa, 0);
-        assert_eq!(ad, 0);
-        assert_eq!(ti, 0);
-        assert_eq!(to, 0);
-        assert_eq!(sc, 0);
-        assert!(tools.is_empty());
-        assert!(models.is_empty());
-        assert_eq!(atc.get("human"), Some(&1));
-        let file = fm.get("README.md").unwrap();
+        assert_eq!(a.aa, 0);
+        assert_eq!(a.ad, 0);
+        assert_eq!(a.ti, 0);
+        assert_eq!(a.to, 0);
+        assert_eq!(a.sc, 0);
+        assert!(a.tools.is_empty());
+        assert!(a.models.is_empty());
+        assert_eq!(a.atc.get("human"), Some(&1));
+        let file = a.fm.get("README.md").unwrap();
         assert_eq!(file.ai_added, 0);
         assert_eq!(file.attribution.as_deref(), Some("human"));
     }
@@ -996,9 +984,9 @@ mod tests {
             make_session_link("claude", Some("claude-sonnet-4"), Some(1000), Some(500)),
         ];
 
-        let (_, _, _, _, _, _, _, _, _, _, _, _, fm) = run_accumulate(&anchor, &links);
+        let a = run_accumulate(&anchor, &links);
 
-        let file = fm.get("lib.rs").unwrap();
+        let file = a.fm.get("lib.rs").unwrap();
         assert_eq!(file.added, 100);
         assert_eq!(file.ai_added, 50); // 100/2
         assert_eq!(file.attribution.as_deref(), Some("mixed"));
@@ -1015,15 +1003,15 @@ mod tests {
             make_session_link("claude", Some("claude-opus-4"), Some(20000), Some(15000)),
         ];
 
-        let (_, _, _, _, _, _, ti, to, tools, models, sc, _, _) = run_accumulate(&anchor, &links);
+        let a = run_accumulate(&anchor, &links);
 
-        assert_eq!(sc, 2);
-        assert_eq!(ti, 30000);
-        assert_eq!(to, 20000);
-        assert!(tools.contains("Cursor"));
-        assert!(tools.contains("Claude"));
-        assert!(models.contains("claude-sonnet-4"));
-        assert!(models.contains("claude-opus-4"));
+        assert_eq!(a.sc, 2);
+        assert_eq!(a.ti, 30000);
+        assert_eq!(a.to, 20000);
+        assert!(a.tools.contains("Cursor"));
+        assert!(a.tools.contains("Claude"));
+        assert!(a.models.contains("claude-sonnet-4"));
+        assert!(a.models.contains("claude-opus-4"));
     }
 
     #[test]
@@ -1033,12 +1021,12 @@ mod tests {
             make_session_link("cursor", None, None, None),
         ];
 
-        let (_, _, _, _, _, _, ti, to, _, models, sc, _, _) = run_accumulate(&anchor, &links);
+        let a = run_accumulate(&anchor, &links);
 
-        assert_eq!(sc, 1);
-        assert_eq!(ti, 0);
-        assert_eq!(to, 0);
-        assert!(models.is_empty());
+        assert_eq!(a.sc, 1);
+        assert_eq!(a.ti, 0);
+        assert_eq!(a.to, 0);
+        assert!(a.models.is_empty());
     }
 
     #[test]
@@ -1060,23 +1048,22 @@ mod tests {
             }],
         );
 
-        let (mut ta, mut td, mut aa, mut ad, mut ha, mut hd, mut ti, mut to,
-             mut tools, mut models, mut sc, mut atc, mut fm) = empty_agg_state();
+        let mut a = TestAgg::default();
         let mut st = AggState {
-            total_added: &mut ta, total_deleted: &mut td,
-            ai_added: &mut aa, ai_deleted: &mut ad,
-            human_added: &mut ha, human_deleted: &mut hd,
-            total_input_tokens: &mut ti, total_output_tokens: &mut to,
-            tools: &mut tools, models: &mut models,
-            session_count: &mut sc, author_type_counts: &mut atc,
-            file_map: &mut fm,
+            total_added: &mut a.ta, total_deleted: &mut a.td,
+            ai_added: &mut a.aa, ai_deleted: &mut a.ad,
+            human_added: &mut a.ha, human_deleted: &mut a.hd,
+            total_input_tokens: &mut a.ti, total_output_tokens: &mut a.to,
+            tools: &mut a.tools, models: &mut a.models,
+            session_count: &mut a.sc, author_type_counts: &mut a.atc,
+            file_map: &mut a.fm,
         };
         accumulate_anchor(&anchor1, &[], &mut st);
         accumulate_anchor(&anchor2, &[], &mut st);
 
-        assert_eq!(ta, 80);
-        assert_eq!(td, 10);
-        let file = fm.get("shared.rs").unwrap();
+        assert_eq!(a.ta, 80);
+        assert_eq!(a.td, 10);
+        let file = a.fm.get("shared.rs").unwrap();
         assert_eq!(file.added, 80);
         assert_eq!(file.deleted, 10);
         assert_eq!(file.ai_added, 50);
@@ -1095,25 +1082,24 @@ mod tests {
             make_anchor("a5", 10, 0, 10, 0, AuthorType::Agent, vec![]),
         ];
 
-        let (mut ta, mut td, mut aa, mut ad, mut ha, mut hd, mut ti, mut to,
-             mut tools, mut models, mut sc, mut atc, mut fm) = empty_agg_state();
+        let mut agg = TestAgg::default();
         let mut st = AggState {
-            total_added: &mut ta, total_deleted: &mut td,
-            ai_added: &mut aa, ai_deleted: &mut ad,
-            human_added: &mut ha, human_deleted: &mut hd,
-            total_input_tokens: &mut ti, total_output_tokens: &mut to,
-            tools: &mut tools, models: &mut models,
-            session_count: &mut sc, author_type_counts: &mut atc,
-            file_map: &mut fm,
+            total_added: &mut agg.ta, total_deleted: &mut agg.td,
+            ai_added: &mut agg.aa, ai_deleted: &mut agg.ad,
+            human_added: &mut agg.ha, human_deleted: &mut agg.hd,
+            total_input_tokens: &mut agg.ti, total_output_tokens: &mut agg.to,
+            tools: &mut agg.tools, models: &mut agg.models,
+            session_count: &mut agg.sc, author_type_counts: &mut agg.atc,
+            file_map: &mut agg.fm,
         };
         for a in &anchors {
             accumulate_anchor(a, &[], &mut st);
         }
 
-        assert_eq!(atc.get("agent"), Some(&2));
-        assert_eq!(atc.get("assisted"), Some(&1));
-        assert_eq!(atc.get("human"), Some(&1));
-        assert_eq!(atc.get("automated"), Some(&1));
+        assert_eq!(agg.atc.get("agent"), Some(&2));
+        assert_eq!(agg.atc.get("assisted"), Some(&1));
+        assert_eq!(agg.atc.get("human"), Some(&1));
+        assert_eq!(agg.atc.get("automated"), Some(&1));
     }
 
     // ── PrSummary construction ──────────────────────────────────────────
@@ -1128,9 +1114,9 @@ mod tests {
         );
         let links = vec![make_session_link("cursor", Some("sonnet"), Some(1000), Some(500))];
 
-        let (_, _, aa, ad, ha, hd, _, _, _, _, _, _, _) = run_accumulate(&anchor, &links);
-        let total_lines = aa + ad + ha + hd;
-        let ai_lines = aa + ad;
+        let a = run_accumulate(&anchor, &links);
+        let total_lines = a.aa + a.ad + a.ha + a.hd;
+        let ai_lines = a.aa + a.ad;
         let pct = (ai_lines as f64 / total_lines as f64) * 100.0;
         assert!((pct - 80.0).abs() < 0.01);
     }
@@ -1138,8 +1124,8 @@ mod tests {
     #[test]
     fn test_pr_summary_no_lines_gives_none_percentage() {
         let anchor = make_anchor("qqq222", 0, 0, 0, 0, AuthorType::Human, vec![]);
-        let (_, _, aa, ad, ha, hd, _, _, _, _, _, _, _) = run_accumulate(&anchor, &[]);
-        let total_lines = aa + ad + ha + hd;
+        let a = run_accumulate(&anchor, &[]);
+        let total_lines = a.aa + a.ad + a.ha + a.hd;
         assert_eq!(total_lines, 0);
     }
 
@@ -1147,7 +1133,7 @@ mod tests {
 
     #[test]
     fn test_files_sorted_by_total_changes_descending() {
-        let mut files = vec![
+        let mut files = [
             FileSummary { path: "small.rs".into(), added: 5, deleted: 0, ai_added: 0, ai_deleted: 0, attribution: None, agent: None },
             FileSummary { path: "big.rs".into(), added: 200, deleted: 50, ai_added: 0, ai_deleted: 0, attribution: None, agent: None },
             FileSummary { path: "mid.rs".into(), added: 30, deleted: 10, ai_added: 0, ai_deleted: 0, attribution: None, agent: None },
@@ -1328,11 +1314,11 @@ mod tests {
             make_session_link("cursor", Some("sonnet"), Some(200), Some(100)),
         ];
 
-        let (_, _, _, _, _, _, _, _, tools, _, sc, _, _) = run_accumulate(&anchor, &links);
+        let a = run_accumulate(&anchor, &links);
 
-        assert_eq!(sc, 2);
-        assert_eq!(tools.len(), 1);
-        assert!(tools.contains("Cursor"));
+        assert_eq!(a.sc, 2);
+        assert_eq!(a.tools.len(), 1);
+        assert!(a.tools.contains("Cursor"));
     }
 
     #[test]
@@ -1343,7 +1329,7 @@ mod tests {
             make_session_link("claude", Some("claude-sonnet-4"), Some(200), Some(100)),
         ];
 
-        let (_, _, _, _, _, _, _, _, _, models, _, _, _) = run_accumulate(&anchor, &links);
-        assert_eq!(models.len(), 1);
+        let a = run_accumulate(&anchor, &links);
+        assert_eq!(a.models.len(), 1);
     }
 }
