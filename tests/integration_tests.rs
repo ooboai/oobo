@@ -1446,17 +1446,45 @@ fn test_pr_no_anchor_branch() {
     let tmp = TempDir::new().unwrap();
     let oobo_home = isolated_oobo_home();
 
-    Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.email", "test@oobo.dev"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.name", "Test"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     fs::write(tmp.path().join("a.txt"), "hello\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["commit", "-m", "base"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "base"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     fs::write(tmp.path().join("b.txt"), "world\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["commit", "-m", "second"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "second"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     let output = Command::new(oobo_binary())
         .args(["pr", "--base", "HEAD~1"])
@@ -1477,17 +1505,45 @@ fn test_pr_no_anchor_branch_json() {
     let tmp = TempDir::new().unwrap();
     let oobo_home = isolated_oobo_home();
 
-    Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.email", "test@oobo.dev"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.name", "Test"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     fs::write(tmp.path().join("a.txt"), "hi\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["commit", "-m", "base"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "base"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     fs::write(tmp.path().join("b.txt"), "there\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["commit", "-m", "second"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "second"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     let output = Command::new(oobo_binary())
         .args(["pr", "--base", "HEAD~1", "--json"])
@@ -1509,13 +1565,33 @@ fn test_pr_empty_range() {
     let tmp = TempDir::new().unwrap();
     let oobo_home = isolated_oobo_home();
 
-    Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.email", "test@oobo.dev"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.name", "Test"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     fs::write(tmp.path().join("a.txt"), "hello\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["commit", "-m", "only"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "only"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     let output = Command::new(oobo_binary())
         .args(["pr", "--base", "HEAD", "--head", "HEAD"])
@@ -1536,13 +1612,33 @@ fn test_pr_empty_range_json() {
     let tmp = TempDir::new().unwrap();
     let oobo_home = isolated_oobo_home();
 
-    Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.email", "test@oobo.dev"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.name", "Test"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     fs::write(tmp.path().join("a.txt"), "hello\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["commit", "-m", "only"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "only"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     let output = Command::new(oobo_binary())
         .args(["pr", "--base", "HEAD", "--head", "HEAD", "--json"])
@@ -1564,13 +1660,29 @@ fn test_pr_with_oobo_commits() {
     let tmp = TempDir::new().unwrap();
     let oobo_home = isolated_oobo_home();
 
-    Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.email", "test@oobo.dev"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.name", "Test User"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     // Base commit
     fs::write(tmp.path().join("base.txt"), "base\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
     Command::new(oobo_binary())
         .args(["commit", "-m", "base commit"])
         .env("OOBO_HOME", oobo_home.path())
@@ -1583,11 +1695,21 @@ fn test_pr_with_oobo_commits() {
         .current_dir(tmp.path())
         .output()
         .unwrap();
-    let base_hash = String::from_utf8_lossy(&base_hash_output.stdout).trim().to_string();
+    let base_hash = String::from_utf8_lossy(&base_hash_output.stdout)
+        .trim()
+        .to_string();
 
     // Feature commit via oobo (creates anchor)
-    fs::write(tmp.path().join("feature.rs"), "fn main() { println!(\"hello\"); }\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
+    fs::write(
+        tmp.path().join("feature.rs"),
+        "fn main() { println!(\"hello\"); }\n",
+    )
+    .unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
     let commit_result = Command::new(oobo_binary())
         .args(["commit", "-m", "add feature"])
         .env("OOBO_HOME", oobo_home.path())
@@ -1623,13 +1745,29 @@ fn test_pr_json_output_structure() {
     let tmp = TempDir::new().unwrap();
     let oobo_home = isolated_oobo_home();
 
-    Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.email", "test@oobo.dev"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.name", "Test User"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     // Two commits via oobo
     fs::write(tmp.path().join("base.txt"), "base\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
     Command::new(oobo_binary())
         .args(["commit", "-m", "base"])
         .env("OOBO_HOME", oobo_home.path())
@@ -1638,11 +1776,22 @@ fn test_pr_json_output_structure() {
         .unwrap();
 
     let base_hash = String::from_utf8_lossy(
-        &Command::new("git").args(["rev-parse", "HEAD"]).current_dir(tmp.path()).output().unwrap().stdout
-    ).trim().to_string();
+        &Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
 
     fs::write(tmp.path().join("new.rs"), "fn f() {}\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
     Command::new(oobo_binary())
         .args(["commit", "-m", "add new file"])
         .env("OOBO_HOME", oobo_home.path())
@@ -1664,12 +1813,21 @@ fn test_pr_json_output_structure() {
             .unwrap_or_else(|e| panic!("pr --json must return valid JSON: {e}, got: {stdout}"));
 
         if val.get("error").is_none() {
-            assert!(val.get("total_commits").is_some(), "JSON should have total_commits");
-            assert!(val.get("total_added").is_some(), "JSON should have total_added");
+            assert!(
+                val.get("total_commits").is_some(),
+                "JSON should have total_commits"
+            );
+            assert!(
+                val.get("total_added").is_some(),
+                "JSON should have total_added"
+            );
             assert!(val.get("tools").is_some(), "JSON should have tools");
             assert!(val.get("models").is_some(), "JSON should have models");
             assert!(val.get("files").is_some(), "JSON should have files");
-            assert!(val.get("session_count").is_some(), "JSON should have session_count");
+            assert!(
+                val.get("session_count").is_some(),
+                "JSON should have session_count"
+            );
         }
     }
 }
@@ -1679,12 +1837,28 @@ fn test_pr_agent_output_format() {
     let tmp = TempDir::new().unwrap();
     let oobo_home = isolated_oobo_home();
 
-    Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.email", "test@oobo.dev"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.name", "Test User"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     fs::write(tmp.path().join("a.txt"), "a\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
     Command::new(oobo_binary())
         .args(["commit", "-m", "base"])
         .env("OOBO_HOME", oobo_home.path())
@@ -1693,11 +1867,22 @@ fn test_pr_agent_output_format() {
         .unwrap();
 
     let base_hash = String::from_utf8_lossy(
-        &Command::new("git").args(["rev-parse", "HEAD"]).current_dir(tmp.path()).output().unwrap().stdout
-    ).trim().to_string();
+        &Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
 
     fs::write(tmp.path().join("b.txt"), "b\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
     Command::new(oobo_binary())
         .args(["commit", "-m", "second"])
         .env("OOBO_HOME", oobo_home.path())
@@ -1728,13 +1913,29 @@ fn test_pr_with_agent_session_and_commit() {
     let tmp = TempDir::new().unwrap();
     let oobo_home = isolated_oobo_home();
 
-    Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.email", "test@oobo.dev"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.name", "Test"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     // Base commit
     fs::write(tmp.path().join("base.txt"), "base\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
     Command::new(oobo_binary())
         .args(["commit", "-m", "base"])
         .env("OOBO_HOME", oobo_home.path())
@@ -1743,8 +1944,15 @@ fn test_pr_with_agent_session_and_commit() {
         .unwrap();
 
     let base_hash = String::from_utf8_lossy(
-        &Command::new("git").args(["rev-parse", "HEAD"]).current_dir(tmp.path()).output().unwrap().stdout
-    ).trim().to_string();
+        &Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
 
     // Start an agent session
     let start = Command::new(oobo_binary())
@@ -1765,7 +1973,11 @@ fn test_pr_with_agent_session_and_commit() {
     assert!(start.status.success(), "session-start failed");
 
     // Make a code change
-    fs::write(tmp.path().join("feature.rs"), "fn feature() -> i32 { 42 }\n").unwrap();
+    fs::write(
+        tmp.path().join("feature.rs"),
+        "fn feature() -> i32 { 42 }\n",
+    )
+    .unwrap();
 
     // Stop session (captures snapshot)
     let stop = Command::new(oobo_binary())
@@ -1777,23 +1989,34 @@ fn test_pr_with_agent_session_and_commit() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .and_then(|mut child| {
-            child.stdin.take().unwrap().write_all(
-                br#"{"session_id":"pr-test-session"}"#
-            ).unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(br#"{"session_id":"pr-test-session"}"#)
+                .unwrap();
             child.wait_with_output()
         })
         .unwrap();
     assert!(stop.status.success(), "stop failed");
 
     // Commit through oobo
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
     let commit = Command::new(oobo_binary())
         .args(["commit", "-m", "add feature with AI"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
         .output()
         .unwrap();
-    assert!(commit.status.success(), "feature commit failed: {}", String::from_utf8_lossy(&commit.stderr));
+    assert!(
+        commit.status.success(),
+        "feature commit failed: {}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
 
     // Run pr --json
     let pr_output = Command::new(oobo_binary())
@@ -1823,14 +2046,34 @@ fn test_pr_explicit_base_and_head() {
     let tmp = TempDir::new().unwrap();
     let oobo_home = isolated_oobo_home();
 
-    Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.email", "test@oobo.dev"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.name", "Test"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     // 3 commits
     for i in 0..3 {
-        fs::write(tmp.path().join(format!("f{i}.txt")), format!("content {i}\n")).unwrap();
-        Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
+        fs::write(
+            tmp.path().join(format!("f{i}.txt")),
+            format!("content {i}\n"),
+        )
+        .unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
         Command::new(oobo_binary())
             .args(["commit", "-m", &format!("commit {i}")])
             .env("OOBO_HOME", oobo_home.path())
@@ -1840,11 +2083,25 @@ fn test_pr_explicit_base_and_head() {
     }
 
     let first_hash = String::from_utf8_lossy(
-        &Command::new("git").args(["rev-parse", "HEAD~2"]).current_dir(tmp.path()).output().unwrap().stdout
-    ).trim().to_string();
+        &Command::new("git")
+            .args(["rev-parse", "HEAD~2"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
     let last_hash = String::from_utf8_lossy(
-        &Command::new("git").args(["rev-parse", "HEAD"]).current_dir(tmp.path()).output().unwrap().stdout
-    ).trim().to_string();
+        &Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
 
     let output = Command::new(oobo_binary())
         .args(["pr", "--base", &first_hash, "--head", &last_hash, "--json"])
@@ -1870,13 +2127,29 @@ fn test_pr_multiple_commits_accumulate() {
     let tmp = TempDir::new().unwrap();
     let oobo_home = isolated_oobo_home();
 
-    Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.email", "test@oobo.dev"]).current_dir(tmp.path()).output().unwrap();
-    Command::new("git").args(["config", "user.name", "Test"]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     // Base commit
     fs::write(tmp.path().join("base.txt"), "base\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
     Command::new(oobo_binary())
         .args(["commit", "-m", "base"])
         .env("OOBO_HOME", oobo_home.path())
@@ -1885,16 +2158,28 @@ fn test_pr_multiple_commits_accumulate() {
         .unwrap();
 
     let base_hash = String::from_utf8_lossy(
-        &Command::new("git").args(["rev-parse", "HEAD"]).current_dir(tmp.path()).output().unwrap().stdout
-    ).trim().to_string();
+        &Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .trim()
+    .to_string();
 
     // Multiple feature commits
     for i in 1..=3 {
         fs::write(
             tmp.path().join(format!("feature_{i}.rs")),
             format!("fn feature_{i}() {{ }}\n"),
-        ).unwrap();
-        Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
+        )
+        .unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
         Command::new(oobo_binary())
             .args(["commit", "-m", &format!("feature {i}")])
             .env("OOBO_HOME", oobo_home.path())

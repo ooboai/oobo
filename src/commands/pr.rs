@@ -95,7 +95,11 @@ fn detect_base_ref() -> Option<String> {
 
 fn list_commits_in_range(cfg: &Config, base: &str, head: &str) -> Result<Vec<String>, String> {
     let output = proxy::run_git_capture(cfg, &["log", "--format=%H", &format!("{base}..{head}")])?;
-    Ok(output.lines().filter(|l| !l.is_empty()).map(String::from).collect())
+    Ok(output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect())
 }
 
 fn build_summary(project_root: &str, commit_hashes: &[String]) -> PrSummary {
@@ -123,21 +127,25 @@ fn build_summary(project_root: &str, commit_hashes: &[String]) -> PrSummary {
 
         let links = orphan::read_session_links(project_root, hash);
 
-        accumulate_anchor(&anchor, &links, &mut AggState {
-            total_added: &mut total_added,
-            total_deleted: &mut total_deleted,
-            ai_added: &mut ai_added,
-            ai_deleted: &mut ai_deleted,
-            human_added: &mut human_added,
-            human_deleted: &mut human_deleted,
-            total_input_tokens: &mut total_input_tokens,
-            total_output_tokens: &mut total_output_tokens,
-            tools: &mut tools,
-            models: &mut models,
-            session_count: &mut session_count,
-            author_type_counts: &mut author_type_counts,
-            file_map: &mut file_map,
-        });
+        accumulate_anchor(
+            &anchor,
+            &links,
+            &mut AggState {
+                total_added: &mut total_added,
+                total_deleted: &mut total_deleted,
+                ai_added: &mut ai_added,
+                ai_deleted: &mut ai_deleted,
+                human_added: &mut human_added,
+                human_deleted: &mut human_deleted,
+                total_input_tokens: &mut total_input_tokens,
+                total_output_tokens: &mut total_output_tokens,
+                tools: &mut tools,
+                models: &mut models,
+                session_count: &mut session_count,
+                author_type_counts: &mut author_type_counts,
+                file_map: &mut file_map,
+            },
+        );
     }
 
     let total_lines = ai_added + ai_deleted + human_added + human_deleted;
@@ -155,7 +163,8 @@ fn build_summary(project_root: &str, commit_hashes: &[String]) -> PrSummary {
     let mut models_sorted: Vec<String> = models.into_iter().collect();
     models_sorted.sort();
 
-    let estimated_cost = estimate_total_cost(&models_sorted, total_input_tokens, total_output_tokens);
+    let estimated_cost =
+        estimate_total_cost(&models_sorted, total_input_tokens, total_output_tokens);
 
     let mut files: Vec<FileSummary> = file_map.into_values().collect();
     files.sort_by(|a, b| {
@@ -236,15 +245,18 @@ fn accumulate_anchor(anchor: &Anchor, links: &[SessionLink], st: &mut AggState) 
     }
 
     for fc in &anchor.file_changes {
-        let entry = st.file_map.entry(fc.path.clone()).or_insert_with(|| FileSummary {
-            path: fc.path.clone(),
-            added: 0,
-            deleted: 0,
-            ai_added: 0,
-            ai_deleted: 0,
-            attribution: None,
-            agent: None,
-        });
+        let entry = st
+            .file_map
+            .entry(fc.path.clone())
+            .or_insert_with(|| FileSummary {
+                path: fc.path.clone(),
+                added: 0,
+                deleted: 0,
+                ai_added: 0,
+                ai_deleted: 0,
+                attribution: None,
+                agent: None,
+            });
         entry.added += fc.added as u64;
         entry.deleted += fc.deleted as u64;
 
@@ -600,9 +612,7 @@ mod tests {
             human_added: added - ai_added,
             human_deleted: deleted - ai_deleted,
             ai_percentage: if added + deleted > 0 {
-                Some(
-                    ((ai_added + ai_deleted) as f64 / (added + deleted) as f64) * 100.0,
-                )
+                Some(((ai_added + ai_deleted) as f64 / (added + deleted) as f64) * 100.0)
             } else {
                 None
             },
@@ -649,24 +659,42 @@ mod tests {
 
     #[derive(Default)]
     struct TestAgg {
-        ta: u64, td: u64, aa: u64, ad: u64,
-        ha: u64, hd: u64, ti: u64, to: u64,
-        tools: HashSet<String>, models: HashSet<String>,
-        sc: usize, atc: HashMap<String, usize>,
+        ta: u64,
+        td: u64,
+        aa: u64,
+        ad: u64,
+        ha: u64,
+        hd: u64,
+        ti: u64,
+        to: u64,
+        tools: HashSet<String>,
+        models: HashSet<String>,
+        sc: usize,
+        atc: HashMap<String, usize>,
         fm: HashMap<String, FileSummary>,
     }
 
     fn run_accumulate(anchor: &Anchor, links: &[SessionLink]) -> TestAgg {
         let mut a = TestAgg::default();
-        accumulate_anchor(anchor, links, &mut AggState {
-            total_added: &mut a.ta, total_deleted: &mut a.td,
-            ai_added: &mut a.aa, ai_deleted: &mut a.ad,
-            human_added: &mut a.ha, human_deleted: &mut a.hd,
-            total_input_tokens: &mut a.ti, total_output_tokens: &mut a.to,
-            tools: &mut a.tools, models: &mut a.models,
-            session_count: &mut a.sc, author_type_counts: &mut a.atc,
-            file_map: &mut a.fm,
-        });
+        accumulate_anchor(
+            anchor,
+            links,
+            &mut AggState {
+                total_added: &mut a.ta,
+                total_deleted: &mut a.td,
+                ai_added: &mut a.aa,
+                ai_deleted: &mut a.ad,
+                human_added: &mut a.ha,
+                human_deleted: &mut a.hd,
+                total_input_tokens: &mut a.ti,
+                total_output_tokens: &mut a.to,
+                tools: &mut a.tools,
+                models: &mut a.models,
+                session_count: &mut a.sc,
+                author_type_counts: &mut a.atc,
+                file_map: &mut a.fm,
+            },
+        );
         a
     }
 
@@ -792,7 +820,10 @@ mod tests {
         let (mini_in, mini_out) = model_cost_per_million("gpt-4o-mini").unwrap();
         let (full_in, full_out) = model_cost_per_million("gpt-4o").unwrap();
         assert!(mini_in < full_in, "gpt-4o-mini should be cheaper on input");
-        assert!(mini_out < full_out, "gpt-4o-mini should be cheaper on output");
+        assert!(
+            mini_out < full_out,
+            "gpt-4o-mini should be cheaper on output"
+        );
     }
 
     // ── estimate_total_cost ─────────────────────────────────────────────
@@ -857,9 +888,13 @@ mod tests {
     #[test]
     fn test_file_attribution_label_ai() {
         let f = FileSummary {
-            path: "a.rs".into(), added: 10, deleted: 0,
-            ai_added: 10, ai_deleted: 0,
-            attribution: Some("ai".into()), agent: Some("cursor".into()),
+            path: "a.rs".into(),
+            added: 10,
+            deleted: 0,
+            ai_added: 10,
+            ai_deleted: 0,
+            attribution: Some("ai".into()),
+            agent: Some("cursor".into()),
         };
         assert_eq!(file_attribution_label(&f), "AI");
     }
@@ -867,9 +902,13 @@ mod tests {
     #[test]
     fn test_file_attribution_label_human() {
         let f = FileSummary {
-            path: "b.rs".into(), added: 10, deleted: 0,
-            ai_added: 0, ai_deleted: 0,
-            attribution: Some("human".into()), agent: None,
+            path: "b.rs".into(),
+            added: 10,
+            deleted: 0,
+            ai_added: 0,
+            ai_deleted: 0,
+            attribution: Some("human".into()),
+            agent: None,
         };
         assert_eq!(file_attribution_label(&f), "Human");
     }
@@ -877,9 +916,13 @@ mod tests {
     #[test]
     fn test_file_attribution_label_mixed() {
         let f = FileSummary {
-            path: "c.rs".into(), added: 100, deleted: 0,
-            ai_added: 60, ai_deleted: 0,
-            attribution: Some("mixed".into()), agent: Some("claude".into()),
+            path: "c.rs".into(),
+            added: 100,
+            deleted: 0,
+            ai_added: 60,
+            ai_deleted: 0,
+            attribution: Some("mixed".into()),
+            agent: Some("claude".into()),
         };
         assert_eq!(file_attribution_label(&f), "Mixed (60% AI)");
     }
@@ -887,9 +930,13 @@ mod tests {
     #[test]
     fn test_file_attribution_label_mixed_zero_lines() {
         let f = FileSummary {
-            path: "d.rs".into(), added: 0, deleted: 0,
-            ai_added: 0, ai_deleted: 0,
-            attribution: Some("mixed".into()), agent: None,
+            path: "d.rs".into(),
+            added: 0,
+            deleted: 0,
+            ai_added: 0,
+            ai_deleted: 0,
+            attribution: Some("mixed".into()),
+            agent: None,
         };
         // zero total lines -- falls through to the _ arm
         assert_eq!(file_attribution_label(&f), "—");
@@ -898,9 +945,13 @@ mod tests {
     #[test]
     fn test_file_attribution_label_none() {
         let f = FileSummary {
-            path: "e.rs".into(), added: 5, deleted: 0,
-            ai_added: 0, ai_deleted: 0,
-            attribution: None, agent: None,
+            path: "e.rs".into(),
+            added: 5,
+            deleted: 0,
+            ai_added: 0,
+            ai_deleted: 0,
+            attribution: None,
+            agent: None,
         };
         assert_eq!(file_attribution_label(&f), "—");
     }
@@ -910,16 +961,27 @@ mod tests {
     #[test]
     fn test_accumulate_single_ai_commit() {
         let anchor = make_anchor(
-            "aaa111", 100, 20, 80, 15, AuthorType::Assisted,
+            "aaa111",
+            100,
+            20,
+            80,
+            15,
+            AuthorType::Assisted,
             vec![FileChange {
-                path: "src/main.rs".into(), added: 100, deleted: 20,
+                path: "src/main.rs".into(),
+                added: 100,
+                deleted: 20,
                 attribution: Some(FileAttribution::Ai),
-                agent: Some("cursor".into()), line_attributions: vec![],
+                agent: Some("cursor".into()),
+                line_attributions: vec![],
             }],
         );
-        let links = vec![
-            make_session_link("cursor", Some("claude-sonnet-4"), Some(5000), Some(3000)),
-        ];
+        let links = vec![make_session_link(
+            "cursor",
+            Some("claude-sonnet-4"),
+            Some(5000),
+            Some(3000),
+        )];
 
         let a = run_accumulate(&anchor, &links);
 
@@ -946,11 +1008,19 @@ mod tests {
     #[test]
     fn test_accumulate_human_only_commit() {
         let anchor = make_anchor(
-            "bbb222", 50, 10, 0, 0, AuthorType::Human,
+            "bbb222",
+            50,
+            10,
+            0,
+            0,
+            AuthorType::Human,
             vec![FileChange {
-                path: "README.md".into(), added: 50, deleted: 10,
+                path: "README.md".into(),
+                added: 50,
+                deleted: 10,
                 attribution: Some(FileAttribution::Human),
-                agent: None, line_attributions: vec![],
+                agent: None,
+                line_attributions: vec![],
             }],
         );
         let links = vec![];
@@ -973,16 +1043,27 @@ mod tests {
     #[test]
     fn test_accumulate_mixed_file() {
         let anchor = make_anchor(
-            "ccc333", 100, 0, 50, 0, AuthorType::Assisted,
+            "ccc333",
+            100,
+            0,
+            50,
+            0,
+            AuthorType::Assisted,
             vec![FileChange {
-                path: "lib.rs".into(), added: 100, deleted: 0,
+                path: "lib.rs".into(),
+                added: 100,
+                deleted: 0,
                 attribution: Some(FileAttribution::Mixed),
-                agent: Some("claude".into()), line_attributions: vec![],
+                agent: Some("claude".into()),
+                line_attributions: vec![],
             }],
         );
-        let links = vec![
-            make_session_link("claude", Some("claude-sonnet-4"), Some(1000), Some(500)),
-        ];
+        let links = vec![make_session_link(
+            "claude",
+            Some("claude-sonnet-4"),
+            Some(1000),
+            Some(500),
+        )];
 
         let a = run_accumulate(&anchor, &links);
 
@@ -994,10 +1075,7 @@ mod tests {
 
     #[test]
     fn test_accumulate_multiple_sessions() {
-        let anchor = make_anchor(
-            "ddd444", 200, 0, 200, 0, AuthorType::Agent,
-            vec![],
-        );
+        let anchor = make_anchor("ddd444", 200, 0, 200, 0, AuthorType::Agent, vec![]);
         let links = vec![
             make_session_link("cursor", Some("claude-sonnet-4"), Some(10000), Some(5000)),
             make_session_link("claude", Some("claude-opus-4"), Some(20000), Some(15000)),
@@ -1017,9 +1095,7 @@ mod tests {
     #[test]
     fn test_accumulate_session_without_tokens() {
         let anchor = make_anchor("eee555", 10, 0, 10, 0, AuthorType::Agent, vec![]);
-        let links = vec![
-            make_session_link("cursor", None, None, None),
-        ];
+        let links = vec![make_session_link("cursor", None, None, None)];
 
         let a = run_accumulate(&anchor, &links);
 
@@ -1032,30 +1108,52 @@ mod tests {
     #[test]
     fn test_accumulate_same_file_across_two_anchors() {
         let anchor1 = make_anchor(
-            "fff666", 50, 0, 50, 0, AuthorType::Assisted,
+            "fff666",
+            50,
+            0,
+            50,
+            0,
+            AuthorType::Assisted,
             vec![FileChange {
-                path: "shared.rs".into(), added: 50, deleted: 0,
+                path: "shared.rs".into(),
+                added: 50,
+                deleted: 0,
                 attribution: Some(FileAttribution::Ai),
-                agent: Some("cursor".into()), line_attributions: vec![],
+                agent: Some("cursor".into()),
+                line_attributions: vec![],
             }],
         );
         let anchor2 = make_anchor(
-            "ggg777", 30, 10, 0, 0, AuthorType::Human,
+            "ggg777",
+            30,
+            10,
+            0,
+            0,
+            AuthorType::Human,
             vec![FileChange {
-                path: "shared.rs".into(), added: 30, deleted: 10,
+                path: "shared.rs".into(),
+                added: 30,
+                deleted: 10,
                 attribution: Some(FileAttribution::Human),
-                agent: None, line_attributions: vec![],
+                agent: None,
+                line_attributions: vec![],
             }],
         );
 
         let mut a = TestAgg::default();
         let mut st = AggState {
-            total_added: &mut a.ta, total_deleted: &mut a.td,
-            ai_added: &mut a.aa, ai_deleted: &mut a.ad,
-            human_added: &mut a.ha, human_deleted: &mut a.hd,
-            total_input_tokens: &mut a.ti, total_output_tokens: &mut a.to,
-            tools: &mut a.tools, models: &mut a.models,
-            session_count: &mut a.sc, author_type_counts: &mut a.atc,
+            total_added: &mut a.ta,
+            total_deleted: &mut a.td,
+            ai_added: &mut a.aa,
+            ai_deleted: &mut a.ad,
+            human_added: &mut a.ha,
+            human_deleted: &mut a.hd,
+            total_input_tokens: &mut a.ti,
+            total_output_tokens: &mut a.to,
+            tools: &mut a.tools,
+            models: &mut a.models,
+            session_count: &mut a.sc,
+            author_type_counts: &mut a.atc,
             file_map: &mut a.fm,
         };
         accumulate_anchor(&anchor1, &[], &mut st);
@@ -1084,12 +1182,18 @@ mod tests {
 
         let mut agg = TestAgg::default();
         let mut st = AggState {
-            total_added: &mut agg.ta, total_deleted: &mut agg.td,
-            ai_added: &mut agg.aa, ai_deleted: &mut agg.ad,
-            human_added: &mut agg.ha, human_deleted: &mut agg.hd,
-            total_input_tokens: &mut agg.ti, total_output_tokens: &mut agg.to,
-            tools: &mut agg.tools, models: &mut agg.models,
-            session_count: &mut agg.sc, author_type_counts: &mut agg.atc,
+            total_added: &mut agg.ta,
+            total_deleted: &mut agg.td,
+            ai_added: &mut agg.aa,
+            ai_deleted: &mut agg.ad,
+            human_added: &mut agg.ha,
+            human_deleted: &mut agg.hd,
+            total_input_tokens: &mut agg.ti,
+            total_output_tokens: &mut agg.to,
+            tools: &mut agg.tools,
+            models: &mut agg.models,
+            session_count: &mut agg.sc,
+            author_type_counts: &mut agg.atc,
             file_map: &mut agg.fm,
         };
         for a in &anchors {
@@ -1109,10 +1213,13 @@ mod tests {
         // ai_added=80, ai_deleted=0, human_added=20, human_deleted=0
         // total_lines = 80+0+20+0 = 100, ai_lines = 80
         // ai_percentage = 80%
-        let anchor = make_anchor(
-            "ppp111", 100, 0, 80, 0, AuthorType::Assisted, vec![],
-        );
-        let links = vec![make_session_link("cursor", Some("sonnet"), Some(1000), Some(500))];
+        let anchor = make_anchor("ppp111", 100, 0, 80, 0, AuthorType::Assisted, vec![]);
+        let links = vec![make_session_link(
+            "cursor",
+            Some("sonnet"),
+            Some(1000),
+            Some(500),
+        )];
 
         let a = run_accumulate(&anchor, &links);
         let total_lines = a.aa + a.ad + a.ha + a.hd;
@@ -1134,9 +1241,33 @@ mod tests {
     #[test]
     fn test_files_sorted_by_total_changes_descending() {
         let mut files = [
-            FileSummary { path: "small.rs".into(), added: 5, deleted: 0, ai_added: 0, ai_deleted: 0, attribution: None, agent: None },
-            FileSummary { path: "big.rs".into(), added: 200, deleted: 50, ai_added: 0, ai_deleted: 0, attribution: None, agent: None },
-            FileSummary { path: "mid.rs".into(), added: 30, deleted: 10, ai_added: 0, ai_deleted: 0, attribution: None, agent: None },
+            FileSummary {
+                path: "small.rs".into(),
+                added: 5,
+                deleted: 0,
+                ai_added: 0,
+                ai_deleted: 0,
+                attribution: None,
+                agent: None,
+            },
+            FileSummary {
+                path: "big.rs".into(),
+                added: 200,
+                deleted: 50,
+                ai_added: 0,
+                ai_deleted: 0,
+                attribution: None,
+                agent: None,
+            },
+            FileSummary {
+                path: "mid.rs".into(),
+                added: 30,
+                deleted: 10,
+                ai_added: 0,
+                ai_deleted: 0,
+                attribution: None,
+                agent: None,
+            },
         ];
         files.sort_by(|a, b| {
             let a_total = a.added + a.deleted;
@@ -1176,15 +1307,25 @@ mod tests {
     #[test]
     fn test_markdown_contains_html_comment_tag() {
         let summary = PrSummary {
-            base: String::new(), head: String::new(),
-            total_commits: 3, commits_with_anchors: 2,
-            total_added: 100, total_deleted: 10,
-            ai_added: 80, ai_deleted: 5, human_added: 20, human_deleted: 5,
+            base: String::new(),
+            head: String::new(),
+            total_commits: 3,
+            commits_with_anchors: 2,
+            total_added: 100,
+            total_deleted: 10,
+            ai_added: 80,
+            ai_deleted: 5,
+            human_added: 20,
+            human_deleted: 5,
             ai_percentage: Some(80.95),
-            tools: vec!["Cursor".into()], models: vec!["claude-sonnet-4".into()],
-            total_input_tokens: 5000, total_output_tokens: 3000, total_tokens: 8000,
+            tools: vec!["Cursor".into()],
+            models: vec!["claude-sonnet-4".into()],
+            total_input_tokens: 5000,
+            total_output_tokens: 3000,
+            total_tokens: 8000,
             estimated_cost: Some(0.15),
-            session_count: 2, author_type_breakdown: HashMap::new(),
+            session_count: 2,
+            author_type_breakdown: HashMap::new(),
             files: vec![],
         };
         let md = capture_markdown(&summary);
@@ -1196,15 +1337,25 @@ mod tests {
     #[test]
     fn test_markdown_no_anchors_shows_empty_message() {
         let summary = PrSummary {
-            base: String::new(), head: String::new(),
-            total_commits: 5, commits_with_anchors: 0,
-            total_added: 0, total_deleted: 0,
-            ai_added: 0, ai_deleted: 0, human_added: 0, human_deleted: 0,
+            base: String::new(),
+            head: String::new(),
+            total_commits: 5,
+            commits_with_anchors: 0,
+            total_added: 0,
+            total_deleted: 0,
+            ai_added: 0,
+            ai_deleted: 0,
+            human_added: 0,
+            human_deleted: 0,
             ai_percentage: None,
-            tools: vec![], models: vec![],
-            total_input_tokens: 0, total_output_tokens: 0, total_tokens: 0,
+            tools: vec![],
+            models: vec![],
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_tokens: 0,
             estimated_cost: None,
-            session_count: 0, author_type_breakdown: HashMap::new(),
+            session_count: 0,
+            author_type_breakdown: HashMap::new(),
             files: vec![],
         };
         let md = capture_markdown(&summary);
@@ -1216,14 +1367,22 @@ mod tests {
     #[test]
     fn test_pr_summary_json_serialization() {
         let summary = PrSummary {
-            base: "origin/main".into(), head: "HEAD".into(),
-            total_commits: 3, commits_with_anchors: 2,
-            total_added: 200, total_deleted: 50,
-            ai_added: 150, ai_deleted: 30, human_added: 50, human_deleted: 20,
+            base: "origin/main".into(),
+            head: "HEAD".into(),
+            total_commits: 3,
+            commits_with_anchors: 2,
+            total_added: 200,
+            total_deleted: 50,
+            ai_added: 150,
+            ai_deleted: 30,
+            human_added: 50,
+            human_deleted: 20,
             ai_percentage: Some(72.0),
             tools: vec!["Cursor".into(), "Claude".into()],
             models: vec!["claude-sonnet-4".into()],
-            total_input_tokens: 10000, total_output_tokens: 5000, total_tokens: 15000,
+            total_input_tokens: 10000,
+            total_output_tokens: 5000,
+            total_tokens: 15000,
             estimated_cost: Some(0.18),
             session_count: 3,
             author_type_breakdown: {
@@ -1232,13 +1391,15 @@ mod tests {
                 m.insert("human".into(), 1);
                 m
             },
-            files: vec![
-                FileSummary {
-                    path: "src/main.rs".into(), added: 100, deleted: 20,
-                    ai_added: 80, ai_deleted: 15,
-                    attribution: Some("ai".into()), agent: Some("cursor".into()),
-                },
-            ],
+            files: vec![FileSummary {
+                path: "src/main.rs".into(),
+                added: 100,
+                deleted: 20,
+                ai_added: 80,
+                ai_deleted: 15,
+                attribution: Some("ai".into()),
+                agent: Some("cursor".into()),
+            }],
         };
 
         let json = serde_json::to_string(&summary).unwrap();
@@ -1259,15 +1420,25 @@ mod tests {
     #[test]
     fn test_pr_summary_json_skips_none_fields() {
         let summary = PrSummary {
-            base: String::new(), head: String::new(),
-            total_commits: 1, commits_with_anchors: 0,
-            total_added: 0, total_deleted: 0,
-            ai_added: 0, ai_deleted: 0, human_added: 0, human_deleted: 0,
+            base: String::new(),
+            head: String::new(),
+            total_commits: 1,
+            commits_with_anchors: 0,
+            total_added: 0,
+            total_deleted: 0,
+            ai_added: 0,
+            ai_deleted: 0,
+            human_added: 0,
+            human_deleted: 0,
             ai_percentage: None,
-            tools: vec![], models: vec![],
-            total_input_tokens: 0, total_output_tokens: 0, total_tokens: 0,
+            tools: vec![],
+            models: vec![],
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_tokens: 0,
             estimated_cost: None,
-            session_count: 0, author_type_breakdown: HashMap::new(),
+            session_count: 0,
+            author_type_breakdown: HashMap::new(),
             files: vec![],
         };
 
@@ -1281,9 +1452,13 @@ mod tests {
     #[test]
     fn test_file_summary_json_skips_none() {
         let f = FileSummary {
-            path: "test.rs".into(), added: 10, deleted: 0,
-            ai_added: 0, ai_deleted: 0,
-            attribution: None, agent: None,
+            path: "test.rs".into(),
+            added: 10,
+            deleted: 0,
+            ai_added: 0,
+            ai_deleted: 0,
+            attribution: None,
+            agent: None,
         };
         let json = serde_json::to_string(&f).unwrap();
         assert!(!json.contains("attribution"));
@@ -1293,9 +1468,13 @@ mod tests {
     #[test]
     fn test_file_summary_json_includes_present_fields() {
         let f = FileSummary {
-            path: "test.rs".into(), added: 10, deleted: 5,
-            ai_added: 8, ai_deleted: 3,
-            attribution: Some("ai".into()), agent: Some("cursor".into()),
+            path: "test.rs".into(),
+            added: 10,
+            deleted: 5,
+            ai_added: 8,
+            ai_deleted: 3,
+            attribution: Some("ai".into()),
+            agent: Some("cursor".into()),
         };
         let json = serde_json::to_string(&f).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
