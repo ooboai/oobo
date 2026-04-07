@@ -37,6 +37,8 @@ impl OutputMode {
 \x1b[1;4mProject:\x1b[0m  \x1b[2m(run inside a repo)\x1b[0m
   sessions     Browse AI chat sessions
   anchors, a   Enriched commit history with AI context
+  blame        Per-line AI attribution for a file
+  pr           AI contribution summary for a PR/MR
   share        Share a redacted session
   sync         Enable/disable backend sync
   ignore       Stop tracking this repo
