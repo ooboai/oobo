@@ -147,8 +147,10 @@ fn render(f: &mut Frame, view: &StatsView, _scroll: u16) {
         idx += 1;
     }
     if has_productivity {
-        render_productivity(f, view.productivity.as_ref().unwrap(), chunks[idx]);
-        idx += 1;
+        if let Some(productivity) = view.productivity.as_ref() {
+            render_productivity(f, productivity, chunks[idx]);
+            idx += 1;
+        }
     }
     if has_tools {
         render_tool_table(f, &view.per_tool, chunks[idx]);
