@@ -3,12 +3,12 @@ name: oobo
 description: Git decorator that gives every commit memory — links AI sessions, tokens, and code attribution to your commits. Use when the user asks about commit history with AI context, session history, code attribution, token usage, or generating a developer card.
 metadata:
   author: oobo
-  version: "0.1.14"
+  version: "0.1.15"
 install:
   check: command -v oobo
   url: https://github.com/ooboai/oobo/releases
 license: Apache-2.0 OR MIT
-compatibility: Requires git. Works with Cursor, Claude Code, Gemini CLI, Codex, OpenCode, Copilot, Windsurf, Aider, Zed, Trae.
+compatibility: Requires git. Works with Cursor, Claude Code, Gemini CLI, Codex, OpenCode, Copilot, Windsurf, Aider, Zed, Trae, Amp, Continue, Factory Droid, Junie, Kiro.
 ---
 
 # Oobo — Git for agents (and humans)

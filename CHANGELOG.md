@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.15] - 2026-04-08
+
+### Added
+
+- **5 new agent integrations** — Amp, Continue, Factory Droid, Junie, and Kiro are now supported with full session discovery, transcript parsing, and message indexing. Brings total supported tools from 10 to 15.
+- **Windows installer** — new `install.ps1` PowerShell script for native Windows installation alongside the existing bash script.
+- **Homebrew CI** — automated Homebrew formula testing in the CI pipeline.
+
+### Fixed
+
+- **`inspect --fix` now repairs warnings** — previously only errors triggered the fix function; warnings were silently skipped. Stale session data is also preserved across fix runs.
+- **Card terminal rendering** — corrected month label alignment, heatmap recency ordering, model bar layout proportions, and streak calculation cap.
+- **Attribution pipeline** — fixed anchor column lookup, widened session time windows for matching, deduplicated `ai_commits` entries, and added processing for orphaned anchors that previously went unlinked.
+- Resolved clippy lints (`char` comparison, `match_result_ok`) and `cargo fmt` formatting for CI.
+
 ## [0.1.14] - 2026-03-27
 
 ### Added
@@ -287,6 +302,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI/CD pipeline**: multi-platform testing (Ubuntu, macOS, Debian, Alpine) and 6-target release builds
 - **Dual license**: Apache 2.0 and MIT
 
+[0.1.15]: https://github.com/ooboai/oobo/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/ooboai/oobo/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/ooboai/oobo/compare/v0.1.12...v0.1.13
 [0.1.12]: https://github.com/ooboai/oobo/compare/v0.1.11...v0.1.12

@@ -117,6 +117,11 @@ Each anchor records which AI sessions contributed, token counts, code attributio
 | Windsurf            | ✓        | ✓           | partial     | —           |
 | Zed                 | ✓        | ✓           | ✓           | —           |
 | Trae                | ✓        | ✓           | partial     | —           |
+| Amp                 | ✓        | ✓           | —           | —           |
+| Continue            | ✓        | ✓           | —           | —           |
+| Factory Droid       | ✓        | ✓           | —           | —           |
+| Junie               | ✓        | ✓           | —           | —           |
+| Kiro                | ✓        | ✓           | —           | —           |
 
 All tools are read-only — oobo never writes to AI tool data directories.
 
