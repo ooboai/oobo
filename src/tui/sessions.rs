@@ -12,6 +12,7 @@ use crate::db::stats::StatsRow;
 use crate::db::Db;
 use crate::session;
 use crate::tools::cursor::Session;
+use regex::Regex;
 
 /// Cap background re-indexing to avoid a burst of work after upgrades or gaps.
 const TUI_BG_INDEX_CAP: usize = 100;
@@ -997,13 +998,11 @@ fn build_show_lines(session: &Session, stats: Option<&StatsRow>) -> Vec<Line<'st
 }
 
 fn shorten_model(model: &str) -> String {
-    let m = model
+    let re = Regex::new(r"-\d{8}$").unwrap();
+    let m = re.replace(model, "")
         .replace("claude-", "")
         .replace("gpt-", "gpt")
-        .replace("-preview", "")
-        .replace("-20251101", "")
-        .replace("-20250101", "")
-        .replace("-20260101", "");
+        .replace("-preview", "");
     if m.len() > 14 {
         format!("{}…", &m[..13])
     } else {
