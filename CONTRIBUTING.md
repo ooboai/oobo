@@ -86,8 +86,13 @@ oobo is a Rust binary that acts as a transparent git decorator. Key modules:
 | `src/tools/codex.rs` | OpenAI Codex CLI session support |
 | `src/tools/opencode.rs` | OpenCode session support |
 | `src/tools/gemini.rs` | Gemini CLI session support |
+| `src/tools/kiro.rs` | Kiro IDE session support |
+| `src/tools/continue_dev.rs` | Continue session support |
+| `src/tools/droid.rs` | Factory Droid session support |
+| `src/tools/junie.rs` | Junie session support |
+| `src/tools/amp.rs` | Amp session support |
 | `src/core/` | Domain types: anchor, message, session, tool trait |
-| `src/commands/` | CLI subcommands (17 commands) |
+| `src/commands/` | CLI subcommands (23 commands) |
 | `src/analytics/` | Token computation, attribution, git activity |
 | `src/db/` | SQLite persistence and migrations |
 | `src/remote/` | Anchor sync via `/anchors` API (ingest, verify, health) |
@@ -112,11 +117,12 @@ cargo test -- --nocapture
 
 Pull requests run through GitHub Actions:
 
-- `cargo check` on Ubuntu and macOS
-- `cargo test` on Ubuntu and macOS
-- `cargo clippy --all-targets`
+- `cargo check` on Ubuntu
+- `cargo test` on Ubuntu, macOS, and Windows
+- `cargo clippy --all-targets -- -D warnings`
 - `cargo fmt --check`
-- Docker builds on Ubuntu, Debian, and Alpine
+- Security audit via `cargo-audit`
+- Docker builds on Ubuntu, Debian, and Alpine containers
 
 All checks must pass before merge.
 
