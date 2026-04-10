@@ -6,7 +6,7 @@
 
 ### Git for agents (and humans).
 
-A transparent git decorator that enriches every commit with AI context:<br/>sessions, tokens, and code attribution — across 10 AI coding tools.<br/>No workflow changes. No plugins. No cloud required.
+A transparent git decorator that enriches every commit with AI context:<br/>sessions, tokens, and code attribution — across 15 AI coding tools.<br/>No workflow changes. No plugins. No cloud required.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0%20%2F%20MIT-blue)](LICENSE-APACHE)
 [![CI](https://img.shields.io/github/actions/workflow/status/ooboai/oobo/ci.yml?label=CI)](https://github.com/ooboai/oobo/actions/workflows/ci.yml)
@@ -36,7 +36,7 @@ Or grab a binary from [Releases](https://github.com/ooboai/oobo/releases).
 
 - **Drop-In Git Replacement** — Use `oobo` exactly like `git`. Every command passes through transparently. Read operations have zero overhead.
 - **AI Session Tracking** — Automatically discovers and links AI chat sessions to your commits — which agent wrote what, how many tokens it took, and which conversation produced each change.
-- **10 Tools Supported** — Cursor, Claude Code, Gemini CLI, OpenCode, Codex, Aider, GitHub Copilot, Windsurf, Zed, and Trae.
+- **15 Tools Supported** — Cursor, Claude Code, Gemini CLI, OpenCode, Codex, Aider, GitHub Copilot, Windsurf, Zed, Trae, Amp, Continue, Factory Droid, Junie, and Kiro.
 - **Code Attribution** — Know exactly which lines were AI-generated vs human-written, per commit.
 - **Agent-Native** — Every command supports `--agent` (compact, pipe-delimited) and `--json` (structured) output modes. Built for agents that commit code constantly across tools.
 - **Local-First, Private by Default** — Everything stays in `~/.oobo/`. Nothing leaves your machine unless you opt in. No telemetry. Secrets are redacted before sharing.
@@ -118,10 +118,10 @@ Each anchor records which AI sessions contributed, token counts, code attributio
 | Zed                 | ✓        | ✓           | ✓           | —           |
 | Trae                | ✓        | ✓           | partial     | —           |
 | Amp                 | ✓        | ✓           | —           | —           |
-| Continue            | ✓        | ✓           | —           | —           |
-| Factory Droid       | ✓        | ✓           | —           | —           |
+| Continue            | ✓        | ✓           | —           | ✓           |
+| Factory Droid       | ✓        | ✓           | —           | ✓           |
 | Junie               | ✓        | ✓           | —           | —           |
-| Kiro                | ✓        | ✓           | —           | —           |
+| Kiro                | ✓        | ✓           | —           | ✓           |
 
 All tools are read-only — oobo never writes to AI tool data directories.
 
@@ -160,7 +160,7 @@ Oobo installs a skill file at `~/.oobo/skills/oobo/SKILL.md` during `oobo setup`
 
 ### Agent lifecycle hooks
 
-For tools that support it (Cursor, Claude Code, Gemini CLI, OpenCode), oobo installs hooks that track agent activity in real time: session start/end, tool calls, subagent spawns, thinking events, and context compaction. This enables precise session linking and rich telemetry attached to every commit anchor.
+For tools that support it (Cursor, Claude Code, Gemini CLI, OpenCode, Kiro, Continue, Factory Droid), oobo installs hooks that track agent activity in real time: session start/end, tool calls, subagent spawns, thinking events, and context compaction. This enables precise session linking and rich telemetry attached to every commit anchor.
 
 ---
 
@@ -282,7 +282,7 @@ enabled = true
 enabled = false
 ```
 
-Full list: `cursor`, `claude`, `gemini`, `windsurf`, `aider`, `copilot`, `zed`, `trae`, `codex`, `opencode`.
+Full list: `cursor`, `claude`, `gemini`, `windsurf`, `aider`, `copilot`, `zed`, `trae`, `codex`, `opencode`, `kiro`, `continue`, `droid`, `junie`, `amp`.
 
 ---
 
