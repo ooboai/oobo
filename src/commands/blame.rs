@@ -187,7 +187,7 @@ fn build_line_map(
 
 /// Normalize a user-supplied file path to the repo-relative form that anchors use.
 /// Handles `./src/main.rs`, absolute paths, and trailing slashes.
-fn normalize_file_path(file: &str, project_root: &str) -> String {
+pub(crate) fn normalize_file_path(file: &str, project_root: &str) -> String {
     let path = std::path::Path::new(file);
 
     let relative = if path.is_absolute() {
@@ -206,4 +206,199 @@ fn normalize_file_path(file: &str, project_root: &str) -> String {
         .to_string_lossy()
         .trim_start_matches("./")
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::anchor::{FileChange, LineAttribution, LineRange};
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    fn make_file_change(
+        attribution: Option<FileAttribution>,
+        line_attrs: Vec<LineAttribution>,
+    ) -> FileChange {
+        FileChange {
+            path: "src/lib.rs".to_string(),
+            added: 10,
+            deleted: 2,
+            attribution,
+            agent: None,
+            line_attributions: line_attrs,
+        }
+    }
+
+    // ── normalize_file_path ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_normalize_strips_dot_slash() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let result = normalize_file_path("./src/main.rs", &root);
+        assert_eq!(result, "src/main.rs");
+    }
+
+    #[test]
+    fn test_normalize_already_clean() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let result = normalize_file_path("src/main.rs", &root);
+        assert_eq!(result, "src/main.rs");
+    }
+
+    #[test]
+    fn test_normalize_absolute_within_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_string_lossy().to_string();
+        let abs_file = tmp.path().join("src/main.rs");
+        let result = normalize_file_path(&abs_file.to_string_lossy(), &root);
+        assert_eq!(result, "src/main.rs");
+    }
+
+    #[test]
+    fn test_normalize_absolute_outside_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_string_lossy().to_string();
+        // A path that does not live under root — returned as-is.
+        let outside = "/this/is/outside/path.rs";
+        let result = normalize_file_path(outside, &root);
+        assert_eq!(result, outside);
+    }
+
+    // ── build_line_map ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_build_line_map_empty() {
+        let fc = make_file_change(None, vec![]);
+        let map = build_line_map(&fc);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn test_build_line_map_ai_range() {
+        let fc = make_file_change(
+            Some(FileAttribution::Ai),
+            vec![LineAttribution {
+                author: FileAttribution::Ai,
+                ranges: vec![LineRange::new(1, 3)],
+                agent: None,
+            }],
+        );
+        let map = build_line_map(&fc);
+        assert_eq!(map.len(), 3);
+        for line in 1u32..=3 {
+            assert_eq!(map[&line].0, FileAttribution::Ai);
+        }
+    }
+
+    #[test]
+    fn test_build_line_map_human_range() {
+        let fc = make_file_change(
+            Some(FileAttribution::Human),
+            vec![LineAttribution {
+                author: FileAttribution::Human,
+                ranges: vec![LineRange::new(2, 4)],
+                agent: None,
+            }],
+        );
+        let map = build_line_map(&fc);
+        assert_eq!(map.len(), 3);
+        for line in 2u32..=4 {
+            assert_eq!(map[&line].0, FileAttribution::Human);
+        }
+    }
+
+    #[test]
+    fn test_build_line_map_agent_field_preserved() {
+        let fc = make_file_change(
+            Some(FileAttribution::Ai),
+            vec![LineAttribution {
+                author: FileAttribution::Ai,
+                ranges: vec![LineRange::new(1, 1)],
+                agent: Some("cursor".to_string()),
+            }],
+        );
+        let map = build_line_map(&fc);
+        assert_eq!(map[&1].0, FileAttribution::Ai);
+        assert_eq!(map[&1].1, Some("cursor".to_string()));
+    }
+
+    #[test]
+    fn test_build_line_map_non_contiguous_ranges() {
+        let fc = make_file_change(
+            Some(FileAttribution::Ai),
+            vec![LineAttribution {
+                author: FileAttribution::Ai,
+                ranges: vec![LineRange::new(1, 2), LineRange::new(5, 6)],
+                agent: None,
+            }],
+        );
+        let map = build_line_map(&fc);
+        assert!(map.contains_key(&1));
+        assert!(map.contains_key(&2));
+        assert!(!map.contains_key(&3));
+        assert!(!map.contains_key(&4));
+        assert!(map.contains_key(&5));
+        assert!(map.contains_key(&6));
+    }
+
+    // ── print_agent_output smoke tests ────────────────────────────────────────
+
+    #[test]
+    fn test_print_agent_output_no_line_data() {
+        let fc = make_file_change(Some(FileAttribution::Ai), vec![]);
+        // Should not panic; prints "file-level only" message.
+        print_agent_output("src/lib.rs", "abc1234", &fc, &[]);
+    }
+
+    #[test]
+    fn test_print_agent_output_with_lines() {
+        let fc = make_file_change(
+            Some(FileAttribution::Ai),
+            vec![LineAttribution {
+                author: FileAttribution::Ai,
+                ranges: vec![LineRange::new(1, 2)],
+                agent: Some("cursor".to_string()),
+            }],
+        );
+        let lines = vec!["fn main() {", "    println!(\"hello\");", "}"];
+        // Should not panic; prints per-line blame rows.
+        print_agent_output("src/lib.rs", "abc1234", &fc, &lines);
+    }
+
+    // ── print_tui_output smoke tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_print_tui_output_no_line_data() {
+        let fc = make_file_change(Some(FileAttribution::Human), vec![]);
+        // Should not panic; prints file-level summary.
+        print_tui_output("src/lib.rs", "abc1234", &fc, &[]);
+    }
+
+    #[test]
+    fn test_print_tui_output_with_lines() {
+        let fc = make_file_change(
+            Some(FileAttribution::Mixed),
+            vec![
+                LineAttribution {
+                    author: FileAttribution::Ai,
+                    ranges: vec![LineRange::new(1, 1)],
+                    agent: Some("cursor".to_string()),
+                },
+                LineAttribution {
+                    author: FileAttribution::Human,
+                    ranges: vec![LineRange::new(2, 3)],
+                    agent: None,
+                },
+            ],
+        );
+        let lines = vec!["fn main() {", "    println!(\"hello\");", "}"];
+        // Should not panic; renders coloured per-line rows.
+        print_tui_output("src/lib.rs", "abc1234", &fc, &lines);
+    }
 }
