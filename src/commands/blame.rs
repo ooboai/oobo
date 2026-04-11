@@ -187,7 +187,7 @@ fn build_line_map(
 
 /// Normalize a user-supplied file path to the repo-relative form that anchors use.
 /// Handles `./src/main.rs`, absolute paths, and trailing slashes.
-pub(crate) fn normalize_file_path(file: &str, project_root: &str) -> String {
+fn normalize_file_path(file: &str, project_root: &str) -> String {
     let path = std::path::Path::new(file);
 
     let relative = if path.is_absolute() {
