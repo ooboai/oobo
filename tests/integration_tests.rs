@@ -1408,3 +1408,145 @@ fn test_oobo_blame_json_output() {
     // a proper before-submit-prompt snapshot. The test at minimum
     // verifies the command doesn't crash.
 }
+
+/// Verify that `after-tool-use` snapshots edited files immediately, so a
+/// subsequent `git commit` (before `stop`) produces per-line attribution.
+#[test]
+fn test_after_tool_use_snapshots_enable_line_attribution() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    // Initial commit
+    fs::write(tmp.path().join("app.rs"), "fn main() {}\n").unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let c1 = Command::new(oobo_binary())
+        .args(["commit", "-m", "init"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(c1.status.success(), "initial commit failed");
+
+    // 1. session-start
+    let start = Command::new(oobo_binary())
+        .args(["hooks", "agent", "session-start"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(
+                    br#"{"session_id":"line-test","agent":"cursor","model":"claude-opus-4"}"#,
+                )
+                .unwrap();
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert!(start.status.success(), "session-start failed");
+
+    // 2. Agent edits the file
+    fs::write(
+        tmp.path().join("app.rs"),
+        "fn main() {\n    println!(\"hello\");\n}\n",
+    )
+    .unwrap();
+
+    // 3. after-tool-use fires (simulates Cursor's postToolUse for a Write)
+    let abs_file = tmp.path().join("app.rs").to_string_lossy().to_string();
+    let hook_payload = serde_json::json!({
+        "session_id": "line-test",
+        "tool_name": "Write",
+        "file_path": abs_file,
+    });
+    let atu = Command::new(oobo_binary())
+        .args(["hooks", "agent", "after-tool-use"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(hook_payload.to_string().as_bytes())
+                .unwrap();
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert!(atu.status.success(), "after-tool-use failed");
+
+    // 4. git add + commit — NO stop hook yet (mirrors real agent flow)
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let c2 = Command::new(oobo_binary())
+        .args(["commit", "-m", "add hello"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        c2.status.success(),
+        "second commit failed: {}",
+        String::from_utf8_lossy(&c2.stderr)
+    );
+
+    // 5. Verify blame --json has line_attributions
+    let blame = Command::new(oobo_binary())
+        .args(["blame", "app.rs", "--json"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&blame.stdout);
+
+    if blame.status.success() {
+        let val: serde_json::Value =
+            serde_json::from_str(&stdout).expect("blame --json should return valid JSON");
+        assert_eq!(val["path"], "app.rs");
+        let line_attrs = val["line_attributions"]
+            .as_array()
+            .expect("line_attributions should be an array");
+        assert!(
+            !line_attrs.is_empty(),
+            "line_attributions should not be empty — after-tool-use should have \
+             snapshotted the file so enrich_commit can produce per-line data. \
+             Got: {stdout}"
+        );
+    }
+}
