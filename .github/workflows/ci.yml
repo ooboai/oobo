@@ -114,11 +114,15 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        env:
+          CARGO_HOME: ${{ github.workspace }}/.cargo
 
       - name: Build and test
         run: |
-          . "$HOME/.cargo/env"
+          . "${{ github.workspace }}/.cargo/env"
           cargo test --all-targets -- --nocapture 2>&1 | tee test-output.txt
+        env:
+          CARGO_HOME: ${{ github.workspace }}/.cargo
       - name: Upload test output
         if: failure()
         uses: actions/upload-artifact@v4
