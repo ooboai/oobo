@@ -145,7 +145,7 @@ pub fn handle_event(
                             .and_then(|v| v.as_str())
                             .or_else(|| {
                                 tool_input
-                                    .and_then(|ti| ti.get("file_path"))
+                                    .and_then(|ti| ti.get("file_path").or_else(|| ti.get("path")))
                                     .and_then(|v| v.as_str())
                             });
 
