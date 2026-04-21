@@ -337,16 +337,35 @@ fn enrich_commit(
     let ai_file_set: std::collections::HashSet<&str> =
         ai_files_touched.iter().map(|(p, _)| p.as_str()).collect();
 
-    let (snapshot_lookup, pre_agent_lookup) =
+    let (mut snapshot_lookup, pre_agent_lookup) =
         build_snapshot_lookups(&active_sessions, &ai_files_touched);
+
+    let is_agent_commit = author_type == AuthorType::Agent;
+
+    // For agent-authored commits (non-interactive), the committed blob IS
+    // the agent's final output. Replace any stale intermediate snapshots
+    // with the committed blob so the 3-way diff doesn't misattribute the
+    // agent's own revisions as human edits.
+    if is_agent_commit {
+        for (path, _, _) in &per_file {
+            if let Some(entry) = snapshot_lookup.get_mut(path.as_str()) {
+                if let Ok(committed) =
+                    proxy::run_git_capture(cfg, &["rev-parse", &format!("HEAD:{path}")])
+                {
+                    let committed = committed.trim().to_string();
+                    if !committed.is_empty() && committed != entry.0 {
+                        entry.0 = committed;
+                    }
+                }
+            }
+        }
+    }
 
     let mut file_changes = Vec::new();
     let mut ai_added: u32 = 0;
     let mut ai_deleted: u32 = 0;
     let mut human_added: u32 = 0;
     let mut human_deleted: u32 = 0;
-
-    let is_agent_commit = author_type == AuthorType::Agent;
 
     for (path, added, deleted) in &per_file {
         let pre_blob = pre_agent_lookup.get(path.as_str()).cloned();
