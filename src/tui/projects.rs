@@ -128,29 +128,25 @@ fn run_loop(
                         KeyCode::Char('q') | KeyCode::Esc => {
                             *view = View::List;
                         }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if session_count > 0 {
-                                let i = session_state.selected().map_or(0, |i| {
-                                    if i + 1 >= session_count {
-                                        0
-                                    } else {
-                                        i + 1
-                                    }
-                                });
-                                session_state.select(Some(i));
-                            }
+                        KeyCode::Down | KeyCode::Char('j') if session_count > 0 => {
+                            let i = session_state.selected().map_or(0, |i| {
+                                if i + 1 >= session_count {
+                                    0
+                                } else {
+                                    i + 1
+                                }
+                            });
+                            session_state.select(Some(i));
                         }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if session_count > 0 {
-                                let i = session_state.selected().map_or(0, |i| {
-                                    if i == 0 {
-                                        session_count - 1
-                                    } else {
-                                        i - 1
-                                    }
-                                });
-                                session_state.select(Some(i));
-                            }
+                        KeyCode::Up | KeyCode::Char('k') if session_count > 0 => {
+                            let i = session_state.selected().map_or(0, |i| {
+                                if i == 0 {
+                                    session_count - 1
+                                } else {
+                                    i - 1
+                                }
+                            });
+                            session_state.select(Some(i));
                         }
                         KeyCode::Enter => {
                             if let Some(si) = session_state.selected() {

@@ -1117,7 +1117,7 @@ fn filter_by_recency(
     }
 
     let mut sorted: Vec<&crate::hooks::state::ActiveSession> = sessions.iter().collect();
-    sorted.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    sorted.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
 
     let most_recent = sorted[0].updated_at;
 

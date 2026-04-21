@@ -344,7 +344,7 @@ fn gather_tool_sources(db: &Db) -> Result<Vec<ToolSource>, String> {
         });
     }
 
-    sources.sort_by(|a, b| b.session_count.cmp(&a.session_count));
+    sources.sort_by_key(|b| std::cmp::Reverse(b.session_count));
     Ok(sources)
 }
 

@@ -244,29 +244,25 @@ fn run_loop(
                                 return Ok(());
                             }
                         }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if len > 0 {
-                                let i = table_state.selected().map_or(0, |i| {
-                                    if i + 1 >= len {
-                                        0
-                                    } else {
-                                        i + 1
-                                    }
-                                });
-                                table_state.select(Some(i));
-                            }
+                        KeyCode::Down | KeyCode::Char('j') if len > 0 => {
+                            let i = table_state.selected().map_or(0, |i| {
+                                if i + 1 >= len {
+                                    0
+                                } else {
+                                    i + 1
+                                }
+                            });
+                            table_state.select(Some(i));
                         }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if len > 0 {
-                                let i = table_state.selected().map_or(0, |i| {
-                                    if i == 0 {
-                                        len.saturating_sub(1)
-                                    } else {
-                                        i - 1
-                                    }
-                                });
-                                table_state.select(Some(i));
-                            }
+                        KeyCode::Up | KeyCode::Char('k') if len > 0 => {
+                            let i = table_state.selected().map_or(0, |i| {
+                                if i == 0 {
+                                    len.saturating_sub(1)
+                                } else {
+                                    i - 1
+                                }
+                            });
+                            table_state.select(Some(i));
                         }
                         KeyCode::Enter => {
                             if let Some(sel) = table_state.selected() {
