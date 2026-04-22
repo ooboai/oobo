@@ -236,10 +236,8 @@ fn handle_key(wiz: &mut Wizard, code: KeyCode) -> Action {
             KeyCode::Up | KeyCode::Char('k') => {
                 wiz.focus = wiz.focus.saturating_sub(1);
             }
-            KeyCode::Char(' ') => {
-                if wiz.focus < wiz.tools.len() {
-                    wiz.tools[wiz.focus].enabled = !wiz.tools[wiz.focus].enabled;
-                }
+            KeyCode::Char(' ') if wiz.focus < wiz.tools.len() => {
+                wiz.tools[wiz.focus].enabled = !wiz.tools[wiz.focus].enabled;
             }
             KeyCode::Enter | KeyCode::Tab => {
                 wiz.step = Step::Sync;
@@ -252,11 +250,9 @@ fn handle_key(wiz: &mut Wizard, code: KeyCode) -> Action {
             _ => {}
         },
         Step::Sync => match code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                if wiz.focus < SYNC_OPTIONS.len() - 1 {
-                    wiz.focus += 1;
-                    wiz.sync_choice = wiz.focus;
-                }
+            KeyCode::Down | KeyCode::Char('j') if wiz.focus < SYNC_OPTIONS.len() - 1 => {
+                wiz.focus += 1;
+                wiz.sync_choice = wiz.focus;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 wiz.focus = wiz.focus.saturating_sub(1);

@@ -145,7 +145,7 @@ pub fn handle_event(
                             .and_then(|v| v.as_str())
                             .or_else(|| {
                                 tool_input
-                                    .and_then(|ti| ti.get("file_path"))
+                                    .and_then(|ti| ti.get("file_path").or_else(|| ti.get("path")))
                                     .and_then(|v| v.as_str())
                             });
 
@@ -153,6 +153,7 @@ pub fn handle_event(
                             let rel = make_relative(abs_path, &project_root);
                             if !rel.starts_with('/') && !rel.starts_with("..") {
                                 let _ = state::record_edited_file(&project_root, sid, &rel);
+                                let _ = state::snapshot_session_files(&project_root, sid, &[rel]);
                             }
                         }
                     }

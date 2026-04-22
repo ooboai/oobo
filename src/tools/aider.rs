@@ -163,7 +163,7 @@ fn parse_aider_timestamp(s: &str) -> Option<i64> {
     let s: u32 = time_parts[2].parse().ok()?;
 
     let days = days_from_epoch(y, mo, d)?;
-    let secs = days as i64 * 86400 + h as i64 * 3600 + mi as i64 * 60 + s as i64;
+    let secs = days * 86400 + i64::from(h) * 3600 + i64::from(mi) * 60 + i64::from(s);
     Some(secs * 1000)
 }
 

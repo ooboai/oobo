@@ -80,7 +80,7 @@ fn list_projects(db: &Db) -> Result<(), String> {
         });
     }
 
-    displays.sort_by(|a, b| b.tokens.cmp(&a.tokens));
+    displays.sort_by_key(|b| std::cmp::Reverse(b.tokens));
 
     if std::io::stdin().is_terminal() {
         crate::tui::projects::run(displays)
