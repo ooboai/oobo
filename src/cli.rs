@@ -312,6 +312,16 @@ pub fn resolve_output_mode(json: bool, agent: bool, interactive: bool) -> Output
     OutputMode::Tui
 }
 
+/// Commands that read data — safe to kick a background scan for.
+fn is_view_command(cmd: &Option<Command>) -> bool {
+    matches!(
+        cmd,
+        None | Some(Command::Anchors { .. })
+            | Some(Command::Blame { .. })
+            | Some(Command::Search { .. })
+    )
+}
+
 fn is_oobo_subcommand(args: &[String]) -> bool {
     args.get(1)
         .map(|a| OOBO_SUBCOMMANDS.contains(&a.as_str()))
@@ -362,6 +372,11 @@ pub fn route(cfg: Config) -> Result<i32, String> {
     };
 
     let mode = resolve_output_mode(cli.json, cli.agent, cli.interactive);
+
+    // Fire-and-forget auto-index for view-style commands. Never blocks.
+    if is_view_command(&cli.command) {
+        crate::commands::auto::maybe_kick(&cfg);
+    }
 
     let result = match cli.command {
         Some(Command::Search {
