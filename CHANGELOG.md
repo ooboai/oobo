@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-rc.1] - 2026-04-22
+
+Major sharpening release. Significantly narrower command surface, unified
+output modes, and a flagship `anchors` experience.
+
+### Added
+
+- **`oobo anchors show <sha>`** drill-down (pretty / agent / json). Accepts unambiguous SHA prefixes.
+- **`oobo anchors` filters**: `--since <24h|7d|ISO>`, `--tool`, `--project` (outside-repo only).
+- **`oobo blame`** is now a strict superset of `git blame`. Every `git blame` flag is forwarded; an AI-attribution column is overlaid for pretty/agent mode. `--no-ai`, `--porcelain`, `--line-porcelain`, `--incremental` bypass the overlay.
+- **`oobo search`** promoted to a top-level verb. Local DB search with `--since`, `--project`, `--tool`, `--limit`.
+- **`oobo settings`** declarative KV config with positional grammar: `oobo settings [scope] [verb] <key> [value]`. Scope defaults to `default`, verb defaults to `get`. Keys: `key`, `remote`, `transparency`, `tools.experimental`, `setup.scan_roots`.
+- **`oobo enable` / `oobo disable`** per-project tracking toggles (idempotent).
+- **`oobo alias install` / `oobo alias uninstall`** manage the `alias git=oobo` shell alias.
+- **`oobo setup`** rebuilt as a composable entry point: `--non-interactive`, `--reindex`, `--uninstall-alias`, `--repair`.
+- **Auto-indexing**: view commands (`anchors`, `blame`, `search`, bare `oobo`) kick a fire-and-forget rescan when `last_scanned_at` is older than 5 minutes. Opt out with `OOBO_NO_AUTO_INDEX=1`.
+- **Legacy command hint system**: removed 0.1.x verbs now print a hint and, in a TTY, offer to run the replacement. Scheduled for removal in 1.1.
+- **Agent auto-detection**: `--agent` auto-activates when stdout is not a TTY or any of `CURSOR_AGENT`, `CLAUDECODE`, `AIDER`, `CONTINUE_SESSION`, `CONTINUE_IDE`, `AICOMMITS` is set.
+- **Four-quadrant bare `oobo`** behavior (in-repo/outside × pretty/structured).
+- **Stable project-identity helpers** (`src/project.rs`): canonicalizes git remote URLs so SSH and HTTPS forms collapse to the same key.
+- **`tests/cli-spec/`** — behavioral contract for every 1.0 command.
+
+### Changed
+
+- **Output modes** are three mutually exclusive modes: pretty (TTY), agent (`--agent`, token-efficient plain text for LLMs), json (`--json`).
+- **`oobo anchors --json`** now emits a flat JSON array (no envelope).
+- **Default anchors limit** raised from 10 → 50.
+- Help output regrouped into Anchor / Recall / Settings / Lifecycle / Git passthrough sections.
+
+### Removed
+
+- `scan`, `sessions`, `projects`, `ignore`, `unignore`, `sync`, `auth`, `transparency`, `card`, `dash`, `sources`, `inspect`, `stats`, `share`, `export`, `version`, `doctor`, `agent`, `index`. Each has a legacy hint mapping to its replacement.
+- Vendor billing pipeline (internal API routes + usage tracking).
+
+### Migration notes (0.1.x → 1.0.0)
+
+- `oobo scan` → `oobo setup --reindex` (or just wait; view commands auto-index).
+- `oobo ignore` / `oobo unignore` → `oobo disable` / `oobo enable`.
+- `oobo sync` / `oobo auth` → `oobo settings set key <...>`.
+- `oobo share`, `oobo export` → `oobo anchors show <sha> --json`.
+- `oobo sessions` → inside `oobo anchors show <sha>` or `oobo search`.
+
 ## [0.1.15] - 2026-04-08
 
 ### Added
