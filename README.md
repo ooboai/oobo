@@ -38,7 +38,7 @@ Or grab a binary from [Releases](https://github.com/ooboai/oobo/releases).
 - **AI Session Tracking** — Automatically discovers and links AI chat sessions to your commits — which agent wrote what, how many tokens it took, and which conversation produced each change.
 - **15 Tools Supported** — Cursor, Claude Code, Gemini CLI, OpenCode, Codex, Aider, GitHub Copilot, Windsurf, Zed, Trae, Amp, Continue, Factory Droid, Junie, and Kiro.
 - **Code Attribution** — Know exactly which lines were AI-generated vs human-written, per commit.
-- **Agent-Native** — Every command supports `--agent` (compact, pipe-delimited) and `--json` (structured) output modes. Built for agents that commit code constantly across tools.
+- **Agent-Native** — Three output modes (pretty / `--agent` token-efficient plain text / `--json` structured). `--agent` auto-activates when stdout isn't a TTY or inside a coding agent.
 - **Local-First, Private by Default** — Everything stays in `~/.oobo/`. Nothing leaves your machine unless you opt in. No telemetry. Secrets are redacted before sharing.
 - **Anchor System** — Extends git commits with structured AI metadata that travels with the repo via a git orphan branch. No external dependencies.
 
@@ -55,9 +55,11 @@ oobo commit -m "fix auth middleware"
 oobo push origin main
 
 # 3. See what happened
-oobo anchors       # enriched commit history with AI context
-oobo sessions      # browse your AI chat sessions
-oobo stats         # token usage, attribution breakdown
+oobo                      # in-repo: scrollable feed of your anchors
+oobo anchors              # enriched commit history with AI context
+oobo anchors show <sha>   # drill into one anchor (sessions, tokens, attribution)
+oobo blame src/main.rs    # git blame + per-line AI attribution
+oobo search "auth bug"    # search sessions + anchors across projects
 ```
 
 **Optionally**, alias `git` so you don't have to think about it:
@@ -69,7 +71,7 @@ oobo alias install      # adds alias git=oobo to your shell rc
 **Optionally**, connect to [oobo.ai](https://oobo.ai) for free cloud sync:
 
 ```bash
-oobo auth login --key <your_key>
+oobo settings set key <your_key>
 ```
 
 ---
@@ -142,16 +144,17 @@ The `--agent` flag suppresses colors and interactive prompts and returns a singl
 
 ### Output modes
 
-Every command supports two structured output modes:
+Every command has three mutually exclusive output modes:
 
-- **`--agent`** — compact, pipe-delimited text. Lists have a schema header (`# field | field | ...`) then one record per line. Designed for minimal token cost.
-- **`--json`** — full structured JSON for scripts and programmatic use.
+- **Pretty (default)** — rich TTY output with color, alignment, and interactive TUIs where available.
+- **`--agent`** — token-efficient plain text, similar in spirit to `git log --oneline`. Auto-activates when stdout is not a TTY or one of `CURSOR_AGENT`, `CLAUDECODE`, `AIDER`, `CONTINUE_SESSION`, `CONTINUE_IDE`, `AICOMMITS` is set.
+- **`--json`** — full-fidelity structured JSON for scripts and programmatic use (`jq`-parseable).
 
 ```bash
-oobo sessions --agent          # compact session list
-oobo sessions --json           # full JSON with all fields
-oobo anchors --agent           # compact commit log
-oobo stats --json              # full analytics as JSON
+oobo anchors --agent           # token-efficient commit feed
+oobo anchors --json            # flat JSON array of anchors
+oobo blame src/main.rs --json  # per-line AI attribution as JSON
+oobo search "auth" --agent     # compact search results
 ```
 
 ### Skill file
@@ -166,103 +169,116 @@ For tools that support it (Cursor, Claude Code, Gemini CLI, OpenCode, Kiro, Cont
 
 ## Commands
 
-### Browsing sessions
+### Bare `oobo`
 
 ```bash
-oobo sessions                    # interactive TUI — navigate with arrows
-oobo sessions --all              # sessions across all projects
-oobo sessions search "auth bug"  # search by keyword
-oobo sessions list --tool claude -n 10
-oobo sessions show abc12def      # view by ID prefix
-oobo sessions export abc12def --format md --out chat.md
+oobo                # in-repo + TTY: scrollable anchor-feed TUI
+                    # in-repo + --agent/--json: same as `oobo anchors`
+                    # outside a repo: first-run hint or short status
 ```
 
-### Enriched commit history
+### Anchors — enriched commit history
 
 ```bash
-oobo anchors                     # commit history with AI context
-oobo anchors -n 20               # show last 20 commits
-oobo a --agent                   # compact output (short alias)
+oobo anchors                           # last 50 anchors (pretty)
+oobo anchors -n 20 --since 7d          # filtered
+oobo anchors --tool cursor             # per-tool
+oobo anchors --project myapp           # outside a repo, aggregate one project
+oobo anchors show <sha>                # drill-down: sessions, tokens, attribution
+oobo anchors show <sha> --json         # structured JSON for scripts
 ```
 
-### Code attribution
+### Blame — git blame + AI attribution
 
 ```bash
-oobo blame src/main.rs           # per-line AI/human attribution at HEAD
-oobo blame src/main.rs abc123    # at a specific commit
-oobo blame src/main.rs --json    # structured JSON output
+oobo blame src/main.rs                 # git blame with an extra AI column
+oobo blame src/main.rs @abc123         # at a specific commit
+oobo blame --no-ai src/main.rs         # byte-identical to `git blame`
+oobo blame src/main.rs --json          # per-line AI attribution as JSON
 ```
 
-### Analytics
+Every `git blame` flag (`-L`, `-w`, `--porcelain`, etc.) is forwarded; machine-output formats (`--porcelain`, `--line-porcelain`, `--incremental`) bypass the AI column automatically.
+
+### Search — find sessions + anchors
 
 ```bash
-oobo stats                       # tokens, attribution, productivity
-oobo stats --project myapp       # per-project
-oobo stats --tool cursor         # per-tool
-oobo stats --since 30d           # time-filtered
+oobo search "auth bug"                 # full-text search
+oobo search "auth" --since 7d --tool claude --project myapp
+oobo search "auth" --json              # structured results
 ```
 
-### Projects
+### Settings — declarative per-scope config
 
 ```bash
-oobo projects                    # interactive TUI for all tracked projects
-oobo projects show myapp         # details + sessions for a project
+oobo settings                          # list default-scope keys
+oobo settings key                      # get the API key (default scope)
+oobo settings set key sk_...           # set on default scope
+oobo settings myrepo set remote https://oobo.mycompany.com
+oobo settings unset transparency       # remove a key
 ```
 
-### Sharing & exporting
+Scopes: `default` (implicit), `system`, or any project name. Verbs: `get` (default), `set`, `unset`.
+
+### Per-project toggles
 
 ```bash
-oobo share <session_id>                # share a redacted session
-oobo share <session_id> --out chat.md  # save as markdown
-oobo sessions export <id> --format md  # export full session
+oobo enable                            # start tracking this repo
+oobo disable                           # stop (commits still pass through to git)
 ```
 
-### Sync & transparency
+### Alias
 
 ```bash
-oobo sync                        # show current sync status
-oobo sync on                     # enable backend sync
-oobo sync off                    # disable backend sync
-oobo transparency on             # sync redacted transcripts for this repo
-oobo transparency off            # keep transcripts local only
+oobo alias install                     # add `alias git=oobo` to your shell rc
+oobo alias uninstall                   # remove it
 ```
 
-### Auth
+### Setup & maintenance
 
 ```bash
-oobo auth login                  # log in to api.oobo.ai (free)
-oobo auth login --key <key>      # authenticate with an API key
-oobo auth status                 # show auth state
-oobo auth set-remote <url>       # point to a self-hosted server
+oobo setup                             # interactive wizard: install hooks, discover tools, seed config
+oobo setup --non-interactive           # for scripts + first-run agents
+oobo setup --reindex                   # forced full rescan
+oobo setup --repair                    # fix broken symlinks / hooks
+oobo update                            # check for updates and self-update
 ```
 
-### Maintenance
+Indexing is automatic: view commands kick a background rescan when `last_scanned_at` is older than 5 minutes. Opt out with `OOBO_NO_AUTO_INDEX=1`.
+
+### Git passthrough
+
+Any verb not recognized by oobo is forwarded to `git` unchanged:
 
 ```bash
-oobo scan                        # discover projects + sessions
-oobo index                       # compute token counts and analytics
-oobo inspect --fix               # diagnose and auto-repair issues
-oobo update                      # check for updates and self-update
+oobo status                            # → git status
+oobo commit -m "fix"                   # → git commit + writes an anchor
+oobo push origin main                  # → git push
 ```
 
 ---
 
 ## Configuration
 
-`oobo setup` runs an interactive wizard. Or edit `~/.oobo/config.toml` directly:
+Most config is now declarative via `oobo settings`:
+
+```bash
+oobo settings set key sk_...                        # api key (default scope)
+oobo settings set remote https://oobo.mycompany.com # self-hosted backend
+oobo settings set transparency on                   # sync redacted transcripts for this repo
+oobo settings myrepo set transparency off           # per-project override
+oobo settings system set setup.scan_roots "~/src:~/work"
+```
+
+For full fidelity or automation, `~/.oobo/config.toml` still works:
 
 ```toml
 [server]
-url = "https://api.oobo.ai"   # default — or your own server
+url = "https://api.oobo.ai"
 api_key = "sk_..."
 
 [transparency]
 mode = "off"           # off | on
-```
 
-Toggle tools individually:
-
-```toml
 [cursor]
 enabled = true
 
@@ -270,7 +286,7 @@ enabled = true
 enabled = false
 ```
 
-Full list: `cursor`, `claude`, `gemini`, `windsurf`, `aider`, `copilot`, `zed`, `trae`, `codex`, `opencode`, `kiro`, `continue`, `droid`, `junie`, `amp`.
+Full tool list: `cursor`, `claude`, `gemini`, `windsurf`, `aider`, `copilot`, `zed`, `trae`, `codex`, `opencode`, `kiro`, `continue`, `droid`, `junie`, `amp`.
 
 ---
 
@@ -279,13 +295,13 @@ Full list: `cursor`, `claude`, `gemini`, `windsurf`, `aider`, `copilot`, `zed`, 
 By default, oobo points at **`api.oobo.ai`** — our free hosted backend. Create a free account at [oobo.ai](https://oobo.ai), grab an API key, and run:
 
 ```bash
-oobo auth login --key <your_key>
+oobo settings set key <your_key>
 ```
 
 To run your own server:
 
 ```bash
-oobo auth set-remote https://oobo.mycompany.com
+oobo settings set remote https://oobo.mycompany.com
 ```
 
 Your backend implements endpoints under `/anchors`. Only **ingest** is required:
