@@ -78,6 +78,15 @@ pub struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum AnchorsAction {
+    /// Drill into one anchor by SHA (prefix OK if unambiguous).
+    Show {
+        /// Commit SHA (full or unambiguous prefix).
+        sha: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub enum Command {
     /// Show enriched commit history with anchor metadata
     #[command(
@@ -90,9 +99,21 @@ pub enum Command {
                        oobo anchors --json        Full JSON output"
     )]
     Anchors {
-        /// Number of commits to show
-        #[arg(short = 'n', long, default_value = "10")]
+        /// Subcommand (e.g. `show <sha>`). Omit to list anchors.
+        #[command(subcommand)]
+        action: Option<AnchorsAction>,
+        /// Max anchors to list (default 50)
+        #[arg(short = 'n', long, default_value_t = 50)]
         limit: usize,
+        /// Only anchors at/after this point (e.g. 24h, 7d, ISO-8601).
+        #[arg(long)]
+        since: Option<String>,
+        /// Filter by tool name (case-insensitive).
+        #[arg(long)]
+        tool: Option<String>,
+        /// Filter/scope to a specific project (valid only OUTSIDE a repo).
+        #[arg(long)]
+        project: Option<String>,
     },
 
     /// Show per-line AI/human attribution for a file
@@ -500,9 +521,29 @@ fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, Strin
             }
             Ok(0)
         }
-        Some(Command::Anchors { limit }) => {
-            crate::commands::anchors::run(&cfg, limit, mode)?;
-            Ok(0)
+        Some(Command::Anchors {
+            action,
+            limit,
+            since,
+            tool,
+            project,
+        }) => {
+            let opts = crate::commands::anchors::Options {
+                limit,
+                since,
+                tool,
+                project,
+            };
+            match action {
+                Some(AnchorsAction::Show { sha }) => {
+                    let code = crate::commands::anchors::run_show(&cfg, &sha, mode)?;
+                    Ok(code)
+                }
+                None => {
+                    let code = crate::commands::anchors::run_list(&cfg, opts, mode)?;
+                    Ok(code)
+                }
+            }
         }
         Some(Command::Blame { file, commit }) => {
             crate::commands::blame::run(&cfg, &file, commit.as_deref(), mode)?;
