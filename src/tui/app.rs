@@ -224,6 +224,26 @@ fn load_project_rows() -> Vec<ProjectPickerRow> {
 
 fn project_session_tokens(db: &Db, project_id: &str) -> i64 {
     use rusqlite::params;
+    // Prefer the v11 canonical view: sum of per-call deltas across
+    // all turns. This is the only value that's arithmetically
+    // correct with respect to per-commit and per-session rollups.
+    let v11: i64 = db
+        .conn
+        .query_row(
+            "SELECT COALESCE(billed_tokens, 0) \
+             FROM v_project_totals WHERE project_id = ?1",
+            params![project_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+    if v11 > 0 {
+        return v11;
+    }
+
+    // Fallback for projects that haven't been backfilled yet: old
+    // session_stats totals. Safe because the number they returned
+    // was already session-level (not multiplied per-commit); it's
+    // just coarser than turn-level deltas.
     db.conn
         .query_row(
             "SELECT COALESCE(SUM(
@@ -244,6 +264,21 @@ fn project_session_tokens(db: &Db, project_id: &str) -> i64 {
 fn project_last_activity(db: &Db, project_id: &str, seed: i64) -> i64 {
     use rusqlite::params;
     let mut best = seed;
+
+    // v11: latest per-turn `ended_at` via the canonical view.
+    // Stored in ms; convert to secs for comparison with the other
+    // secs-keyed timestamps below.
+    if let Ok(ms) = db.conn.query_row(
+        "SELECT COALESCE(last_turn_at, 0) \
+         FROM v_project_totals WHERE project_id = ?1",
+        params![project_id],
+        |r| r.get::<_, i64>(0),
+    ) {
+        let secs = ms / 1000;
+        if secs > best {
+            best = secs;
+        }
+    }
 
     if let Ok(ts) = db.conn.query_row(
         "SELECT COALESCE(MAX(updated_at), 0) FROM sessions WHERE project_id = ?1",
@@ -1604,6 +1639,36 @@ struct AnchorSummary {
 
 fn summarize_sessions(db: &Db, commit_hash: &str) -> AnchorSummary {
     use rusqlite::params;
+
+    // Prefer v11 canonical per-anchor totals (delta windows, no
+    // double-counting). Only when v_anchor_totals has no row for
+    // this commit do we fall back to the legacy anchor_sessions
+    // cumulative shape — a backfill gap rather than a correct path.
+    if let Ok((sessions, billed)) = db.conn.query_row(
+        "SELECT contributing_sessions, billed_tokens \
+         FROM v_anchor_totals WHERE commit_hash = ?1",
+        params![commit_hash],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+    ) {
+        if sessions > 0 {
+            let tool: Option<String> = db
+                .conn
+                .query_row(
+                    "SELECT source FROM anchor_contributions \
+                     WHERE commit_hash = ?1 AND is_subagent = 0 \
+                     ORDER BY output_tokens DESC NULLS LAST LIMIT 1",
+                    params![commit_hash],
+                    |r| r.get::<_, String>(0),
+                )
+                .ok();
+            return AnchorSummary {
+                tool,
+                tokens: if billed > 0 { Some(billed) } else { None },
+                count: sessions as usize,
+            };
+        }
+    }
+
     let mut count = 0usize;
     let mut tokens: i64 = 0;
     let mut tool: Option<String> = None;

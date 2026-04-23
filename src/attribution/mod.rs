@@ -193,6 +193,7 @@ pub fn compute_windows(
     out
 }
 
+pub mod backfill;
 pub mod runner;
 
 #[cfg(test)]

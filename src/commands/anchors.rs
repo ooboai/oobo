@@ -278,7 +278,33 @@ fn load_cross_project(db: &Db, opts: &Options, since: Option<i64>) -> Result<Vec
 }
 
 /// Primary tool + total tokens + session count for a commit.
+///
+/// Prefers the v11 canonical view (`v_anchor_totals`) which stores
+/// per-commit DELTA tokens from `anchor_contributions`. Falls back
+/// to the legacy cumulative `anchor_sessions` table only when no
+/// v11 data exists for this commit (backfill gap).
 fn load_session_summary(db: &Db, commit_hash: &str) -> (Option<String>, i64, usize) {
+    if let Ok((sessions, billed)) = db.conn.query_row(
+        "SELECT contributing_sessions, billed_tokens \
+         FROM v_anchor_totals WHERE commit_hash = ?1",
+        [commit_hash],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+    ) {
+        if sessions > 0 {
+            let tool: Option<String> = db
+                .conn
+                .query_row(
+                    "SELECT source FROM anchor_contributions \
+                     WHERE commit_hash = ?1 AND is_subagent = 0 \
+                     ORDER BY COALESCE(output_tokens,0) DESC LIMIT 1",
+                    [commit_hash],
+                    |r| r.get::<_, String>(0),
+                )
+                .ok();
+            return (tool, billed, sessions as usize);
+        }
+    }
+
     let mut stmt = match db.conn.prepare(
         "SELECT agent,
                 COALESCE(input_tokens,0)+COALESCE(output_tokens,0)+
