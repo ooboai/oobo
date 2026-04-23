@@ -1,0 +1,1323 @@
+//! Unified anchor-feed TUI — the flagship experience for bare `oobo`
+//! inside an enabled repo.
+//!
+//! Architecture: a single [`App`] owns everything (anchors, filter, time
+//! window, config) and a `Vec<View>` view-stack. The top of the stack is
+//! the active view. `Esc`/`Backspace` pops; `q` quits from the root view.
+//!
+//! Views:
+//! - [`View::Feed`]        two-pane list + detail
+//! - [`View::Transcript`]  scrollable session messages
+//! - [`View::Search`]      in-TUI search (project/global toggle)
+//! - [`View::Help`]        keybindings overlay
+//!
+//! For some actions we suspend the TUI, shell out to an external tool
+//! (git show, oobo blame), and restore on return.
+
+use std::io;
+use std::time::Duration;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+
+use crate::config::Config;
+use crate::db::Db;
+
+// ── Public entry ──────────────────────────────────────────────────────
+
+pub fn run(cfg: &Config) -> Result<i32, String> {
+    let Some(root) = crate::git::proxy::project_root(cfg) else {
+        return Err("not a git repository".to_string());
+    };
+
+    let mut app = App::load(cfg.clone(), root)?;
+    if !app.enabled {
+        println!("oobo disabled for this project. run: oobo enable");
+        return Ok(0);
+    }
+
+    let mut terminal = super::init().map_err(|e| format!("tui init: {e}"))?;
+    let result = event_loop(&mut terminal, &mut app);
+    super::restore();
+    result
+}
+
+// ── Data ──────────────────────────────────────────────────────────────
+
+#[derive(Clone)]
+pub struct AnchorRow {
+    pub sha: String,
+    pub timestamp: i64,
+    pub subject: String,
+    pub intent: Option<String>,
+    pub tool: Option<String>,
+    pub tokens: Option<i64>,
+    pub session_count: usize,
+}
+
+#[derive(Clone)]
+pub struct SessionLink {
+    pub session_id: String,
+    pub source: String,
+    pub model: Option<String>,
+    pub tokens: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimeWindow {
+    All,
+    Day,
+    Week,
+    Month,
+}
+
+impl TimeWindow {
+    fn label(self) -> &'static str {
+        match self {
+            TimeWindow::All => "all",
+            TimeWindow::Day => "24h",
+            TimeWindow::Week => "7d",
+            TimeWindow::Month => "30d",
+        }
+    }
+    fn cutoff(self) -> Option<i64> {
+        let now = chrono::Utc::now().timestamp();
+        match self {
+            TimeWindow::All => None,
+            TimeWindow::Day => Some(now - 86_400),
+            TimeWindow::Week => Some(now - 7 * 86_400),
+            TimeWindow::Month => Some(now - 30 * 86_400),
+        }
+    }
+    fn cycle(self) -> Self {
+        match self {
+            TimeWindow::All => TimeWindow::Day,
+            TimeWindow::Day => TimeWindow::Week,
+            TimeWindow::Week => TimeWindow::Month,
+            TimeWindow::Month => TimeWindow::All,
+        }
+    }
+}
+
+// ── App state ─────────────────────────────────────────────────────────
+
+pub struct App {
+    cfg: Config,
+    root: String,
+    project_id: String,
+    project_name: String,
+    enabled: bool,
+    anchors: Vec<AnchorRow>,
+    filter: String,
+    time_window: TimeWindow,
+    stack: Vec<View>,
+    flash: Option<String>,
+}
+
+enum View {
+    Feed(FeedState),
+    Transcript(TranscriptState),
+    Search(SearchState),
+    Help,
+}
+
+struct FeedState {
+    list: ListState,
+    filter_input_open: bool,
+}
+
+struct TranscriptState {
+    session: SessionLink,
+    lines: Vec<Line<'static>>,
+    scroll: u16,
+}
+
+struct SearchState {
+    query: String,
+    global: bool,
+    results: Vec<crate::commands::search::Hit>,
+    list: ListState,
+    running: bool,
+}
+
+// ── Loading ───────────────────────────────────────────────────────────
+
+impl App {
+    fn load(cfg: Config, root: String) -> Result<Self, String> {
+        let project_id = crate::project::id_for_root(&root);
+        let project_name = std::path::Path::new(&root)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let db = Db::open()?;
+        let settings = db.get_project_settings(&project_id).unwrap_or_default();
+        let enabled = !settings.ignored;
+        let anchors = load_anchors(&db, &project_id, 500, TimeWindow::All)?;
+
+        let mut feed = FeedState {
+            list: ListState::default(),
+            filter_input_open: false,
+        };
+        if !anchors.is_empty() {
+            feed.list.select(Some(0));
+        }
+
+        Ok(Self {
+            cfg,
+            root,
+            project_id,
+            project_name,
+            enabled,
+            anchors,
+            filter: String::new(),
+            time_window: TimeWindow::All,
+            stack: vec![View::Feed(feed)],
+            flash: None,
+        })
+    }
+
+    fn reload_anchors(&mut self) {
+        if let Ok(db) = Db::open() {
+            if let Ok(rows) = load_anchors(&db, &self.project_id, 500, self.time_window) {
+                self.anchors = rows;
+            }
+            let settings = db.get_project_settings(&self.project_id).unwrap_or_default();
+            self.enabled = !settings.ignored;
+        }
+        // Snap selection back to a valid row.
+        if let Some(View::Feed(feed)) = self.stack.first_mut() {
+            let visible = visible_anchor_count(&self.anchors, &self.filter);
+            let sel = feed.list.selected().unwrap_or(0);
+            if visible == 0 {
+                feed.list.select(None);
+            } else if sel >= visible {
+                feed.list.select(Some(visible - 1));
+            }
+        }
+    }
+
+    fn selected_anchor(&self) -> Option<AnchorRow> {
+        let View::Feed(feed) = self.stack.first()? else {
+            return None;
+        };
+        let idx = feed.list.selected()?;
+        visible_anchors(&self.anchors, &self.filter)
+            .nth(idx)
+            .cloned()
+    }
+
+    fn flash(&mut self, msg: impl Into<String>) {
+        self.flash = Some(msg.into());
+    }
+}
+
+fn visible_anchors<'a>(
+    rows: &'a [AnchorRow],
+    filter: &'a str,
+) -> impl Iterator<Item = &'a AnchorRow> {
+    let f = filter.trim().to_ascii_lowercase();
+    rows.iter().filter(move |r| {
+        if f.is_empty() {
+            return true;
+        }
+        r.subject.to_ascii_lowercase().contains(&f)
+            || r.sha.to_ascii_lowercase().contains(&f)
+            || r.intent
+                .as_deref()
+                .map(|s| s.to_ascii_lowercase().contains(&f))
+                .unwrap_or(false)
+            || r.tool
+                .as_deref()
+                .map(|s| s.to_ascii_lowercase().contains(&f))
+                .unwrap_or(false)
+    })
+}
+
+fn visible_anchor_count(rows: &[AnchorRow], filter: &str) -> usize {
+    visible_anchors(rows, filter).count()
+}
+
+// ── Event loop ────────────────────────────────────────────────────────
+
+fn event_loop(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+) -> Result<i32, String> {
+    loop {
+        terminal
+            .draw(|frame| draw(frame, app))
+            .map_err(|e| format!("tui draw: {e}"))?;
+
+        let Some(key) = super::next_key(Duration::from_millis(200))
+            .map_err(|e: io::Error| format!("key read: {e}"))?
+        else {
+            continue;
+        };
+
+        // Clear any transient flash on the next keystroke.
+        app.flash = None;
+
+        if handle_key(terminal, app, key)? {
+            return Ok(0);
+        }
+    }
+}
+
+/// Returns true if the app should quit.
+fn handle_key(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    key: KeyEvent,
+) -> Result<bool, String> {
+    // Help overlay swallows all keys (dismisses on any press).
+    if matches!(app.stack.last(), Some(View::Help)) {
+        app.stack.pop();
+        return Ok(false);
+    }
+
+    match app.stack.last_mut() {
+        Some(View::Feed(_)) => handle_feed_key(terminal, app, key),
+        Some(View::Transcript(_)) => Ok(handle_transcript_key(app, key)),
+        Some(View::Search(_)) => handle_search_key(app, key),
+        Some(View::Help) | None => Ok(false),
+    }
+}
+
+fn handle_feed_key(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    key: KeyEvent,
+) -> Result<bool, String> {
+    // Filter-input sub-mode: absorb printable keys into the filter buffer.
+    let feed_filter_open = matches!(
+        app.stack.last(),
+        Some(View::Feed(FeedState {
+            filter_input_open: true,
+            ..
+        }))
+    );
+    if feed_filter_open {
+        if let Some(View::Feed(feed)) = app.stack.last_mut() {
+            match key.code {
+                KeyCode::Esc => {
+                    feed.filter_input_open = false;
+                    app.filter.clear();
+                }
+                KeyCode::Enter => {
+                    feed.filter_input_open = false;
+                }
+                KeyCode::Backspace => {
+                    app.filter.pop();
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.filter.push(c);
+                }
+                _ => {}
+            }
+            // Reset selection to top after filter change.
+            let total = visible_anchor_count(&app.anchors, &app.filter);
+            if total == 0 {
+                feed.list.select(None);
+            } else {
+                feed.list.select(Some(0));
+            }
+        }
+        return Ok(false);
+    }
+
+    // Ctrl-F / Ctrl-/ → full search
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('f') | KeyCode::Char('/'))
+    {
+        app.stack.push(View::Search(SearchState {
+            query: String::new(),
+            global: false,
+            results: Vec::new(),
+            list: ListState::default(),
+            running: false,
+        }));
+        return Ok(false);
+    }
+
+    match key.code {
+        KeyCode::Char('q') => return Ok(true),
+        KeyCode::Esc => return Ok(true),
+        KeyCode::Char('?') => {
+            app.stack.push(View::Help);
+        }
+        KeyCode::Char('/') => {
+            if let Some(View::Feed(feed)) = app.stack.last_mut() {
+                feed.filter_input_open = true;
+                app.filter.clear();
+            }
+        }
+        KeyCode::Char('t') => {
+            app.time_window = app.time_window.cycle();
+            app.reload_anchors();
+            app.flash(format!("time window: {}", app.time_window.label()));
+        }
+        KeyCode::Char('r') => {
+            app.reload_anchors();
+            app.flash("reloaded");
+        }
+        KeyCode::Char('e') => {
+            toggle_enabled(app);
+        }
+        KeyCode::Char('d') => {
+            if let Some(anchor) = app.selected_anchor() {
+                suspend_and_run(terminal, || run_git_show(&app.root, &anchor.sha))?;
+            }
+        }
+        KeyCode::Char('b') => {
+            if let Some(anchor) = app.selected_anchor() {
+                match pick_file_for_anchor(&app.root, &anchor.sha) {
+                    Some(file) => suspend_and_run(terminal, || {
+                        run_oobo_blame(&app.root, &file, &anchor.sha)
+                    })?,
+                    None => app.flash("no files touched in this anchor"),
+                }
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => move_selection(app, -1),
+        KeyCode::Down | KeyCode::Char('j') => move_selection(app, 1),
+        KeyCode::PageUp => move_selection(app, -10),
+        KeyCode::PageDown => move_selection(app, 10),
+        KeyCode::Char('g') => move_to(app, 0),
+        KeyCode::Char('G') => move_to(app, usize::MAX),
+        KeyCode::Enter | KeyCode::Char('s') => {
+            open_transcript(app);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn handle_transcript_key(app: &mut App, key: KeyEvent) -> bool {
+    if let Some(View::Transcript(ts)) = app.stack.last_mut() {
+        match key.code {
+            KeyCode::Char('q') => return true,
+            KeyCode::Esc | KeyCode::Backspace => {
+                app.stack.pop();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                ts.scroll = ts.scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                ts.scroll = ts.scroll.saturating_add(1);
+            }
+            KeyCode::PageUp => {
+                ts.scroll = ts.scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                ts.scroll = ts.scroll.saturating_add(10);
+            }
+            KeyCode::Char('g') => {
+                ts.scroll = 0;
+            }
+            KeyCode::Char('G') => {
+                ts.scroll = ts.lines.len().saturating_sub(1) as u16;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn handle_search_key(app: &mut App, key: KeyEvent) -> Result<bool, String> {
+    let Some(View::Search(state)) = app.stack.last_mut() else {
+        return Ok(false);
+    };
+    match key.code {
+        KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
+        KeyCode::Esc => {
+            app.stack.pop();
+            return Ok(false);
+        }
+        KeyCode::Tab => {
+            state.global = !state.global;
+            if !state.query.trim().is_empty() {
+                run_search(app);
+            }
+        }
+        KeyCode::Enter => {
+            if !state.query.trim().is_empty() {
+                run_search(app);
+            }
+        }
+        KeyCode::Backspace => {
+            state.query.pop();
+        }
+        KeyCode::Up | KeyCode::Char('k')
+            if key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            nav_search(state, -1);
+        }
+        KeyCode::Down | KeyCode::Char('j')
+            if key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            nav_search(state, 1);
+        }
+        KeyCode::Up => nav_search(state, -1),
+        KeyCode::Down => nav_search(state, 1),
+        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.query.push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn nav_search(state: &mut SearchState, delta: i32) {
+    if state.results.is_empty() {
+        return;
+    }
+    let cur = state.list.selected().unwrap_or(0) as i32;
+    let n = state.results.len() as i32;
+    let next = (cur + delta).clamp(0, n - 1);
+    state.list.select(Some(next as usize));
+}
+
+fn run_search(app: &mut App) {
+    let Some(View::Search(state)) = app.stack.last_mut() else {
+        return;
+    };
+    state.running = true;
+    let query = state.query.clone();
+    let scope = if state.global {
+        crate::commands::search::Scope::Global
+    } else {
+        crate::commands::search::Scope::CurrentRepo(app.root.clone())
+    };
+    let opts = crate::commands::search::Options {
+        source: Some(crate::commands::search::Source::Local),
+        since: None,
+        scope,
+        tool: None,
+        limit: 100,
+    };
+    let hits = crate::commands::search::collect_local(&app.cfg, &query, &opts)
+        .unwrap_or_default();
+    if let Some(View::Search(state)) = app.stack.last_mut() {
+        state.running = false;
+        state.results = hits;
+        if state.results.is_empty() {
+            state.list.select(None);
+        } else {
+            state.list.select(Some(0));
+        }
+    }
+}
+
+fn move_selection(app: &mut App, delta: i32) {
+    let total = visible_anchor_count(&app.anchors, &app.filter) as i32;
+    if total == 0 {
+        return;
+    }
+    if let Some(View::Feed(feed)) = app.stack.last_mut() {
+        let cur = feed.list.selected().unwrap_or(0) as i32;
+        let next = (cur + delta).clamp(0, total - 1);
+        feed.list.select(Some(next as usize));
+    }
+}
+
+fn move_to(app: &mut App, idx: usize) {
+    let total = visible_anchor_count(&app.anchors, &app.filter);
+    if total == 0 {
+        return;
+    }
+    if let Some(View::Feed(feed)) = app.stack.last_mut() {
+        feed.list.select(Some(idx.min(total - 1)));
+    }
+}
+
+fn open_transcript(app: &mut App) {
+    let Some(anchor) = app.selected_anchor() else {
+        return;
+    };
+    let sessions = load_sessions_for_anchor(&anchor.sha);
+    let Some(session) = sessions.into_iter().next() else {
+        app.flash("no sessions linked to this anchor");
+        return;
+    };
+    let lines = load_transcript_lines(&app.root, &session);
+    app.stack.push(View::Transcript(TranscriptState {
+        session,
+        lines,
+        scroll: 0,
+    }));
+}
+
+fn toggle_enabled(app: &mut App) {
+    let Ok(db) = Db::open() else {
+        app.flash("cannot open db");
+        return;
+    };
+    let mut settings = db.get_project_settings(&app.project_id).unwrap_or_default();
+    settings.ignored = !settings.ignored;
+    if db
+        .set_project_settings(&app.project_id, &settings)
+        .is_err()
+    {
+        app.flash("cannot update settings");
+        return;
+    }
+    app.enabled = !settings.ignored;
+    app.flash(if app.enabled {
+        "tracking enabled"
+    } else {
+        "tracking disabled"
+    });
+}
+
+// ── External commands (suspend/restore TUI) ──────────────────────────
+
+fn suspend_and_run<F>(
+    terminal: &mut ratatui::DefaultTerminal,
+    f: F,
+) -> Result<(), String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    super::restore();
+    let result = f();
+    *terminal = super::init().map_err(|e| format!("tui init: {e}"))?;
+    terminal.clear().ok();
+    result
+}
+
+fn run_git_show(root: &str, sha: &str) -> Result<(), String> {
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+    // Pipe through a pager so long diffs are browsable.
+    let status = std::process::Command::new(&git)
+        .args(["show", "--color=always", sha])
+        .current_dir(root)
+        .env("GIT_PAGER", "less -R")
+        .status()
+        .map_err(|e| format!("spawn git show: {e}"))?;
+    if !status.success() {
+        return Err(format!("git show exited {status}"));
+    }
+    Ok(())
+}
+
+fn run_oobo_blame(root: &str, file: &str, sha: &str) -> Result<(), String> {
+    let oobo = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("oobo"));
+    let status = std::process::Command::new(oobo)
+        .args(["blame", file, sha])
+        .current_dir(root)
+        .status()
+        .map_err(|e| format!("spawn oobo blame: {e}"))?;
+    if !status.success() {
+        return Err(format!("oobo blame exited {status}"));
+    }
+    // Pause so the user can read the output before the TUI repaints.
+    println!("\npress enter to return...");
+    let mut buf = String::new();
+    let _ = std::io::stdin().read_line(&mut buf);
+    Ok(())
+}
+
+fn pick_file_for_anchor(root: &str, sha: &str) -> Option<String> {
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+    let output = std::process::Command::new(git)
+        .args(["show", "--name-only", "--pretty=format:", sha])
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .map(|s| s.to_string())
+}
+
+// ── DB loaders ────────────────────────────────────────────────────────
+
+fn load_anchors(
+    db: &Db,
+    project_id: &str,
+    limit: usize,
+    window: TimeWindow,
+) -> Result<Vec<AnchorRow>, String> {
+    use rusqlite::params;
+    let cutoff = window.cutoff().unwrap_or(0);
+    let mut rows: Vec<AnchorRow> = Vec::new();
+    let mut stmt = db
+        .conn
+        .prepare(
+            "SELECT a.commit_hash, a.committed_at, a.message, a.intent
+             FROM anchors a
+             JOIN ai_commits c ON c.commit_hash = a.commit_hash
+             WHERE c.project_id = ?1 AND COALESCE(a.committed_at, 0) >= ?2
+             ORDER BY a.committed_at DESC
+             LIMIT ?3",
+        )
+        .map_err(|e| format!("prepare feed: {e}"))?;
+    let mapped = stmt
+        .query_map(params![project_id, cutoff, limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(|e| format!("feed query: {e}"))?;
+    for r in mapped.flatten() {
+        let (hash, ts, msg, intent) = r;
+        let subject = intent
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| msg.clone().unwrap_or_else(|| "(no subject)".to_string()));
+        let summary = summarize_sessions(db, &hash);
+        rows.push(AnchorRow {
+            sha: hash,
+            timestamp: ts.unwrap_or(0),
+            subject,
+            intent,
+            tool: summary.tool,
+            tokens: summary.tokens,
+            session_count: summary.count,
+        });
+    }
+    Ok(rows)
+}
+
+struct AnchorSummary {
+    tool: Option<String>,
+    tokens: Option<i64>,
+    count: usize,
+}
+
+fn summarize_sessions(db: &Db, commit_hash: &str) -> AnchorSummary {
+    use rusqlite::params;
+    let mut count = 0usize;
+    let mut tokens: i64 = 0;
+    let mut tool: Option<String> = None;
+    let sql = "SELECT agent, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
+               FROM anchor_sessions WHERE commit_hash = ?1";
+    if let Ok(mut stmt) = db.conn.prepare(sql) {
+        if let Ok(rows) = stmt.query_map(params![commit_hash], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                row.get::<_, Option<i64>>(4)?.unwrap_or(0),
+            ))
+        }) {
+            for r in rows.flatten() {
+                count += 1;
+                tokens += r.1 + r.2 + r.3 + r.4;
+                if tool.is_none() {
+                    tool = Some(r.0);
+                }
+            }
+        }
+    }
+    AnchorSummary {
+        tool,
+        tokens: if tokens == 0 { None } else { Some(tokens) },
+        count,
+    }
+}
+
+fn load_sessions_for_anchor(commit_hash: &str) -> Vec<SessionLink> {
+    use rusqlite::params;
+    let Ok(db) = Db::open() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let sql = "SELECT session_id, agent, model,
+                      COALESCE(input_tokens,0) + COALESCE(output_tokens,0)
+                      + COALESCE(cache_read_tokens,0) + COALESCE(cache_creation_tokens,0)
+               FROM anchor_sessions WHERE commit_hash = ?1";
+    if let Ok(mut stmt) = db.conn.prepare(sql) {
+        if let Ok(rows) = stmt.query_map(params![commit_hash], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        }) {
+            for r in rows.flatten() {
+                out.push(SessionLink {
+                    session_id: r.0,
+                    source: r.1,
+                    model: r.2,
+                    tokens: r.3,
+                });
+            }
+        }
+    }
+    out
+}
+
+fn touched_files_for(root: &str, sha: &str) -> Vec<String> {
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+    let Ok(output) = std::process::Command::new(git)
+        .args(["show", "--name-only", "--pretty=format:", sha])
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn load_transcript_lines(project_root: &str, s: &SessionLink) -> Vec<Line<'static>> {
+    let messages =
+        crate::session::parse_messages_for_session(project_root, &s.session_id, &s.source);
+    if messages.is_empty() {
+        return vec![
+            Line::from(Span::styled(
+                "(transcript not available for this session)",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("session {} · {}", &s.session_id, s.source),
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+    }
+    let mut out: Vec<Line<'static>> = Vec::new();
+    for m in messages {
+        let role = role_label(&m.role);
+        let role_style = role_style(&m.role);
+        out.push(Line::from(vec![
+            Span::styled(
+                format!("[{role}] "),
+                role_style.add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(timestamp_short(m.timestamp_ms)),
+        ]));
+        for l in m.text.lines() {
+            out.push(Line::from(Span::raw(l.to_string())));
+        }
+        out.push(Line::from(""));
+    }
+    out
+}
+
+fn role_label(role: &str) -> &'static str {
+    match role {
+        "user" => "you",
+        "assistant" => "ai",
+        "system" => "sys",
+        "tool" => "tool",
+        _ => "?",
+    }
+}
+
+fn role_style(role: &str) -> Style {
+    match role {
+        "user" => Style::default().fg(Color::Cyan),
+        "assistant" => Style::default().fg(Color::Green),
+        "system" => Style::default().fg(Color::DarkGray),
+        "tool" => Style::default().fg(Color::Magenta),
+        _ => Style::default(),
+    }
+}
+
+fn timestamp_short(ts_ms: Option<i64>) -> String {
+    match ts_ms {
+        Some(ms) => chrono::DateTime::from_timestamp(ms / 1000, 0)
+            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_default(),
+        None => String::new(),
+    }
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────
+
+fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
+    match app.stack.last() {
+        Some(View::Feed(feed)) => draw_feed(frame, app, feed),
+        Some(View::Transcript(ts)) => draw_transcript(frame, app, ts),
+        Some(View::Search(s)) => draw_search(frame, app, s),
+        Some(View::Help) => {
+            if let Some(first) = app.stack.first() {
+                match first {
+                    View::Feed(feed) => draw_feed(frame, app, feed),
+                    View::Transcript(ts) => draw_transcript(frame, app, ts),
+                    View::Search(s) => draw_search(frame, app, s),
+                    View::Help => {}
+                }
+            }
+            draw_help_overlay(frame);
+        }
+        None => {}
+    }
+}
+
+fn draw_feed(frame: &mut ratatui::Frame<'_>, app: &App, feed: &FeedState) {
+    let area = frame.area();
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    draw_header(frame, app, layout[0]);
+
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(layout[1]);
+
+    draw_anchor_list(frame, app, feed, body[0]);
+    draw_anchor_detail(frame, app, body[1]);
+    draw_footer(frame, app, feed, layout[2]);
+}
+
+fn draw_header(frame: &mut ratatui::Frame<'_>, app: &App, area: Rect) {
+    let total_anchors = app.anchors.len();
+    let filtered = visible_anchor_count(&app.anchors, &app.filter);
+    let count_str = if app.filter.is_empty() {
+        format!("{total_anchors} anchors")
+    } else {
+        format!("{filtered}/{total_anchors} anchors")
+    };
+    let enabled = if app.enabled { "on" } else { "off" };
+    let line = Line::from(vec![
+        Span::styled(
+            format!(" oobo · {}", app.project_name),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                "    {} · window: {} · tracking: {} ",
+                count_str,
+                app.time_window.label(),
+                enabled
+            ),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(line).alignment(Alignment::Left), area);
+}
+
+fn draw_anchor_list(
+    frame: &mut ratatui::Frame<'_>,
+    app: &App,
+    feed: &FeedState,
+    area: Rect,
+) {
+    let items: Vec<ListItem> = visible_anchors(&app.anchors, &app.filter)
+        .map(|r| {
+            let when = relative_time(r.timestamp);
+            let tokens = r
+                .tokens
+                .map(super::format_tokens)
+                .unwrap_or_else(|| "-".to_string());
+            ListItem::new(Line::from(vec![
+                Span::styled(" ● ", Style::default().fg(Color::Green)),
+                Span::styled(format!("{when:<4} "), Style::default().fg(Color::DarkGray)),
+                Span::raw(truncate(&r.subject, 26)),
+                Span::styled(
+                    format!("  {tokens}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::RIGHT))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
+    let mut state = feed.list.clone();
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn draw_anchor_detail(frame: &mut ratatui::Frame<'_>, app: &App, area: Rect) {
+    let Some(anchor) = app.selected_anchor() else {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "  (no anchor selected)",
+                Style::default().fg(Color::DarkGray),
+            )),
+            area,
+        );
+        return;
+    };
+
+    let sessions = load_sessions_for_anchor(&anchor.sha);
+    let files = touched_files_for(&app.root, &anchor.sha);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("  {}", short_sha(&anchor.sha)),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {}", relative_time(anchor.timestamp)),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", anchor.subject),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    if let Some(intent) = anchor.intent.as_deref() {
+        if !intent.is_empty() && intent != anchor.subject {
+            lines.push(Line::from(Span::styled(
+                format!("  {intent}"),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+    }
+    lines.push(Line::from(""));
+
+    let tool = anchor.tool.as_deref().unwrap_or("-");
+    let tokens = anchor
+        .tokens
+        .map(super::format_tokens)
+        .unwrap_or_else(|| "-".into());
+    lines.push(Line::from(vec![
+        Span::styled("  tool    ", Style::default().fg(Color::DarkGray)),
+        Span::raw(tool.to_string()),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  tokens  ", Style::default().fg(Color::DarkGray)),
+        Span::raw(tokens),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  sessions", Style::default().fg(Color::DarkGray)),
+        Span::raw(format!(" {}", anchor.session_count)),
+    ]));
+
+    if !sessions.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  SESSIONS",
+            Style::default().fg(Color::DarkGray),
+        )));
+        for s in &sessions {
+            let short_sid: String = s.session_id.chars().take(8).collect();
+            let model = s.model.clone().unwrap_or_else(|| "-".into());
+            let tok = if s.tokens > 0 {
+                super::format_tokens(s.tokens)
+            } else {
+                "-".into()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("    · ", Style::default().fg(Color::Green)),
+                Span::raw(short_sid),
+                Span::styled(
+                    format!("  {}  {}  {tok}", s.source, model),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+    }
+
+    if !files.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("  FILES ({})", files.len()),
+            Style::default().fg(Color::DarkGray),
+        )));
+        for f in files.iter().take(12) {
+            lines.push(Line::from(Span::raw(format!("    {f}"))));
+        }
+        if files.len() > 12 {
+            lines.push(Line::from(Span::styled(
+                format!("    … {} more", files.len() - 12),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+
+    let para = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(Block::default().borders(Borders::NONE));
+    frame.render_widget(para, area);
+}
+
+fn draw_footer(
+    frame: &mut ratatui::Frame<'_>,
+    app: &App,
+    feed: &FeedState,
+    area: Rect,
+) {
+    let content: Line<'static> = if feed.filter_input_open {
+        Line::from(vec![
+            Span::styled(
+                " filter: ",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(app.filter.clone()),
+            Span::styled("_", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "   (enter to apply · esc to clear)",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])
+    } else if let Some(flash) = &app.flash {
+        Line::from(Span::styled(
+            format!(" {flash} "),
+            Style::default().fg(Color::Yellow),
+        ))
+    } else {
+        Line::from(vec![Span::styled(
+            " ↑↓ nav · enter transcript · d diff · b blame · / filter · ^f search · t time · e toggle · ? help · q quit ",
+            Style::default().fg(Color::DarkGray),
+        )])
+    };
+    frame.render_widget(Paragraph::new(content), area);
+}
+
+fn draw_transcript(frame: &mut ratatui::Frame<'_>, _app: &App, ts: &TranscriptState) {
+    let area = frame.area();
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    let short_sid: String = ts.session.session_id.chars().take(8).collect();
+    let header = Line::from(vec![
+        Span::styled(
+            " transcript",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                "  {}  {}  {}",
+                short_sid,
+                ts.session.source,
+                ts.session.model.clone().unwrap_or_default(),
+            ),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(header), layout[0]);
+
+    let max_scroll = ts
+        .lines
+        .len()
+        .saturating_sub(layout[1].height as usize) as u16;
+    let scroll = ts.scroll.min(max_scroll);
+    let body = Paragraph::new(ts.lines.clone())
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
+    frame.render_widget(body, layout[1]);
+
+    let footer = Paragraph::new(Line::from(Span::styled(
+        " ↑↓ scroll · pgup/pgdn page · g/G top/bot · esc back · q quit ",
+        Style::default().fg(Color::DarkGray),
+    )));
+    frame.render_widget(footer, layout[2]);
+}
+
+fn draw_search(frame: &mut ratatui::Frame<'_>, _app: &App, state: &SearchState) {
+    let area = frame.area();
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    let scope_label = if state.global { "global" } else { "this repo" };
+    let header = Line::from(vec![
+        Span::styled(" search", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("   scope: {scope_label}   (tab to toggle · esc to close)"),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(header), layout[0]);
+
+    let prompt = Line::from(vec![
+        Span::styled(
+            " > ",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(state.query.clone()),
+        Span::styled("_", Style::default().fg(Color::Yellow)),
+    ]);
+    frame.render_widget(Paragraph::new(prompt), layout[1]);
+
+    if state.running {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                "  searching…",
+                Style::default().fg(Color::DarkGray),
+            )),
+            layout[2],
+        );
+    } else if state.results.is_empty() {
+        let msg = if state.query.is_empty() {
+            "  type to search; enter to run"
+        } else {
+            "  no results"
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(msg, Style::default().fg(Color::DarkGray))),
+            layout[2],
+        );
+    } else {
+        let items: Vec<ListItem> = state
+            .results
+            .iter()
+            .map(|h| {
+                let pname = &h.project_name;
+                let when = h.timestamp.map(relative_time).unwrap_or_else(|| "-".into());
+                let snippet = truncate(&h.snippet, 60);
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!(" {pname:<14}"),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::styled(
+                        format!("  {when:<5}"),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::raw(format!("  {snippet}")),
+                ]))
+            })
+            .collect();
+        let mut ls = state.list.clone();
+        frame.render_stateful_widget(
+            List::new(items).highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            layout[2],
+            &mut ls,
+        );
+    }
+
+    let footer = Paragraph::new(Line::from(Span::styled(
+        " enter run · tab scope · ↑↓ nav · esc back ",
+        Style::default().fg(Color::DarkGray),
+    )));
+    frame.render_widget(footer, layout[3]);
+}
+
+fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, ) {
+    let area = frame.area();
+    let rect = centered(area, 60, 22);
+
+    let lines = vec![
+        Line::from(Span::styled(
+            " oobo TUI · keybindings",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(" FEED"),
+        Line::from("   ↑/k ↓/j     move selection"),
+        Line::from("   g / G       top / bottom"),
+        Line::from("   enter, s    open transcript for first session"),
+        Line::from("   d           git show --color (diff)"),
+        Line::from("   b           oobo blame first touched file"),
+        Line::from("   /           live filter"),
+        Line::from("   ctrl-f      full search (project/global)"),
+        Line::from("   t           cycle time window (all / 24h / 7d / 30d)"),
+        Line::from("   e           toggle tracking for this repo"),
+        Line::from("   r           reload from db"),
+        Line::from(""),
+        Line::from(" TRANSCRIPT"),
+        Line::from("   ↑↓ pgup/pgdn  scroll · g/G top/bot · esc back"),
+        Line::from(""),
+        Line::from(" SEARCH"),
+        Line::from("   tab         toggle project ↔ global"),
+        Line::from("   enter       run · esc close"),
+        Line::from(""),
+        Line::from(Span::styled(
+            " press any key to dismiss",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    frame.render_widget(Clear, rect);
+    let para = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" help ")
+            .border_style(Style::default().fg(Color::Yellow)),
+    );
+    frame.render_widget(para, rect);
+}
+
+fn centered(area: Rect, w: u16, h: u16) -> Rect {
+    let w = w.min(area.width.saturating_sub(2));
+    let h = h.min(area.height.saturating_sub(2));
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    Rect { x, y, width: w, height: h }
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────
+
+fn short_sha(sha: &str) -> String {
+    sha.chars().take(8).collect()
+}
+
+fn relative_time(ts: i64) -> String {
+    if ts <= 0 {
+        return "-".to_string();
+    }
+    let now = chrono::Utc::now().timestamp();
+    let d = (now - ts).max(0);
+    if d < 60 {
+        format!("{d}s")
+    } else if d < 3600 {
+        format!("{}m", d / 60)
+    } else if d < 86400 {
+        format!("{}h", d / 3600)
+    } else if d < 30 * 86400 {
+        format!("{}d", d / 86400)
+    } else {
+        format!("{}mo", d / (30 * 86400))
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        format!("{s:<max$}")
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}

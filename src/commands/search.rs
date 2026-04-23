@@ -34,17 +34,17 @@ pub struct Options {
 }
 
 #[derive(Debug, Clone)]
-struct Hit {
-    project_id: String,
-    project_name: String,
-    anchor_sha: Option<String>,
-    session_id: Option<String>,
-    tool: Option<String>,
-    tokens: Option<i64>,
-    timestamp: Option<i64>,
-    intent: String,
-    snippet: String,
-    score: f64,
+pub struct Hit {
+    pub project_id: String,
+    pub project_name: String,
+    pub anchor_sha: Option<String>,
+    pub session_id: Option<String>,
+    pub tool: Option<String>,
+    pub tokens: Option<i64>,
+    pub timestamp: Option<i64>,
+    pub intent: String,
+    pub snippet: String,
+    pub score: f64,
 }
 
 pub fn run(
@@ -128,6 +128,25 @@ fn resolve_source(cfg: &Config, explicit: Option<Source>) -> Result<Source, Stri
     } else {
         Ok(Source::Both)
     }
+}
+
+/// Public entry used by the TUI's in-app search. Opens the DB, runs the
+/// same ranking as `oobo search` (local only), and returns raw hits.
+pub fn collect_local(_cfg: &Config, query: &str, opts: &Options) -> Result<Vec<Hit>, String> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let db = Db::open()?;
+    let mut hits = search_local(&db, query, opts)?;
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    if opts.limit > 0 && hits.len() > opts.limit {
+        hits.truncate(opts.limit);
+    }
+    Ok(hits)
 }
 
 /// Local search: join sessions ⨝ projects and anchors ⨝ projects, filter by

@@ -20,7 +20,7 @@ pub fn run(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
 
 fn in_repo(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
     match mode {
-        OutputMode::Tui => crate::tui::anchor_feed::run(cfg),
+        OutputMode::Tui => crate::tui::app::run(cfg),
         _ => {
             // Byte-for-byte equivalence with `oobo anchors --<mode> --limit 50`.
             crate::commands::anchors::run(cfg, BARE_LIMIT, mode)?;

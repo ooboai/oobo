@@ -1,4 +1,4 @@
-pub mod anchor_feed;
+pub mod app;
 pub mod setup;
 
 use std::io;
