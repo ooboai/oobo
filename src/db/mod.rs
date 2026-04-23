@@ -41,7 +41,9 @@ impl Db {
         Ok(db)
     }
 
-    #[cfg(test)]
+    /// Open an in-memory DB. Useful for tests (including
+    /// integration tests outside the crate) and for ephemeral
+    /// one-shot tools that don't want to touch the user's DB file.
     pub fn open_in_memory() -> Result<Self, String> {
         let conn =
             Connection::open_in_memory().map_err(|e| format!("cannot open in-memory db: {e}"))?;

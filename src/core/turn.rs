@@ -104,6 +104,16 @@ pub struct Turn {
     /// Allows "open the raw source" affordances in the UI without
     /// keeping raw content in the database.
     pub raw_ref: Option<String>,
+
+    /// Comma-joined list of tool_use names that fired on this turn,
+    /// in invocation order, e.g. `"Read,Write,Task"`. `None` means the
+    /// tap didn't extract tool metadata (old artifact, unsupported
+    /// source); `Some("")` would be unusual but permitted.
+    ///
+    /// This is the hook the M4 subagent inference engine uses to find
+    /// parent turns that spawned subagents — `Task` presence is the
+    /// strongest signal in our heuristic stack.
+    pub tool_names: Option<String>,
 }
 
 /// Per-call token deltas. Every number is the value the API billed

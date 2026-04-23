@@ -56,6 +56,10 @@ pub fn run(cfg: &Config, all: bool, mode: OutputMode) -> Result<i32, String> {
                 grand.tap_summary.turns_emitted += report.tap_summary.turns_emitted;
                 grand.tap_summary.turns_skipped += report.tap_summary.turns_skipped;
                 grand.tap_summary.warnings.extend(report.tap_summary.warnings);
+                grand.inference.orphans_considered += report.inference.orphans_considered;
+                grand.inference.parents_considered += report.inference.parents_considered;
+                grand.inference.proposed += report.inference.proposed;
+                grand.inference.applied += report.inference.applied;
             }
             Err(e) => failures.push((pid.clone(), e)),
         }
@@ -94,31 +98,34 @@ fn emit_project_done(project_id: &str, path: &str, r: &BackfillReport, mode: Out
     match mode {
         OutputMode::Json => {
             println!(
-                r#"{{"project_id":"{}","path":"{}","sessions":{},"turns":{},"contributions":{}}}"#,
+                r#"{{"project_id":"{}","path":"{}","sessions":{},"turns":{},"contributions":{},"subagents_inferred":{}}}"#,
                 escape(project_id),
                 escape(path),
                 r.sessions_scanned,
                 r.tap_summary.turns_emitted,
                 r.contributions_written,
+                r.inference.applied,
             );
         }
         OutputMode::Agent => {
             println!(
-                "{}\t{}\tsessions={}\tturns={}\tcontribs={}",
+                "{}\t{}\tsessions={}\tturns={}\tcontribs={}\tsubagents={}",
                 project_id,
                 path,
                 r.sessions_scanned,
                 r.tap_summary.turns_emitted,
                 r.contributions_written,
+                r.inference.applied,
             );
         }
         OutputMode::Tui => {
             println!(
-                "  {} ({} sessions → {} turns → {} contributions)",
+                "  {} ({} sessions → {} turns → {} contributions, {} subagents inferred)",
                 path,
                 r.sessions_scanned,
                 r.tap_summary.turns_emitted,
                 r.contributions_written,
+                r.inference.applied,
             );
         }
     }
@@ -133,22 +140,25 @@ fn emit_summary(
     match mode {
         OutputMode::Json => {
             println!(
-                r#"{{"ok":{},"projects":{},"sessions":{},"turns":{},"contributions":{},"failures":{}}}"#,
+                r#"{{"ok":{},"projects":{},"sessions":{},"turns":{},"contributions":{},"subagents_inferred":{},"subagents_proposed":{},"failures":{}}}"#,
                 failures.is_empty(),
                 project_count,
                 grand.sessions_scanned,
                 grand.tap_summary.turns_emitted,
                 grand.contributions_written,
+                grand.inference.applied,
+                grand.inference.proposed,
                 failures.len(),
             );
         }
         OutputMode::Agent => {
             println!(
-                "total\tprojects={}\tsessions={}\tturns={}\tcontribs={}\tfailures={}",
+                "total\tprojects={}\tsessions={}\tturns={}\tcontribs={}\tsubagents={}\tfailures={}",
                 project_count,
                 grand.sessions_scanned,
                 grand.tap_summary.turns_emitted,
                 grand.contributions_written,
+                grand.inference.applied,
                 failures.len(),
             );
             for (pid, err) in failures {
@@ -158,11 +168,13 @@ fn emit_summary(
         OutputMode::Tui => {
             println!();
             println!(
-                "rebuilt {} project(s): {} sessions, {} turns, {} contributions.",
+                "rebuilt {} project(s): {} sessions, {} turns, {} contributions, {} subagents inferred ({} proposed).",
                 project_count,
                 grand.sessions_scanned,
                 grand.tap_summary.turns_emitted,
                 grand.contributions_written,
+                grand.inference.applied,
+                grand.inference.proposed,
             );
             for (pid, err) in failures {
                 eprintln!("  failed: {pid}: {err}");

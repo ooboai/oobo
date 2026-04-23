@@ -19,6 +19,8 @@ pub struct BackfillReport {
     pub sessions_scanned: usize,
     pub tap_summary: TapSummary,
     pub contributions_written: usize,
+    /// M4 inference pass results.
+    pub inference: super::inference_runner::InferenceReport,
 }
 
 /// Full backfill for one project:
@@ -86,6 +88,18 @@ pub fn backfill_project(
     })
     .and_then(|summary| {
         report.tap_summary = summary;
+
+        // M4 — infer subagent parent/child links *before* attribution
+        // so contributions inherit `is_subagent` from the freshly
+        // populated sessions columns. The order is:
+        //   taps → inference → attribution
+        // Tap-provided explicit links are preserved by the inference
+        // pass; attribution reads `sessions.parent_*` as authoritative.
+        let inference = super::inference_runner::infer_subagents_for_project(
+            db, project_id,
+        )?;
+        report.inference = inference;
+
         let n = super::runner::rebuild_contributions_for_project(db, project_id)?;
         report.contributions_written = n;
         Ok(report)

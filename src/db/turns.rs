@@ -97,8 +97,8 @@ pub fn upsert_turn(conn: &Connection, turn: &Turn) -> Result<bool, String> {
                 started_at, ended_at, model, \
                 input_tokens, cache_read_tokens, cache_creation_tokens, output_tokens, \
                 cost_usd, tool_call_count, thinking_ms, \
-                message_preview, raw_ref, ingested_at\
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18) \
+                message_preview, raw_ref, tool_names, ingested_at\
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19) \
             ON CONFLICT(session_id, source, turn_index) DO UPDATE SET \
                 role = excluded.role, \
                 started_at = COALESCE(excluded.started_at, started_at), \
@@ -113,6 +113,7 @@ pub fn upsert_turn(conn: &Connection, turn: &Turn) -> Result<bool, String> {
                 thinking_ms = COALESCE(excluded.thinking_ms, thinking_ms), \
                 message_preview = COALESCE(excluded.message_preview, message_preview), \
                 raw_ref = COALESCE(excluded.raw_ref, raw_ref), \
+                tool_names = COALESCE(excluded.tool_names, tool_names), \
                 ingested_at = excluded.ingested_at",
             params![
                 turn.id,
@@ -132,6 +133,7 @@ pub fn upsert_turn(conn: &Connection, turn: &Turn) -> Result<bool, String> {
                 turn.thinking_ms,
                 turn.message_preview,
                 turn.raw_ref,
+                turn.tool_names,
                 now,
             ],
         )
@@ -324,6 +326,7 @@ mod tests {
             thinking_ms: None,
             message_preview: Some(format!("msg-{idx}")),
             raw_ref: None,
+            tool_names: None,
         }
     }
 

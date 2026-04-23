@@ -139,7 +139,8 @@ fn ingest_one_file(
         };
 
         let ts_ms = parse_timestamp(&entry);
-        let (tokens, model, thinking_ms, tool_call_count) = extract_assistant_metadata(&entry);
+        let (tokens, model, thinking_ms, tool_call_count, tool_names) =
+            extract_assistant_metadata(&entry);
         let preview = extract_preview(&entry, role);
         let raw_ref = format!("jsonl:{}#{}", path.display(), lineno + 1);
 
@@ -160,6 +161,7 @@ fn ingest_one_file(
             thinking_ms,
             message_preview: preview,
             raw_ref: Some(raw_ref),
+            tool_names,
         };
 
         sink.accept_turn(turn);
@@ -185,10 +187,10 @@ fn ingest_one_file(
 /// entries (non-assistant turns have no tokens).
 fn extract_assistant_metadata(
     entry: &Value,
-) -> (TurnTokens, Option<String>, Option<i64>, i64) {
+) -> (TurnTokens, Option<String>, Option<i64>, i64, Option<String>) {
     let msg = match entry.get("message") {
         Some(m) => m,
-        None => return (TurnTokens::default(), None, None, 0),
+        None => return (TurnTokens::default(), None, None, 0, None),
     };
 
     let model = msg
@@ -210,11 +212,17 @@ fn extract_assistant_metadata(
 
     let mut thinking_ms: Option<i64> = None;
     let mut tool_call_count: i64 = 0;
+    let mut tool_names: Vec<String> = Vec::new();
 
     if let Some(content) = msg.get("content").and_then(|v| v.as_array()) {
         for part in content {
             match part.get("type").and_then(|v| v.as_str()) {
-                Some("tool_use") => tool_call_count += 1,
+                Some("tool_use") => {
+                    tool_call_count += 1;
+                    if let Some(name) = part.get("name").and_then(|v| v.as_str()) {
+                        tool_names.push(name.to_string());
+                    }
+                }
                 Some("thinking") => {
                     // Claude currently reports thinking content but not
                     // ms; left as a reserved slot until the tool
@@ -228,7 +236,13 @@ fn extract_assistant_metadata(
         }
     }
 
-    (tokens, model, thinking_ms, tool_call_count)
+    let tool_names_joined = if tool_names.is_empty() {
+        None
+    } else {
+        Some(tool_names.join(","))
+    };
+
+    (tokens, model, thinking_ms, tool_call_count, tool_names_joined)
 }
 
 fn parse_timestamp(entry: &Value) -> Option<i64> {
@@ -388,6 +402,25 @@ mod tests {
             .ingest_session("s", TapArtifact::File(f.path()), &mut sink)
             .unwrap();
         assert_eq!(sink.turns[0].tool_call_count, 2);
+        assert_eq!(
+            sink.turns[0].tool_names.as_deref(),
+            Some("Read,Write"),
+            "tool names captured in invocation order for M4 inference",
+        );
+    }
+
+    #[test]
+    fn task_tool_is_captured_in_tool_names_for_inference() {
+        let f = fixture(&[
+            r#"{"type":"assistant","message":{"usage":{"output_tokens":3},"content":[{"type":"tool_use","name":"Task","id":"tu_1","input":{"subagent_type":"explore","prompt":"Find X"}}]}}"#,
+        ]);
+        let mut sink = MemorySink::default();
+        ClaudeTurnTap
+            .ingest_session("s", TapArtifact::File(f.path()), &mut sink)
+            .unwrap();
+        let t = &sink.turns[0];
+        assert_eq!(t.tool_names.as_deref(), Some("Task"));
+        assert_eq!(t.tool_call_count, 1);
     }
 
     #[test]

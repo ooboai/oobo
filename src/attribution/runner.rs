@@ -243,6 +243,7 @@ mod tests {
             thinking_ms: None,
             message_preview: None,
             raw_ref: None,
+            tool_names: None,
         }
     }
 

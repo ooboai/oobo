@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use std::path::Path;
 
-const LATEST_VERSION: i32 = 11;
+const LATEST_VERSION: i32 = 12;
 
 pub fn run(conn: &Connection) -> Result<(), String> {
     run_with_path(conn, None)
@@ -61,6 +61,9 @@ pub fn run_with_path(conn: &Connection, db_path: Option<&Path>) -> Result<(), St
     }
     if current < 11 {
         migrate_v11(conn)?;
+    }
+    if current < 12 {
+        migrate_v12(conn)?;
     }
 
     set_version(conn, LATEST_VERSION)?;
@@ -854,6 +857,69 @@ fn migrate_v11(conn: &Connection) -> Result<(), String> {
         ",
     )
     .map_err(|e| format!("migration v11 (views): {e}"))?;
+
+    Ok(())
+}
+
+/// v12 — Subagent inference substrate.
+///
+/// Two tiny additions enable heuristic parent/child detection for
+/// sessions whose tool didn't expose the link explicitly:
+///
+/// 1. `turns.tool_names` — comma-joined list of tool_use names per
+///    turn (e.g. `"Task"`, `"Read,Write"`). Makes it O(1) to locate
+///    every parent turn that spawned a subagent without re-parsing
+///    transcripts. NULL for turns without tool_use.
+///
+/// 2. `subagent_inferences` — immutable audit log for every
+///    inference decision. Records which signals fired, the combined
+///    score, and whether the link was applied. This preserves the
+///    reasoning so a future run (or a human) can revisit borderline
+///    cases without losing history.
+fn migrate_v12(conn: &Connection) -> Result<(), String> {
+    if !column_exists(conn, "turns", "tool_names")? {
+        conn.execute_batch("ALTER TABLE turns ADD COLUMN tool_names TEXT;")
+            .map_err(|e| format!("migration v12 (turns.tool_names): {e}"))?;
+    }
+
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS subagent_inferences (
+            -- The orphan child that was evaluated.
+            child_session_id    TEXT NOT NULL,
+            child_source        TEXT NOT NULL,
+
+            -- The parent we matched (or considered). Null when the
+            -- row records a rejected evaluation with no top candidate.
+            parent_session_id   TEXT,
+            parent_source       TEXT,
+            parent_turn_id      TEXT,
+
+            -- Inferred subagent kind (e.g. 'task', 'explore', 'planner').
+            -- Derived from Task tool args or template preamble.
+            subagent_kind       TEXT,
+
+            -- [0.0, 1.0]. Applied when score >= 0.6.
+            score               REAL NOT NULL,
+
+            -- JSON array of signal hits, e.g.
+            --   [{\"kind\":\"task_tool_temporal\",\"weight\":0.7,\"gap_ms\":1820},
+            --    {\"kind\":\"template_preamble\",\"weight\":0.4,\"match\":\"You are a task-focused agent\"}]
+            signals_json        TEXT NOT NULL,
+
+            -- True when we wrote parent_* fields back to sessions.
+            applied             INTEGER NOT NULL DEFAULT 0,
+
+            decided_at          INTEGER NOT NULL,
+
+            PRIMARY KEY (child_session_id, child_source, decided_at)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_subagent_inferences_applied
+            ON subagent_inferences(applied, decided_at DESC);
+        ",
+    )
+    .map_err(|e| format!("migration v12 (subagent_inferences): {e}"))?;
 
     Ok(())
 }
