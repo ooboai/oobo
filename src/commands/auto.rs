@@ -26,7 +26,7 @@ pub fn maybe_kick(cfg: &Config) {
     let Some(root) = crate::git::proxy::project_root(cfg) else {
         return;
     };
-    let project_id = crate::paths::slug_from_path(&root);
+    let project_id = crate::project::id_for_root(&root);
 
     let Ok(db) = crate::db::Db::open() else {
         return;

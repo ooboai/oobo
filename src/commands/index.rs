@@ -347,7 +347,7 @@ pub fn index_single_session(
 ) -> Result<(), String> {
     let db = Db::open()?;
 
-    let project_id = paths::slug_from_path(project_path);
+    let project_id = crate::project::id_for_root(project_path);
     db.ensure_project(&project_id, project_path)?;
 
     let now = chrono::Utc::now().timestamp();

@@ -105,6 +105,10 @@ pub fn resolve_or_create(db: &Db, cfg: &Config, root: &str) -> Result<ProjectRow
 }
 
 fn detect_remote(_cfg: &Config, root: &str) -> Option<String> {
+    detect_remote_for(root)
+}
+
+fn detect_remote_for(root: &str) -> Option<String> {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let output = std::process::Command::new(git)
         .args(["remote", "get-url", "origin"])
@@ -120,6 +124,14 @@ fn detect_remote(_cfg: &Config, root: &str) -> Option<String> {
     } else {
         Some(s)
     }
+}
+
+/// Resolve the stable project id for `root` without requiring a Config
+/// or Db. Uses the git remote when available, falls back to a path-based
+/// id. Safe to call in hooks, scanners, and read-only code paths.
+pub fn id_for_root(root: &str) -> String {
+    let remote = detect_remote_for(root);
+    derive_id(remote.as_deref(), root)
 }
 
 fn find_by_canonical_remote(

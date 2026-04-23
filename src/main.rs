@@ -10,6 +10,7 @@ mod git;
 mod hooks;
 mod notify;
 mod paths;
+mod project;
 mod redact;
 mod remote;
 mod scanner;

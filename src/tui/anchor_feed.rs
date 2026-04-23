@@ -41,7 +41,7 @@ pub fn run(cfg: &Config) -> Result<i32, String> {
     let Some(root) = crate::git::proxy::project_root(cfg) else {
         return Err("not a git repository".to_string());
     };
-    let project_id = crate::paths::slug_from_path(&root);
+    let project_id = crate::project::id_for_root(&root);
     let project_name = std::path::Path::new(&root)
         .file_name()
         .and_then(|s| s.to_str())

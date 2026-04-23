@@ -549,7 +549,7 @@ fn effective_value(
 
 fn current_project_id(cfg: &Config) -> Option<String> {
     let root = crate::git::proxy::project_root(cfg)?;
-    Some(crate::paths::slug_from_path(&root))
+    Some(crate::project::id_for_root(&root))
 }
 
 fn current_project_settings(cfg: &Config) -> Option<crate::db::projects::ProjectSettings> {

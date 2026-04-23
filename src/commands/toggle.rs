@@ -72,7 +72,7 @@ pub fn disable(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
 
 fn project_context(cfg: &Config) -> Option<(String, String, String)> {
     let root = crate::git::proxy::project_root(cfg)?;
-    let project_id = crate::paths::slug_from_path(&root);
+    let project_id = crate::project::id_for_root(&root);
     let name = std::path::Path::new(&root)
         .file_name()
         .and_then(|s| s.to_str())

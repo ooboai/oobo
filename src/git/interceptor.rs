@@ -1305,9 +1305,9 @@ fn log_event_locally(project_root: &str, op: &str, git_context: &GitContext) {
     let project_id = if project_root.is_empty() {
         None
     } else {
-        let slug = crate::paths::slug_from_path(project_root);
-        let _ = db.ensure_project(&slug, project_root);
-        Some(slug)
+        let pid = crate::project::id_for_root(project_root);
+        let _ = db.ensure_project(&pid, project_root);
+        Some(pid)
     };
 
     let data = serde_json::to_string(&serde_json::json!({

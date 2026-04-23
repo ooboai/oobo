@@ -29,14 +29,13 @@ pub fn full_scan(db: &Db, cfg: &Config) -> Result<ScanResult, String> {
         if project_path.is_empty() {
             continue;
         }
-        let slug = paths::slug_from_path(project_path);
+        let git_remote = detect_git_remote(project_path);
+        let slug = crate::project::derive_id(git_remote.as_deref(), project_path);
         let name = std::path::Path::new(project_path)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or(&slug)
             .to_string();
-
-        let git_remote = detect_git_remote(project_path);
 
         let mut tools_vec: Vec<String> = tools.iter().cloned().collect();
         tools_vec.sort();
@@ -63,7 +62,7 @@ pub fn full_scan(db: &Db, cfg: &Config) -> Result<ScanResult, String> {
         if session.project_path.is_empty() {
             continue;
         }
-        let project_id = paths::slug_from_path(&session.project_path);
+        let project_id = crate::project::id_for_root(&session.project_path);
 
         let session_row = SessionRow {
             id: session.session_id.clone(),
@@ -109,14 +108,13 @@ pub fn scan_project(db: &Db, cfg: &Config, project_path: &str) -> Result<ScanRes
         tools.insert(session.source.clone());
     }
 
-    let slug = paths::slug_from_path(project_path);
+    let git_remote = detect_git_remote(project_path);
+    let slug = crate::project::derive_id(git_remote.as_deref(), project_path);
     let name = std::path::Path::new(project_path)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(&slug)
         .to_string();
-
-    let git_remote = detect_git_remote(project_path);
     let mut tools_vec: Vec<String> = tools.into_iter().collect();
     tools_vec.sort();
 

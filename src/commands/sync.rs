@@ -13,7 +13,7 @@ const HYDRATION_INTERVAL_SECS: i64 = 3600;
 pub fn resolve_project_sync(cfg: &Config) -> Option<bool> {
     let project_root = crate::git::proxy::project_root(cfg)?;
     let db = crate::db::Db::open().ok()?;
-    let slug = crate::paths::slug_from_path(&project_root);
+    let slug = crate::project::id_for_root(&project_root);
     let settings = db.get_project_settings(&slug).ok()?;
     settings.sync
 }
@@ -22,7 +22,7 @@ pub fn resolve_project_sync(cfg: &Config) -> Option<bool> {
 pub fn resolve_api_key(cfg: &Config) -> String {
     if let Some(project_root) = crate::git::proxy::project_root(cfg) {
         if let Ok(db) = crate::db::Db::open() {
-            let slug = crate::paths::slug_from_path(&project_root);
+            let slug = crate::project::id_for_root(&project_root);
             if let Ok(settings) = db.get_project_settings(&slug) {
                 if let Some(ref key) = settings.api_key {
                     if !key.is_empty() {
