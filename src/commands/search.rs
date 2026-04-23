@@ -13,11 +13,22 @@ pub enum Source {
     Both,
 }
 
+/// Search scope — which projects to consider.
+#[derive(Debug, Clone)]
+pub enum Scope {
+    /// All projects.
+    Global,
+    /// A single project referenced by name (case-insensitive).
+    Project(String),
+    /// The project rooted at the given path (usually the current repo).
+    CurrentRepo(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct Options {
     pub source: Option<Source>,
     pub since: Option<String>,
-    pub project: Option<String>,
+    pub scope: Scope,
     pub tool: Option<String>,
     pub limit: usize,
 }
@@ -131,7 +142,19 @@ fn search_local(db: &Db, query: &str, opts: &Options) -> Result<Vec<Hit>, String
     // since filter
     let since_ts = opts.since.as_deref().and_then(parse_since);
 
-    let project_filter = opts.project.as_deref();
+    // Resolve scope into a project-matching predicate.
+    let scope_match: Box<dyn Fn(&str, &str) -> bool> = match &opts.scope {
+        Scope::Global => Box::new(|_pid: &str, _pname: &str| true),
+        Scope::Project(name) => {
+            let name = name.to_string();
+            Box::new(move |_pid: &str, pname: &str| pname.eq_ignore_ascii_case(&name))
+        }
+        Scope::CurrentRepo(root) => {
+            // Resolve root → the same stable project id the rest of the DB uses.
+            let wanted = crate::project::id_for_root(root);
+            Box::new(move |pid: &str, _pname: &str| pid == wanted)
+        }
+    };
 
     let mut hits: Vec<Hit> = Vec::new();
 
@@ -141,7 +164,8 @@ fn search_local(db: &Db, query: &str, opts: &Options) -> Result<Vec<Hit>, String
             "SELECT a.commit_hash, a.intent, a.message, a.committed_at,
                     p.id, p.name
              FROM anchors a
-             LEFT JOIN projects p ON 1=1
+             JOIN ai_commits c ON c.commit_hash = a.commit_hash
+             JOIN projects p   ON p.id = c.project_id
              ORDER BY a.committed_at DESC
              LIMIT 5000",
         )
@@ -174,14 +198,13 @@ fn search_local(db: &Db, query: &str, opts: &Options) -> Result<Vec<Hit>, String
                 continue;
             }
         }
+        let pid_s = pid.unwrap_or_default();
         let pname_s = pname.unwrap_or_else(|| "unknown".to_string());
-        if let Some(pf) = project_filter {
-            if !pname_s.eq_ignore_ascii_case(pf) {
-                continue;
-            }
+        if !scope_match(&pid_s, &pname_s) {
+            continue;
         }
         hits.push(Hit {
-            project_id: pid.unwrap_or_default(),
+            project_id: pid_s,
             project_name: pname_s,
             anchor_sha: Some(short_sha(&sha)),
             session_id: None,
@@ -220,10 +243,8 @@ fn search_local(db: &Db, query: &str, opts: &Options) -> Result<Vec<Hit>, String
         .map_err(|e| format!("sessions query: {e}"))?;
     for r in rows.flatten() {
         let (sid, src, first_message, updated_at, pid, pname) = r;
-        if let Some(pf) = project_filter {
-            if !pname.eq_ignore_ascii_case(pf) {
-                continue;
-            }
+        if !scope_match(&pid, &pname) {
+            continue;
         }
         if let Some(tf) = opts.tool.as_deref() {
             if !src.eq_ignore_ascii_case(tf) {

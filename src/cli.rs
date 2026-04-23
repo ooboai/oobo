@@ -134,19 +134,23 @@ pub enum Command {
         args: Vec<String>,
     },
 
-    /// Search past sessions across all projects
+    /// Search sessions and anchors (this project by default; --global for all)
     #[command(
         display_order = 3,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       oobo search \"auth middleware\"      Basic search\n  \
+                       oobo search \"auth middleware\"      This project (inside a repo)\n  \
+                       oobo search foo --global            Across all projects\n  \
                        oobo search foo --since 7d          Last 7 days\n  \
-                       oobo search foo --project oobo-cli  Scope to a project\n  \
+                       oobo search foo --project oobo-cli  Explicit project scope\n  \
                        oobo search foo --tool cursor       Scope to a tool\n  \
                        oobo search foo --agent             Compact output"
     )]
     Search {
         /// Free-text query (quote multi-word queries)
         query: Vec<String>,
+        /// Search across all projects (default is the current project when in a repo)
+        #[arg(long, conflicts_with = "project")]
+        global: bool,
         /// Local DB only (default when no API key)
         #[arg(long, conflicts_with_all = ["remote", "both"])]
         local: bool,
@@ -159,7 +163,7 @@ pub enum Command {
         /// Time window (e.g. 7d, 24h, 30m, or ISO timestamp)
         #[arg(long)]
         since: Option<String>,
-        /// Scope hits to a single project
+        /// Explicit project to scope to (by name); implies cross-project search
         #[arg(long)]
         project: Option<String>,
         /// Scope hits to a single tool (claude, cursor, gemini...)
@@ -456,6 +460,7 @@ fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, Strin
     let result = match cli.command {
         Some(Command::Search {
             query,
+            global,
             local,
             remote,
             both,
@@ -473,11 +478,28 @@ fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, Strin
             } else {
                 None
             };
+
+            // Scope resolution:
+            //   explicit --project NAME → that project
+            //   --global                → all projects
+            //   inside a repo (no flag) → current project
+            //   outside a repo          → all projects
+            let scope = if let Some(name) = project {
+                crate::commands::search::Scope::Project(name)
+            } else if global {
+                crate::commands::search::Scope::Global
+            } else {
+                match crate::git::proxy::project_root(&cfg) {
+                    Some(root) => crate::commands::search::Scope::CurrentRepo(root),
+                    None => crate::commands::search::Scope::Global,
+                }
+            };
+
             let q = query.join(" ");
             let opts = crate::commands::search::Options {
                 source,
                 since,
-                project,
+                scope,
                 tool,
                 limit,
             };
