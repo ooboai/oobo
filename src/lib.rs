@@ -16,6 +16,7 @@ pub mod remote;
 pub mod scanner;
 pub mod session;
 pub mod setup;
+pub mod taps;
 pub mod tools;
 pub mod tui;
 pub mod utils;
