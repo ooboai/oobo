@@ -50,6 +50,8 @@ pub struct Config {
     pub transparency: TransparencyConfig,
     #[serde(default)]
     pub tools: ToolsConfig,
+    #[serde(default)]
+    pub setup: SetupConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ignored_repos: Vec<String>,
 }
@@ -62,6 +64,28 @@ pub struct ToolsConfig {
     /// integrations. Disabled by default in 1.0.
     #[serde(default)]
     pub experimental: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetupConfig {
+    /// Root paths `oobo setup` should scan for projects. Defaults to the
+    /// user's home directory. Stored as a list of comma-separated strings
+    /// in TOML but exposed as a single comma-joined string via
+    /// `oobo settings setup.scan_roots`.
+    #[serde(default = "default_scan_roots")]
+    pub scan_roots: Vec<String>,
+}
+
+impl Default for SetupConfig {
+    fn default() -> Self {
+        Self {
+            scan_roots: default_scan_roots(),
+        }
+    }
+}
+
+fn default_scan_roots() -> Vec<String> {
+    vec!["~".to_string()]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -503,6 +527,7 @@ mod tests {
             update: UpdateConfig::default(),
             transparency: TransparencyConfig::default(),
             tools: ToolsConfig::default(),
+            setup: SetupConfig::default(),
             ignored_repos: Vec::new(),
         };
         let serialized = toml::to_string_pretty(&cfg).unwrap();

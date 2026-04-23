@@ -15,6 +15,12 @@ pub struct ProjectSettings {
     pub sync: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Per-project override for the remote server URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+    /// First-TTY banner has been displayed for this project.
+    #[serde(default)]
+    pub banner_shown: bool,
 }
 
 #[derive(Debug, Clone)]

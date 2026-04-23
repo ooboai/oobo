@@ -110,6 +110,44 @@ pub enum Command {
         commit: Option<String>,
     },
 
+    /// Declarative KV config (no OAuth, no login flow)
+    #[command(
+        display_order = 5,
+        after_help = "\x1b[1mGrammar:\x1b[0m  oobo settings [scope] [verb] <key> [value]\n\n\
+                       \x1b[1mExamples:\x1b[0m\n  \
+                       oobo settings                       Show all effective settings\n  \
+                       oobo settings default               Show defaults only\n  \
+                       oobo settings project               Show project overrides\n  \
+                       oobo settings key                   Show the default 'key' value\n  \
+                       oobo settings set key sk_abc        Set the default API key\n  \
+                       oobo settings project set remote <url>  Per-project override\n  \
+                       oobo settings unset key             Remove the default API key\n  \
+                       oobo settings project unset remote  Drop the project override"
+    )]
+    Settings {
+        /// Positional args: [scope] [verb] <key> [value]
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// Start tracking the current project (idempotent)
+    #[command(
+        display_order = 6,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo enable           Turn on tracking for this repo\n  \
+                       oobo enable --json    Machine-readable confirmation"
+    )]
+    Enable {},
+
+    /// Stop tracking the current project (keeps existing anchors)
+    #[command(
+        display_order = 7,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo disable          Turn off tracking for this repo\n  \
+                       oobo disable --agent  Minimal confirmation"
+    )]
+    Disable {},
+
     /// Onboarding + repair wizard (projects, hooks, keys, alias)
     #[command(display_order = 10)]
     Setup {
@@ -189,7 +227,7 @@ pub enum HookAction {
 
 /// Reserved oobo verbs. Anything else at argv[1] is forwarded to `git` (passthrough).
 const OOBO_SUBCOMMANDS: &[&str] = &[
-    "anchors", "a", "blame", "setup", "alias", "update", "hooks",
+    "anchors", "a", "blame", "settings", "enable", "disable", "setup", "alias", "update", "hooks",
 ];
 
 fn is_oobo_subcommand(args: &[String]) -> bool {
@@ -250,6 +288,18 @@ pub fn route(cfg: Config) -> Result<i32, String> {
     };
 
     let result = match cli.command {
+        Some(Command::Settings { args }) => {
+            let code = crate::commands::settings::run(&cfg, &args, mode)?;
+            Ok(code)
+        }
+        Some(Command::Enable {}) => {
+            let code = crate::commands::toggle::enable(&cfg, mode)?;
+            Ok(code)
+        }
+        Some(Command::Disable {}) => {
+            let code = crate::commands::toggle::disable(&cfg, mode)?;
+            Ok(code)
+        }
         Some(Command::Setup { .. }) => {
             crate::setup::run_setup().map_err(|e| e.to_string())?;
             Ok(0)
