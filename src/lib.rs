@@ -1,5 +1,6 @@
 pub mod alias;
 pub mod analytics;
+pub mod attribution;
 pub mod cli;
 pub mod commands;
 pub mod config;
