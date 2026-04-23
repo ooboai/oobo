@@ -214,7 +214,7 @@ impl App {
         let db = Db::open()?;
         let settings = db.get_project_settings(&project_id).unwrap_or_default();
         let enabled = !settings.ignored;
-        let anchors = load_anchors(&db, &project_id, 500, TimeWindow::All)?;
+        let anchors = load_anchors(&cfg, &db, 500, TimeWindow::All)?;
 
         let mut feed = FeedState {
             list: ListState::default(),
@@ -240,7 +240,7 @@ impl App {
 
     fn reload_anchors(&mut self) {
         if let Ok(db) = Db::open() {
-            if let Ok(rows) = load_anchors(&db, &self.project_id, 500, self.time_window) {
+            if let Ok(rows) = load_anchors(&self.cfg, &db, 500, self.time_window) {
                 self.anchors = rows;
             }
             let settings = db.get_project_settings(&self.project_id).unwrap_or_default();
@@ -1042,53 +1042,83 @@ fn run_oobo_blame(root: &str, file: &str, sha: &str) -> Result<(), String> {
 // ── DB loaders ────────────────────────────────────────────────────────
 
 fn load_anchors(
+    cfg: &Config,
     db: &Db,
-    project_id: &str,
     limit: usize,
     window: TimeWindow,
 ) -> Result<Vec<AnchorRow>, String> {
-    use rusqlite::params;
+    // Walk git log as source of truth (authoritative subject + timestamp),
+    // then enrich each commit with AI session data from the DB.
+    let n = limit.max(1);
+    let log = crate::git::proxy::run_git_capture(
+        cfg,
+        &[
+            "log",
+            &format!("-{}", n),
+            "--format=%H|||%s|||%ct",
+        ],
+    )
+    .unwrap_or_default();
+
     let cutoff = window.cutoff().unwrap_or(0);
     let mut rows: Vec<AnchorRow> = Vec::new();
-    let mut stmt = db
-        .conn
-        .prepare(
-            "SELECT a.commit_hash, a.committed_at, a.message, a.intent
-             FROM anchors a
-             JOIN ai_commits c ON c.commit_hash = a.commit_hash
-             WHERE c.project_id = ?1 AND COALESCE(a.committed_at, 0) >= ?2
-             ORDER BY a.committed_at DESC
-             LIMIT ?3",
-        )
-        .map_err(|e| format!("prepare feed: {e}"))?;
-    let mapped = stmt
-        .query_map(params![project_id, cutoff, limit as i64], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<i64>>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-            ))
-        })
-        .map_err(|e| format!("feed query: {e}"))?;
-    for r in mapped.flatten() {
-        let (hash, ts, msg, intent) = r;
+    for line in log.lines() {
+        let parts: Vec<&str> = line.splitn(3, "|||").collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        let sha = parts[0].to_string();
+        let subject_git = parts[1].to_string();
+        let ts: i64 = parts[2].parse().unwrap_or(0);
+
+        if ts < cutoff {
+            continue;
+        }
+
+        // Pull intent from anchors table when present; otherwise use commit subject.
+        let (intent, _msg_db) = load_anchor_meta(db, &sha);
         let subject = intent
             .clone()
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| msg.clone().unwrap_or_else(|| "(no subject)".to_string()));
-        let summary = summarize_sessions(db, &hash);
+            .unwrap_or_else(|| {
+                if subject_git.is_empty() {
+                    "(no subject)".to_string()
+                } else {
+                    subject_git.clone()
+                }
+            });
+
+        let summary = summarize_sessions(db, &sha);
         rows.push(AnchorRow {
-            sha: hash,
-            timestamp: ts.unwrap_or(0),
+            sha,
+            timestamp: ts,
             subject,
             intent,
             tool: summary.tool,
             tokens: summary.tokens,
             session_count: summary.count,
         });
+        if rows.len() >= limit {
+            break;
+        }
     }
     Ok(rows)
+}
+
+fn load_anchor_meta(db: &Db, commit_hash: &str) -> (Option<String>, Option<String>) {
+    use rusqlite::params;
+    db.conn
+        .query_row(
+            "SELECT intent, message FROM anchors WHERE commit_hash = ?1",
+            params![commit_hash],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )
+        .unwrap_or((None, None))
 }
 
 struct AnchorSummary {
@@ -1392,19 +1422,49 @@ fn draw_anchor_list(
     feed: &FeedState,
     area: Rect,
 ) {
+    // Reserve columns for the trailing metadata (tokens/sessions), dot and time.
+    // Layout: " ● " (3) + "when " (6) + subject (flex) + "  tokens sessions" (~14)
+    let total_w = area.width.saturating_sub(2) as usize;
+    let meta_w = 14usize;
+    let prefix_w = 3 + 6;
+    let subject_w = total_w.saturating_sub(meta_w + prefix_w).max(12);
+
     let items: Vec<ListItem> = visible_anchors(&app.anchors, &app.filter)
         .map(|r| {
             let when = relative_time(r.timestamp);
-            let tokens = r
+            let has_ai = r.session_count > 0;
+            let dot_style = if has_ai {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            let dot = if has_ai { "●" } else { "○" };
+
+            let tok_str = r
                 .tokens
+                .filter(|t| *t > 0)
                 .map(super::format_tokens)
-                .unwrap_or_else(|| "-".to_string());
+                .unwrap_or_else(|| "-".into());
+            let sess_str = if r.session_count > 0 {
+                format!("{}s", r.session_count)
+            } else {
+                "-".into()
+            };
+            let meta = format!("{tok_str:>6}  {sess_str:>4}");
+
+            let subject_raw = if r.subject.is_empty() {
+                "(no subject)".to_string()
+            } else {
+                r.subject.clone()
+            };
+            let subject = pad_or_truncate(&subject_raw, subject_w);
+
             ListItem::new(Line::from(vec![
-                Span::styled(" ● ", Style::default().fg(Color::Green)),
-                Span::styled(format!("{when:<4} "), Style::default().fg(Color::DarkGray)),
-                Span::raw(truncate(&r.subject, 26)),
+                Span::styled(format!(" {dot} "), dot_style),
+                Span::styled(format!("{when:<5} "), Style::default().fg(Color::DarkGray)),
+                Span::raw(subject),
                 Span::styled(
-                    format!("  {tokens}"),
+                    format!("  {meta}"),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]))
@@ -1420,6 +1480,22 @@ fn draw_anchor_list(
         );
     let mut state = feed.list.clone();
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn pad_or_truncate(s: &str, width: usize) -> String {
+    let count = s.chars().count();
+    if count > width {
+        let keep = width.saturating_sub(1);
+        let mut out: String = s.chars().take(keep).collect();
+        out.push('…');
+        out
+    } else {
+        let mut out = s.to_string();
+        for _ in 0..(width - count) {
+            out.push(' ');
+        }
+        out
+    }
 }
 
 fn draw_anchor_detail(frame: &mut ratatui::Frame<'_>, app: &App, area: Rect) {
