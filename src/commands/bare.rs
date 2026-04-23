@@ -19,9 +19,14 @@ pub fn run(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
 }
 
 fn in_repo(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
-    // Byte-for-byte equivalence with `oobo anchors --<mode> --limit 50`.
-    crate::commands::anchors::run(cfg, BARE_LIMIT, mode)?;
-    Ok(0)
+    match mode {
+        OutputMode::Tui => crate::tui::anchor_feed::run(cfg),
+        _ => {
+            // Byte-for-byte equivalence with `oobo anchors --<mode> --limit 50`.
+            crate::commands::anchors::run(cfg, BARE_LIMIT, mode)?;
+            Ok(0)
+        }
+    }
 }
 
 fn cross_project(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
