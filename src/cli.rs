@@ -32,7 +32,7 @@ impl OutputMode {
   blame        Per-line AI/human attribution
 
 \x1b[1;4mRecall:\x1b[0m  \x1b[2m(find your memory)\x1b[0m
-  search       Search sessions across all projects
+  search       Search sessions and anchors across projects
 
 \x1b[1;4mSettings:\x1b[0m  \x1b[2m(configure oobo)\x1b[0m
   settings     Declarative KV config
@@ -108,6 +108,42 @@ pub enum Command {
         file: String,
         /// Commit hash (defaults to HEAD)
         commit: Option<String>,
+    },
+
+    /// Search past sessions across all projects
+    #[command(
+        display_order = 3,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo search \"auth middleware\"      Basic search\n  \
+                       oobo search foo --since 7d          Last 7 days\n  \
+                       oobo search foo --project oobo-cli  Scope to a project\n  \
+                       oobo search foo --tool cursor       Scope to a tool\n  \
+                       oobo search foo --agent             Compact output"
+    )]
+    Search {
+        /// Free-text query (quote multi-word queries)
+        query: Vec<String>,
+        /// Local DB only (default when no API key)
+        #[arg(long, conflicts_with_all = ["remote", "both"])]
+        local: bool,
+        /// Remote server only (requires API key)
+        #[arg(long, conflicts_with_all = ["local", "both"])]
+        remote: bool,
+        /// Local + remote merged (default when API key configured)
+        #[arg(long, conflicts_with_all = ["local", "remote"])]
+        both: bool,
+        /// Time window (e.g. 7d, 24h, 30m, or ISO timestamp)
+        #[arg(long)]
+        since: Option<String>,
+        /// Scope hits to a single project
+        #[arg(long)]
+        project: Option<String>,
+        /// Scope hits to a single tool (claude, cursor, gemini...)
+        #[arg(long)]
+        tool: Option<String>,
+        /// Max results (default 20)
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
     },
 
     /// Declarative KV config (no OAuth, no login flow)
@@ -227,7 +263,8 @@ pub enum HookAction {
 
 /// Reserved oobo verbs. Anything else at argv[1] is forwarded to `git` (passthrough).
 const OOBO_SUBCOMMANDS: &[&str] = &[
-    "anchors", "a", "blame", "settings", "enable", "disable", "setup", "alias", "update", "hooks",
+    "anchors", "a", "blame", "search", "settings", "enable", "disable", "setup", "alias", "update",
+    "hooks",
 ];
 
 fn is_oobo_subcommand(args: &[String]) -> bool {
@@ -288,6 +325,36 @@ pub fn route(cfg: Config) -> Result<i32, String> {
     };
 
     let result = match cli.command {
+        Some(Command::Search {
+            query,
+            local,
+            remote,
+            both,
+            since,
+            project,
+            tool,
+            limit,
+        }) => {
+            let source = if local {
+                Some(crate::commands::search::Source::Local)
+            } else if remote {
+                Some(crate::commands::search::Source::Remote)
+            } else if both {
+                Some(crate::commands::search::Source::Both)
+            } else {
+                None
+            };
+            let q = query.join(" ");
+            let opts = crate::commands::search::Options {
+                source,
+                since,
+                project,
+                tool,
+                limit,
+            };
+            let code = crate::commands::search::run(&cfg, &q, opts, mode)?;
+            Ok(code)
+        }
         Some(Command::Settings { args }) => {
             let code = crate::commands::settings::run(&cfg, &args, mode)?;
             Ok(code)

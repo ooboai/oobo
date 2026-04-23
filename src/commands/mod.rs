@@ -2,6 +2,7 @@ pub mod agent;
 pub mod anchors;
 pub mod blame;
 pub mod index;
+pub mod search;
 pub mod settings;
 pub mod sync;
 pub mod toggle;
