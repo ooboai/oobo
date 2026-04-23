@@ -1,5 +1,6 @@
 mod alias;
 mod analytics;
+mod attribution;
 mod cli;
 mod commands;
 mod config;
@@ -16,6 +17,7 @@ mod remote;
 mod scanner;
 mod session;
 mod setup;
+mod taps;
 mod tools;
 mod tui;
 mod utils;

@@ -5,6 +5,7 @@ pub mod bare;
 pub mod blame;
 pub mod legacy;
 pub mod index;
+pub mod rebuild;
 pub mod search;
 pub mod settings;
 pub mod sync;
