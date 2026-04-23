@@ -20,7 +20,7 @@ pub fn enable(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
     };
 
     let db = Db::open()?;
-    db.ensure_project(&project_id, &root)?;
+    let project_id = crate::project::ensure_stable(&db, &root)?;
     let mut settings = db.get_project_settings(&project_id).unwrap_or_default();
 
     let was_enabled = !settings.ignored;
@@ -42,7 +42,7 @@ pub fn enable(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
 
 /// `oobo disable` — mark the current project as not tracked.
 pub fn disable(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
-    let (root, project_id, name) = match project_context(cfg) {
+    let (root, _legacy_id, name) = match project_context(cfg) {
         Some(tuple) => tuple,
         None => {
             eprintln!(
@@ -53,7 +53,7 @@ pub fn disable(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
     };
 
     let db = Db::open()?;
-    db.ensure_project(&project_id, &root)?;
+    let project_id = crate::project::ensure_stable(&db, &root)?;
     let mut settings = db.get_project_settings(&project_id).unwrap_or_default();
 
     if settings.ignored {

@@ -26,9 +26,11 @@ pub fn maybe_kick(cfg: &Config) {
     let Some(root) = crate::git::proxy::project_root(cfg) else {
         return;
     };
-    let project_id = crate::project::id_for_root(&root);
-
     let Ok(db) = crate::db::Db::open() else {
+        return;
+    };
+
+    let Ok(project_id) = crate::project::ensure_stable(&db, &root) else {
         return;
     };
 
@@ -36,9 +38,6 @@ pub fn maybe_kick(cfg: &Config) {
     if settings.ignored {
         return;
     }
-
-    // Ensure the row exists so we can track last_scanned_at.
-    let _ = db.ensure_project(&project_id, &root);
 
     let needs_scan = match db.get_project_by_id(&project_id) {
         Ok(Some(p)) => {

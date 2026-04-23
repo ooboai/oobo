@@ -134,6 +134,76 @@ pub fn id_for_root(root: &str) -> String {
     derive_id(remote.as_deref(), root)
 }
 
+/// Atomically upsert a `projects` row for `root` using the stable id and
+/// its detected git remote, and return the id.
+///
+/// Handles the in-flight transition case where an old row for the same
+/// `path` but a legacy id already exists (v9 migration did not have a
+/// `git_remote` value to canonicalize at the time). That row is renamed
+/// to the stable id and its children are re-parented.
+pub fn ensure_stable(db: &Db, root: &str) -> Result<String, String> {
+    let remote = detect_remote_for(root);
+    let id = derive_id(remote.as_deref(), root);
+
+    // Rename an existing row (same path, different id) to the stable id.
+    if let Some(existing) = db.get_project_by_path(root)? {
+        if existing.id != id {
+            rename_project(db, &existing.id, &id)?;
+        }
+    }
+
+    let name = std::path::Path::new(root)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let now = chrono::Utc::now().timestamp();
+    let row = ProjectRow {
+        id: id.clone(),
+        path: root.to_string(),
+        name,
+        git_remote: remote,
+        discovered_at: now,
+        last_seen_at: now,
+        last_scanned_at: 0,
+        tools: Vec::new(),
+    };
+    db.upsert_project(&row)?;
+    Ok(id)
+}
+
+fn rename_project(db: &Db, from: &str, to: &str) -> Result<(), String> {
+    // Mirror of v9's per-project rewrite. FKs stay ON, so we defer them
+    // for the duration of the transaction — the DB only checks
+    // referential integrity at commit time.
+    let conn = &db.conn;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("rename tx: {e}"))?;
+    tx.execute_batch("PRAGMA defer_foreign_keys = ON;")
+        .map_err(|e| format!("rename defer fk: {e}"))?;
+    for table in [
+        "ai_commits",
+        "sessions",
+        "events",
+        "git_activity",
+        "project_settings",
+    ] {
+        tx.execute(
+            &format!("UPDATE {table} SET project_id = ?1 WHERE project_id = ?2"),
+            rusqlite::params![to, from],
+        )
+        .map_err(|e| format!("rename {table}: {e}"))?;
+    }
+    tx.execute(
+        "UPDATE projects SET id = ?1 WHERE id = ?2",
+        rusqlite::params![to, from],
+    )
+    .map_err(|e| format!("rename projects: {e}"))?;
+    tx.commit().map_err(|e| format!("rename commit: {e}"))?;
+    Ok(())
+}
+
 fn find_by_canonical_remote(
     db: &Db,
     canonical: &str,
