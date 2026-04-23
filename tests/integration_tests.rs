@@ -476,125 +476,15 @@ fn test_git_proxy_passthrough() {
 }
 
 #[test]
-fn test_oobo_dash_command() {
-    let output = Command::new(oobo_binary()).args(["dash"]).output().unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("oobo v"),
-        "expected oobo dash output: {stdout}"
-    );
-}
-
-#[test]
-fn test_agent_compact_format() {
-    let output = Command::new(oobo_binary())
-        .args(["version", "--agent"])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "oobo version --agent should succeed"
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("version: "),
-        "agent output should use key: value format, got: {stdout}"
-    );
-}
-
-#[test]
 fn test_agent_json_conflict() {
     let output = Command::new(oobo_binary())
-        .args(["version", "--agent", "--json"])
+        .args(["anchors", "--agent", "--json"])
         .output()
         .unwrap();
 
     assert!(
         !output.status.success(),
         "--agent and --json should conflict"
-    );
-}
-
-#[test]
-fn test_agent_sources_pipe_format() {
-    let output = Command::new(oobo_binary())
-        .args(["sources", "--agent"])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "oobo sources --agent should succeed"
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.starts_with("# tool | "),
-        "sources --agent should start with schema header, got: {stdout}"
-    );
-}
-
-#[test]
-fn test_agent_dash_key_value_format() {
-    let output = Command::new(oobo_binary())
-        .args(["dash", "--agent"])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success(), "oobo dash --agent should succeed");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("version: "),
-        "dash --agent should use key: value format, got: {stdout}"
-    );
-    assert!(
-        stdout.contains("config: "),
-        "dash --agent should include config key, got: {stdout}"
-    );
-}
-
-#[test]
-fn test_agent_sessions_list_scope() {
-    let output = Command::new(oobo_binary())
-        .args(["sessions", "list", "--limit", "1", "--agent"])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "oobo sessions list --agent should succeed"
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("# scope: "),
-        "sessions list --agent should include scope on stdout, got: {stdout}"
-    );
-    assert!(
-        stdout.contains("# session_id | "),
-        "sessions list --agent should include schema header, got: {stdout}"
-    );
-}
-
-#[test]
-fn test_json_sessions_list_bare_array() {
-    let output = Command::new(oobo_binary())
-        .args(["sessions", "list", "--limit", "1", "--json"])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "oobo sessions list --json should succeed"
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
-        panic!("sessions list --json should produce valid JSON: {e}, got: {stdout}")
-    });
-    assert!(
-        parsed.is_array(),
-        "JSON output should be a bare array, got: {stdout}"
     );
 }
 
@@ -808,27 +698,14 @@ fn test_cli_help() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("oobo"));
     assert!(stdout.contains("setup"));
-    assert!(stdout.contains("sessions"));
     assert!(stdout.contains("alias"));
-    assert!(stdout.contains("dash"));
+    assert!(stdout.contains("anchors"));
 }
 
 #[test]
-fn test_cli_version_flag_proxies_to_git() {
+fn test_cli_version_flag() {
     let output = Command::new(oobo_binary())
         .args(["--version"])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("git version") || stdout.contains("oobo"));
-}
-
-#[test]
-fn test_cli_version_subcommand() {
-    let output = Command::new(oobo_binary())
-        .args(["version"])
         .output()
         .unwrap();
 
@@ -838,17 +715,15 @@ fn test_cli_version_subcommand() {
 }
 
 #[test]
-fn test_cli_sessions_help() {
+fn test_cli_anchors_help() {
     let output = Command::new(oobo_binary())
-        .args(["sessions", "--help"])
+        .args(["anchors", "--help"])
         .output()
         .unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("list"));
-    assert!(stdout.contains("show"));
-    assert!(stdout.contains("export"));
+    assert!(stdout.contains("anchors") || stdout.contains("limit"));
 }
 
 // ── Payload serialization tests ─────────────────────────────────────────────

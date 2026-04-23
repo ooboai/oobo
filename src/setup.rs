@@ -95,9 +95,9 @@ pub fn run_setup() -> Result<(), String> {
 
     println!();
     println!("  You're all set! Try:");
-    println!("    oobo sessions   -- view your AI chat sessions");
-    println!("    oobo scan       -- discover projects and sessions");
-    println!("    oobo dash       -- interactive dashboard");
+    println!("    oobo             -- see your anchor feed");
+    println!("    oobo anchors     -- enriched commit history");
+    println!("    oobo search <q>  -- find any past session");
     println!();
     Ok(())
 }

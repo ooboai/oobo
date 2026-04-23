@@ -5,11 +5,6 @@ use crate::paths;
 
 const SKILL_MD: &str = include_str!("../../skills/core/SKILL.md");
 
-pub fn run() -> Result<(), String> {
-    println!("{SKILL_MD}");
-    Ok(())
-}
-
 fn oobo_skill_dir() -> PathBuf {
     paths::oobo_home().join("skills").join("oobo")
 }

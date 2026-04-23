@@ -1,8 +1,4 @@
-pub mod dash;
-pub mod projects;
-pub mod sessions;
 pub mod setup;
-pub mod stats;
 
 use std::io;
 use std::time::Duration;

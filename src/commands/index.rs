@@ -1,3 +1,13 @@
+//! Session indexing — library module.
+//!
+//! In v1.0 there is no user-facing `oobo index` or `oobo scan` command;
+//! indexing is automatic on every invocation via a cheap staleness check
+//! plus a detached background thread (see Phase 3.5 of the sharpening plan).
+//! A forced re-index is available via `oobo setup --reindex`.
+//!
+//! This module exposes library entry points used by hooks, the interceptor,
+//! the setup wizard, and other internal callers.
+
 use std::fs;
 
 use crate::analytics::{self, NativeStats};
@@ -6,242 +16,6 @@ use crate::db::Db;
 use crate::paths;
 use crate::session;
 use crate::tools::cursor::Session;
-
-pub fn run(
-    project: Option<String>,
-    force: bool,
-    bg: bool,
-    status: bool,
-    _mode: bool,
-) -> Result<(), String> {
-    if status {
-        return show_status();
-    }
-
-    if bg {
-        return spawn_background(project.as_deref(), force);
-    }
-
-    run_foreground(project, force)
-}
-
-fn run_foreground(project: Option<String>, force: bool) -> Result<(), String> {
-    let db = Db::open()?;
-
-    let (sessions, proj_name) = if force {
-        if let Some(ref proj) = project {
-            let project_id = find_project_id(&db, proj)?;
-            eprintln!("force re-indexing project: {proj}");
-            (
-                db.list_sessions_by_project(&project_id)?,
-                Some(proj.clone()),
-            )
-        } else {
-            eprintln!("force re-indexing all sessions...");
-            (db.list_all_sessions()?, None)
-        }
-    } else if let Some(ref proj) = project {
-        let project_id = find_project_id(&db, proj)?;
-        let sessions = db.list_unindexed_sessions_by_project(&project_id)?;
-        if sessions.is_empty() {
-            eprintln!("all sessions up to date for project: {proj}");
-            return Ok(());
-        }
-        eprintln!(
-            "indexing {} new sessions for project: {proj}",
-            sessions.len()
-        );
-        (sessions, Some(proj.clone()))
-    } else {
-        let sessions = db.list_unindexed_sessions()?;
-        if sessions.is_empty() {
-            eprintln!("all sessions up to date (0 new)");
-            return Ok(());
-        }
-        eprintln!("indexing {} new sessions...", sessions.len());
-        (sessions, None)
-    };
-
-    if sessions.is_empty() {
-        eprintln!("no sessions found — run `oobo scan` first");
-        return Ok(());
-    }
-
-    write_status_file("running", 0, sessions.len(), "");
-
-    let result = if let Some(ref name) = proj_name {
-        index_sessions_for_project(&db, &sessions, force, true, name)
-    } else {
-        index_sessions(&db, &sessions, force, true)
-    };
-
-    // Only run expensive git/API operations when something was actually indexed (or forced)
-    let run_extras = result.indexed > 0 || force;
-
-    let ai_msg = if run_extras {
-        match crate::tools::cursor::ai_tracking::ingest_scored_commits(&db, force) {
-            Ok((ingested, skipped)) => {
-                if ingested > 0 || skipped > 0 {
-                    let m = format!("{ingested} commits ingested, {skipped} skipped");
-                    eprintln!("cursor ai-tracking: {m}");
-                    m
-                } else {
-                    String::new()
-                }
-            }
-            Err(e) => {
-                eprintln!("cursor ai-tracking: {e}");
-                String::new()
-            }
-        }
-    } else {
-        String::new()
-    };
-
-    let attr_msg = if run_extras {
-        match crate::analytics::attribution::run_attribution(&db, force) {
-            Ok((attributed, skipped)) => {
-                if attributed > 0 || skipped > 0 {
-                    let m = format!("{attributed} AI-correlated, {skipped} human/skipped");
-                    eprintln!("git attribution: {m}");
-                    m
-                } else {
-                    String::new()
-                }
-            }
-            Err(e) => {
-                eprintln!("git attribution: {e}");
-                String::new()
-            }
-        }
-    } else {
-        String::new()
-    };
-
-    let git_msg = if run_extras {
-        match crate::analytics::git_activity::ingest_git_activity(&db, force) {
-            Ok((ingested, skipped)) => {
-                if ingested > 0 || skipped > 0 {
-                    let m = format!("{ingested} days ingested, {skipped} skipped");
-                    eprintln!("git activity: {m}");
-                    m
-                } else {
-                    String::new()
-                }
-            }
-            Err(e) => {
-                eprintln!("git activity: {e}");
-                String::new()
-            }
-        }
-    } else {
-        String::new()
-    };
-
-    let mut msg = if result.failed > 0 {
-        format!(
-            "{} indexed, {} failed (of {} total)",
-            result.indexed, result.failed, result.total
-        )
-    } else {
-        format!("{} indexed (of {} total)", result.indexed, result.total)
-    };
-    if !ai_msg.is_empty() {
-        msg.push_str(&format!(" | ai-tracking: {ai_msg}"));
-    }
-    if !attr_msg.is_empty() {
-        msg.push_str(&format!(" | attribution: {attr_msg}"));
-    }
-    if !git_msg.is_empty() {
-        msg.push_str(&format!(" | git: {git_msg}"));
-    }
-    eprintln!("done: {msg}");
-
-    write_status_file("done", result.indexed + result.failed, result.total, &msg);
-
-    Ok(())
-}
-
-fn spawn_background(project: Option<&str>, force: bool) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| format!("cannot find self: {e}"))?;
-
-    let mut args = vec!["index".to_string()];
-    if let Some(p) = project {
-        args.push("--project".to_string());
-        args.push(p.to_string());
-    }
-    if force {
-        args.push("--force".to_string());
-    }
-
-    // Use `nice` on Unix to run at low priority so indexing doesn't hog the CPU
-    #[cfg(unix)]
-    let child = std::process::Command::new("nice")
-        .args(["-n", "15"])
-        .arg(&exe)
-        .args(&args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("cannot spawn background index: {e}"))?;
-
-    #[cfg(not(unix))]
-    let child = std::process::Command::new(&exe)
-        .args(&args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("cannot spawn background index: {e}"))?;
-
-    let pid = child.id();
-    write_status_file("running", 0, 0, &format!("pid:{pid}"));
-
-    eprintln!("indexing started in background (pid {pid})");
-    eprintln!("run `oobo index --status` to check progress");
-
-    Ok(())
-}
-
-fn show_status() -> Result<(), String> {
-    let path = status_file_path();
-    if !path.exists() {
-        eprintln!("no indexing in progress");
-        return Ok(());
-    }
-
-    let content = fs::read_to_string(&path).unwrap_or_default();
-    let lines: Vec<&str> = content.lines().collect();
-
-    let state = lines.first().copied().unwrap_or("unknown");
-    let progress = lines.get(1).copied().unwrap_or("");
-    let message = lines.get(2).copied().unwrap_or("");
-
-    match state {
-        "running" => {
-            if let Some(pid_str) = message.strip_prefix("pid:") {
-                let pid: u32 = pid_str.parse().unwrap_or(0);
-                if pid > 0 && is_process_alive(pid) {
-                    eprintln!("indexing in progress (pid {pid}) — {progress}");
-                } else {
-                    eprintln!("background indexer is no longer running (stale status)");
-                    let _ = fs::remove_file(&path);
-                }
-            } else {
-                eprintln!("indexing in progress — {progress}");
-            }
-        }
-        "done" => {
-            eprintln!("last index completed: {message}");
-        }
-        _ => {
-            eprintln!("index status: {state}");
-        }
-    }
-
-    Ok(())
-}
 
 fn status_file_path() -> std::path::PathBuf {
     paths::oobo_db_dir().join("index.status")
@@ -314,17 +88,6 @@ fn build_notification(
 
 fn send_notification(title: &str, message: &str) {
     crate::notify::send(title, message);
-}
-
-fn is_process_alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        unsafe { libc::kill(pid as i32, 0) == 0 }
-    }
-    #[cfg(not(unix))]
-    {
-        false
-    }
 }
 
 pub struct IndexResult {
@@ -559,7 +322,7 @@ pub fn find_project_id(db: &Db, name: &str) -> Result<String, String> {
         }
     }
     Err(format!(
-        "project not found: {name}\nrun `oobo scan` to discover projects"
+        "project not found: {name}\nrun `oobo setup --reindex` to discover projects"
     ))
 }
 
