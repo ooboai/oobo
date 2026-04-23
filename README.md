@@ -209,18 +209,6 @@ oobo projects                    # interactive TUI for all tracked projects
 oobo projects show myapp         # details + sessions for a project
 ```
 
-### Developer card
-
-```bash
-oobo card                        # generate your developer stats card (PNG)
-oobo card --format svg           # SVG output
-oobo card --out dev.png          # save to a custom path
-```
-
-<div align="center">
-<img src=".github/oobo-card.png" alt="oobo developer card" width="600" />
-</div>
-
 ### Sharing & exporting
 
 ```bash

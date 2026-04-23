@@ -47,7 +47,6 @@ impl OutputMode {
   setup        First-time configuration wizard
   projects     Browse and manage all projects
   stats        Token usage analytics and attribution
-  card         AI development infographic
   scan         Discover projects and sessions
   index        Compute token analytics
   sources      Data source status and coverage
@@ -248,26 +247,6 @@ pub enum Command {
         /// Show stats since this date or duration (e.g. 7d, 30d, 2026-02-01)
         #[arg(long)]
         since: Option<String>,
-    },
-
-    /// AI development infographic (shareable, no private data)
-    #[command(
-        display_order = 13,
-        after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       oobo card                       Generate SVG infographic\n  \
-                       oobo card --out dev.svg         Save to custom path\n  \
-                       oobo card --format md            Markdown output\n  \
-                       oobo card --format json          JSON output\n  \
-                       oobo card --agent                Compact output\n  \
-                       oobo card --json                 Full JSON output"
-    )]
-    Card {
-        /// Save to a custom file path (default: oobo-card.png)
-        #[arg(long)]
-        out: Option<String>,
-        /// Output format: png (default), svg, md, json
-        #[arg(long, default_value = "png", value_parser = ["png", "svg", "md", "json"])]
-        format: String,
     },
 
     /// Discover projects and sessions across all AI tools
@@ -550,7 +529,6 @@ const OOBO_SUBCOMMANDS: &[&str] = &[
     "ignore",
     "unignore",
     "transparency",
-    "card",
 ];
 
 fn is_oobo_subcommand(args: &[String]) -> bool {
@@ -728,10 +706,6 @@ pub fn route(mut cfg: Config) -> Result<i32, String> {
             } else {
                 crate::commands::transparency::run(&cfg, mode.as_deref())?;
             }
-            Ok(0)
-        }
-        Some(Command::Card { out, format }) => {
-            crate::commands::card::run(mode, out, &format)?;
             Ok(0)
         }
         Some(Command::Version) => {

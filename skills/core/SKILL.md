@@ -1,6 +1,6 @@
 ---
 name: oobo
-description: Git decorator that gives every commit memory — links AI sessions, tokens, and code attribution to your commits. Use when the user asks about commit history with AI context, session history, code attribution, token usage, or generating a developer card.
+description: Git decorator that gives every commit memory — links AI sessions, tokens, and code attribution to your commits. Use when the user asks about commit history with AI context, session history, code attribution, or token usage.
 metadata:
   author: oobo
   version: "0.1.15"
@@ -38,7 +38,6 @@ All commands support `--agent` (compact, low-token) and `--json` (full structure
 | Project overview | `oobo projects` |
 | Global stats | `oobo stats` |
 | Stats by project or tool | `oobo stats --project <name>` |
-| Developer card | `oobo card` |
 | Share a session | `oobo share <id>` |
 | Diagnostics / auto-fix | `oobo inspect --fix` |
 | Sync status | `oobo sync` |

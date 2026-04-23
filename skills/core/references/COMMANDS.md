@@ -50,15 +50,6 @@ oobo stats --tool cursor --agent                   # Per-tool
 oobo stats --since 7d --agent                      # Time-scoped
 ```
 
-## AI Development Infographic
-
-```bash
-oobo card --agent                                  # Stats summary (compact)
-oobo card --json                                   # Full JSON card data
-oobo card --out card.svg                           # Save SVG infographic to custom path
-oobo card --format md --out card.md                # Save markdown card
-```
-
 ## Data Sources
 
 ```bash
