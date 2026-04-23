@@ -921,6 +921,33 @@ fn migrate_v12(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|e| format!("migration v12 (subagent_inferences): {e}"))?;
 
+    // oobo_state: tiny key/value table for cross-run flags that
+    // don't belong in user settings (e.g. "backfill pending after
+    // schema bump"). Keeping it separate from `project_settings`
+    // means ephemeral operational state stays out of user-visible
+    // config.
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS oobo_state (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        ",
+    )
+    .map_err(|e| format!("migration v12 (oobo_state): {e}"))?;
+
+    // Mark that a full backfill is required. Any run at v12+ that
+    // sees this flag will rebuild turns + contributions from the
+    // native tool artifacts and clear the flag on success. This is
+    // how we replace the old `oobo _rebuild` command: the upgrade
+    // itself arms the trigger, and the very next invocation does
+    // the work — once.
+    conn.execute(
+        "INSERT OR REPLACE INTO oobo_state (key, value) VALUES ('backfill_pending', '1')",
+        [],
+    )
+    .map_err(|e| format!("migration v12 (arm backfill flag): {e}"))?;
+
     Ok(())
 }
 

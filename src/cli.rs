@@ -268,13 +268,6 @@ pub enum Command {
         action: HookAction,
     },
 
-    /// Internal: rebuild v11 turns + contributions from native tool transcripts
-    #[command(name = "_rebuild", hide = true)]
-    Rebuild {
-        /// Rebuild all known projects (default: current project only)
-        #[arg(long)]
-        all: bool,
-    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -312,7 +305,7 @@ pub enum HookAction {
 /// Reserved oobo verbs. Anything else at argv[1] is forwarded to `git` (passthrough).
 const OOBO_SUBCOMMANDS: &[&str] = &[
     "anchors", "a", "blame", "search", "settings", "enable", "disable", "setup", "alias", "update",
-    "hooks", "_rebuild",
+    "hooks",
 ];
 
 /// Re-parse the CLI with a synthetic argv and dispatch. Used by the legacy
@@ -663,10 +656,6 @@ fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, Strin
                 }
             }
             Ok(0)
-        }
-        Some(Command::Rebuild { all }) => {
-            let code = crate::commands::rebuild::run(&cfg, all, mode)?;
-            Ok(code)
         }
         None => {
             // Truly bare `oobo` (no trailing tokens) → four-quadrant view.

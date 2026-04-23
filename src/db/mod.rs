@@ -66,6 +66,42 @@ impl Db {
         Ok(())
     }
 
+    /// Read a value from `oobo_state`. Returns `None` when the key
+    /// is absent or the table doesn't exist yet (pre-v12 DBs).
+    pub fn state_get(&self, key: &str) -> Option<String> {
+        self.conn
+            .query_row(
+                "SELECT value FROM oobo_state WHERE key = ?1",
+                rusqlite::params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+    }
+
+    /// Set a value in `oobo_state`. Silent no-op if the table is
+    /// missing (shouldn't happen once migrations run, but keeps
+    /// callers from panicking on partially-initialised DBs).
+    pub fn state_set(&self, key: &str, value: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO oobo_state (key, value) VALUES (?1, ?2)",
+                rusqlite::params![key, value],
+            )
+            .map(|_| ())
+            .map_err(|e| format!("state_set {key}: {e}"))
+    }
+
+    /// Remove a key from `oobo_state`.
+    pub fn state_clear(&self, key: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "DELETE FROM oobo_state WHERE key = ?1",
+                rusqlite::params![key],
+            )
+            .map(|_| ())
+            .map_err(|e| format!("state_clear {key}: {e}"))
+    }
+
     /// Check if this project has been hydrated recently (within `max_age_secs`).
     pub fn needs_hydration(&self, project_root: &str, max_age_secs: i64) -> bool {
         let result: Option<i64> = self

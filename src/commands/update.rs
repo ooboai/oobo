@@ -48,9 +48,39 @@ pub fn run_post_update() -> Result<(), String> {
         Err(e) => eprintln!("  skill file: {e}"),
     }
 
-    match crate::db::Db::open() {
-        Ok(_) => eprintln!("  database migrations applied"),
-        Err(e) => eprintln!("  database: {e}"),
+    let cfg = crate::config::Config::load_or_default();
+
+    // Open & migrate DB. This applies schema bumps and arms the
+    // `backfill_pending` flag when crossing v11→v12.
+    let mut db = match crate::db::Db::open() {
+        Ok(db) => {
+            eprintln!("  database migrations applied");
+            db
+        }
+        Err(e) => {
+            eprintln!("  database: {e}");
+            return Ok(());
+        }
+    };
+
+    // Always run a full backfill after an update. Post-update is a
+    // rare, user-triggered event; doing the rebuild unconditionally
+    // means new token-accounting and inference logic in the fresh
+    // binary take effect immediately, and the `backfill_pending`
+    // flag is guaranteed to be clear.
+    let report = crate::attribution::auto_backfill::backfill_force_all(&mut db, &cfg);
+    eprintln!(
+        "  backfill: {}/{} projects, {} sessions, {} turns, {} contributions, {} subagents ({} proposed)",
+        report.projects_succeeded,
+        report.projects_attempted,
+        report.sessions_scanned,
+        report.turns_emitted,
+        report.contributions_written,
+        report.subagents_inferred,
+        report.subagents_proposed,
+    );
+    for (pid, err) in &report.failures {
+        eprintln!("  backfill failed: {pid}: {err}");
     }
 
     let hooks = crate::hooks::install::install_all_agent_hooks();

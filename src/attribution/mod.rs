@@ -42,6 +42,7 @@
 //!   `is_subagent` / `parent_session_id` from the `sessions` table;
 //!   that's M4's job.
 
+pub mod auto_backfill;
 pub mod inference;
 pub mod inference_runner;
 
