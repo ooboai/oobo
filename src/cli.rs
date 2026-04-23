@@ -185,7 +185,16 @@ pub enum Command {
     Disable {},
 
     /// Onboarding + repair wizard (projects, hooks, keys, alias)
-    #[command(display_order = 10)]
+    #[command(
+        display_order = 10,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo setup                        Interactive wizard\n  \
+                       oobo setup --non-interactive      CI-safe: accept defaults\n  \
+                       oobo setup --reindex              Force full reindex\n  \
+                       oobo setup --repair               Re-install hooks + verify\n  \
+                       oobo setup --uninstall-alias      Remove the shell alias\n  \
+                       oobo setup --repair --reindex     Composable"
+    )]
     Setup {
         /// Accept defaults non-interactively (CI-safe)
         #[arg(long)]
@@ -196,6 +205,9 @@ pub enum Command {
         /// Remove the git→oobo shell alias
         #[arg(long)]
         uninstall_alias: bool,
+        /// Re-install hooks, re-detect tools, rebuild orphan branch if needed
+        #[arg(long)]
+        repair: bool,
     },
 
     /// Manage the git→oobo shell alias [install, uninstall]
@@ -421,9 +433,21 @@ pub fn route(cfg: Config) -> Result<i32, String> {
             let code = crate::commands::toggle::disable(&cfg, mode)?;
             Ok(code)
         }
-        Some(Command::Setup { .. }) => {
-            crate::setup::run_setup().map_err(|e| e.to_string())?;
-            Ok(0)
+        Some(Command::Setup {
+            non_interactive,
+            reindex,
+            uninstall_alias,
+            repair,
+        }) => {
+            let opts = crate::setup::SetupOptions {
+                non_interactive,
+                reindex,
+                uninstall_alias,
+                repair,
+                mode,
+            };
+            let code = crate::setup::run_setup_with(opts).map_err(|e| e.to_string())?;
+            Ok(code)
         }
         Some(Command::Alias { action }) => {
             crate::alias::run(action)?;

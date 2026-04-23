@@ -1,7 +1,217 @@
 use std::io::IsTerminal;
 
+use crate::cli::OutputMode;
 use crate::config::Config;
 use crate::tui::setup::ScanInfo;
+
+pub struct SetupOptions {
+    pub non_interactive: bool,
+    pub reindex: bool,
+    pub uninstall_alias: bool,
+    pub repair: bool,
+    pub mode: OutputMode,
+}
+
+/// Top-level dispatcher for `oobo setup [flags]`. Flags are composable.
+pub fn run_setup_with(opts: SetupOptions) -> Result<i32, String> {
+    // `--uninstall-alias` is headless. If combined with other flags we still
+    // run those; but on its own it should short-circuit like `oobo alias uninstall`.
+    if opts.uninstall_alias && !opts.repair && !opts.reindex && !opts.non_interactive_wizard() {
+        crate::alias::uninstall_alias()?;
+        return Ok(0);
+    }
+
+    let mut exit_code = 0;
+
+    if opts.repair {
+        if let Err(e) = run_repair(&opts) {
+            eprintln!("oobo: error: repair failed: {e}");
+            exit_code = 1;
+        }
+    }
+
+    if opts.reindex {
+        match run_reindex(&opts) {
+            Ok(code) if code != 0 => exit_code = code,
+            Err(e) => {
+                eprintln!("oobo: error: reindex failed: {e}");
+                exit_code = 1;
+            }
+            _ => {}
+        }
+    }
+
+    if opts.uninstall_alias {
+        if let Err(e) = crate::alias::uninstall_alias() {
+            eprintln!("oobo: warning: could not uninstall alias: {e}");
+        }
+    }
+
+    // Run the wizard only when no composable flag was supplied, or when the
+    // user explicitly asked for `--non-interactive` without anything else.
+    if !opts.repair && !opts.reindex && !opts.uninstall_alias {
+        run_setup()?;
+    }
+
+    Ok(exit_code)
+}
+
+impl SetupOptions {
+    fn non_interactive_wizard(&self) -> bool {
+        self.non_interactive
+    }
+}
+
+// ── Repair path ────────────────────────────────────────────────────────────
+
+fn run_repair(opts: &SetupOptions) -> Result<(), String> {
+    let cfg = Config::load_or_default();
+    let db = crate::db::Db::open()?;
+    let projects = db.list_projects().unwrap_or_default();
+    let mut healthy = 0usize;
+
+    let mode = opts.mode;
+    if matches!(mode, OutputMode::Tui) {
+        println!("repairing {} projects...", projects.len());
+    }
+
+    for p in &projects {
+        let settings = db.get_project_settings(&p.id).unwrap_or_default();
+        if settings.ignored {
+            continue;
+        }
+
+        let hooks_result = crate::hooks::install::install_project_hooks(&p.path);
+        let hooks_status = match &hooks_result {
+            Ok(_) => "ok",
+            Err(_) => "failed",
+        };
+
+        // Orphan branch check is best-effort.
+        let orphan_status = if crate::git::orphan::branch_exists(&p.path) {
+            "ok"
+        } else {
+            // Try to recreate if non-interactive OR non-TTY.
+            if opts.non_interactive || !std::io::stdout().is_terminal() {
+                match crate::git::orphan::fetch_and_reconcile(&p.path) {
+                    Ok(_) => "rebuilt",
+                    Err(_) => "missing",
+                }
+            } else {
+                "missing (run again with --non-interactive to rebuild)"
+            }
+        };
+
+        match mode {
+            OutputMode::Agent => {
+                println!("repair {} hooks={} orphan={}", p.name, hooks_status, orphan_status);
+            }
+            OutputMode::Json => {
+                let json = serde_json::json!({
+                    "project": { "id": p.id, "name": p.name, "path": p.path },
+                    "hooks": hooks_status,
+                    "orphan": orphan_status,
+                });
+                crate::utils::print_json(&json);
+            }
+            OutputMode::Tui => {
+                println!(
+                    "  {:<20} hooks {} · orphan {}",
+                    p.name, hooks_status, orphan_status
+                );
+            }
+        }
+
+        if matches!(hooks_status, "ok") && matches!(orphan_status, "ok" | "rebuilt") {
+            healthy += 1;
+        }
+    }
+
+    let _ = cfg;
+    if matches!(mode, OutputMode::Tui) {
+        println!();
+        println!("{} projects healthy.", healthy);
+    }
+    Ok(())
+}
+
+// ── Reindex path ───────────────────────────────────────────────────────────
+
+fn run_reindex(opts: &SetupOptions) -> Result<i32, String> {
+    let cfg = Config::load_or_default();
+    let db = crate::db::Db::open()?;
+    let projects = db.list_projects().unwrap_or_default();
+    let mode = opts.mode;
+
+    if projects.is_empty() {
+        if matches!(mode, OutputMode::Tui) {
+            println!("no projects to reindex. run `oobo setup` first.");
+        }
+        return Ok(0);
+    }
+
+    if matches!(mode, OutputMode::Tui) {
+        println!("reindexing {} projects...", projects.len());
+    }
+
+    let mut failures = 0usize;
+    for p in &projects {
+        let settings = db.get_project_settings(&p.id).unwrap_or_default();
+        if settings.ignored {
+            eprintln!("oobo: skipping disabled project '{}'", p.name);
+            continue;
+        }
+        let start = std::time::Instant::now();
+        let result = crate::scanner::scan_project(&db, &cfg, &p.path);
+        let elapsed = start.elapsed();
+
+        match (&result, mode) {
+            (Ok(r), OutputMode::Agent) => {
+                println!(
+                    "reindex {} {} {}ms ok",
+                    p.name,
+                    r.sessions_found,
+                    elapsed.as_millis()
+                );
+            }
+            (Ok(r), OutputMode::Json) => {
+                let json = serde_json::json!({
+                    "project": { "id": p.id, "name": p.name },
+                    "sessions": r.sessions_found,
+                    "elapsed_ms": elapsed.as_millis(),
+                    "status": "ok",
+                });
+                crate::utils::print_json(&json);
+            }
+            (Ok(r), OutputMode::Tui) => {
+                println!(
+                    "  ✓ {:<20} {} sessions  {:.1}s",
+                    p.name,
+                    r.sessions_found,
+                    elapsed.as_secs_f64()
+                );
+            }
+            (Err(e), _) => {
+                failures += 1;
+                eprintln!("  ✗ {}: {}", p.name, e);
+            }
+        }
+    }
+
+    if matches!(mode, OutputMode::Tui) {
+        println!();
+        println!(
+            "done. {} projects reindexed ({} failures).",
+            projects.len() - failures,
+            failures
+        );
+    }
+    if failures > 0 {
+        Ok(1)
+    } else {
+        Ok(0)
+    }
+}
 
 pub fn run_setup() -> Result<(), String> {
     if let Err(e) = crate::commands::agent::ensure_skill_file() {
