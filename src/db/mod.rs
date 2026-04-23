@@ -5,6 +5,7 @@ pub mod otel;
 pub mod projects;
 pub mod sessions;
 pub mod stats;
+pub mod turns;
 
 use rusqlite::Connection;
 
