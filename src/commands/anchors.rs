@@ -64,12 +64,7 @@ pub fn run_list(cfg: &Config, opts: Options, mode: OutputMode) -> Result<i32, St
                         }
                         OutputMode::Agent => println!("disabled"),
                         OutputMode::Json => {
-                            let j = serde_json::json!({
-                                "project": { "id": pid, "enabled": false },
-                                "stats": { "anchors": 0, "tokens": 0, "ai_pct": 0 },
-                                "anchors": []
-                            });
-                            crate::utils::print_json(&j);
+                            crate::utils::print_json(&serde_json::Value::Array(vec![]));
                         }
                     }
                     return Ok(0);
@@ -79,7 +74,7 @@ pub fn run_list(cfg: &Config, opts: Options, mode: OutputMode) -> Result<i32, St
     }
 
     match mode {
-        OutputMode::Json => emit_list_json(cfg, &db, &rows),
+        OutputMode::Json => emit_list_json(cfg, &db, &rows, in_repo),
         OutputMode::Agent => emit_list_agent(&rows, in_repo),
         OutputMode::Tui => emit_list_pretty(&rows, in_repo),
     }
@@ -486,46 +481,12 @@ fn emit_list_pretty(rows: &[Row], in_repo: bool) {
     }
 }
 
-fn emit_list_json(cfg: &Config, db: &Db, rows: &[Row]) {
-    let project_obj = crate::git::proxy::project_root(cfg).and_then(|root| {
-        let pid = project_id_from_root(db, &root).ok()?;
-        let name = std::path::Path::new(&root)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        let s = db.get_project_settings(&pid).unwrap_or_default();
-        let remote: Option<String> = db
-            .conn
-            .query_row(
-                "SELECT git_remote FROM projects WHERE id = ?1",
-                [&pid],
-                |r| r.get::<_, Option<String>>(0),
-            )
-            .ok()
-            .flatten();
-        Some(serde_json::json!({
-            "id": pid,
-            "name": name,
-            "path": root,
-            "remote": remote,
-            "enabled": !s.ignored,
-        }))
-    });
-
-    let total_tokens: i64 = rows.iter().map(|r| r.tokens).sum();
-    let stats = serde_json::json!({
-        "anchors": rows.len(),
-        "tokens": total_tokens,
-        "ai_pct": 0,
-    });
-
+fn emit_list_json(_cfg: &Config, _db: &Db, rows: &[Row], in_repo: bool) {
     let arr: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
-            serde_json::json!({
+            let mut obj = serde_json::json!({
                 "sha": r.sha,
-                "project": r.project_name,
                 "timestamp": chrono::DateTime::from_timestamp(r.timestamp, 0)
                     .map(|t| t.to_rfc3339())
                     .unwrap_or_default(),
@@ -534,16 +495,15 @@ fn emit_list_json(cfg: &Config, db: &Db, rows: &[Row]) {
                 "tokens": { "total": r.tokens },
                 "sessions_count": r.session_count,
                 "ai_pct": r.ai_pct,
-            })
+            });
+            // `project` is only meaningful in cross-project listings.
+            if !in_repo {
+                obj["project"] = serde_json::Value::String(r.project_name.clone());
+            }
+            obj
         })
         .collect();
-
-    let json = serde_json::json!({
-        "project": project_obj,
-        "stats": stats,
-        "anchors": arr,
-    });
-    crate::utils::print_json(&json);
+    crate::utils::print_json(&serde_json::Value::Array(arr));
 }
 
 // ------------------------------------------------------------------

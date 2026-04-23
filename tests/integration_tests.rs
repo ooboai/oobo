@@ -591,9 +591,8 @@ fn test_e2e_commit_creates_anchor() {
     let stdout = String::from_utf8_lossy(&log_output.stdout);
     assert!(log_output.status.success(), "oobo anchors --json failed");
 
-    let doc: serde_json::Value =
-        serde_json::from_str(&stdout).expect("oobo anchors --json should return valid JSON");
-    let entries = doc["anchors"].as_array().expect("anchors array");
+    let entries: Vec<serde_json::Value> =
+        serde_json::from_str(&stdout).expect("oobo anchors --json should return valid JSON array");
 
     assert_eq!(entries.len(), 1, "should have exactly 1 commit");
     assert_eq!(entries[0]["subject"], "initial commit");
