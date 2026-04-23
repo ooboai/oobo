@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use std::path::Path;
 
-const LATEST_VERSION: i32 = 10;
+const LATEST_VERSION: i32 = 11;
 
 pub fn run(conn: &Connection) -> Result<(), String> {
     run_with_path(conn, None)
@@ -58,6 +58,9 @@ pub fn run_with_path(conn: &Connection, db_path: Option<&Path>) -> Result<(), St
     }
     if current < 10 {
         migrate_v10(conn)?;
+    }
+    if current < 11 {
+        migrate_v11(conn)?;
     }
 
     set_version(conn, LATEST_VERSION)?;
@@ -615,6 +618,265 @@ fn migrate_v10(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+/// v11: turn-level capture + delta-based anchor contributions.
+///
+/// This is the big structural shift that turns oobo from a
+/// "session-per-commit snapshot" store into a first-principles
+/// "anchor = commit + work done since last anchor" store.
+///
+/// ### What changes conceptually
+///
+/// - `turns` is the new atomic unit of capture. Every assistant reply,
+///   with its **per-call** token counts exactly as the model billed,
+///   lives here. No cumulative sums anywhere in storage.
+/// - `sessions` gains `parent_session_id` / `parent_source` /
+///   `parent_turn_id` / `subagent_kind` so subagents are first-class
+///   children of their spawning turn.
+/// - `anchor_contributions` replaces the intent of `anchor_sessions`:
+///   one row per (commit, session) storing the **window of turns**
+///   `[first_turn_index, last_turn_index]` that produced the commit,
+///   with denormalized deltas. Never cumulative.
+/// - `anchor_contribution_files` records per-(commit, session) file
+///   attributions so we can answer "which session wrote which file".
+/// - Views `v_turn_spend`, `v_session_totals`, `v_anchor_totals`,
+///   `v_project_totals` expose the one canonical definition of
+///   "tokens" that every reader must go through.
+///
+/// ### What does NOT change
+///
+/// - `anchors` (shape + orphan-branch semantics)
+/// - `anchor_sessions` and `actions` / `action_sessions` remain in place
+///   for one release as legacy readers; they are not written to anymore
+///   once the L3 attribution path lands. v12 will drop them.
+/// - `projects`, `ai_commits`, `events`, `hook_sessions`, all other
+///   runtime/analytics tables.
+///
+/// ### Why additive (not destructive)
+///
+/// Rollback is trivial: flipping the LATEST_VERSION back and dropping
+/// the new objects restores the prior behaviour completely. The
+/// attribution switchover happens in later commits; this migration is
+/// schema-only so it's safe to ship in isolation.
+fn migrate_v11(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "
+        ---------------------------------------------------------------
+        -- turns: atomic unit of LLM capture. One row per model call.
+        ---------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS turns (
+            id                      TEXT PRIMARY KEY,
+            session_id              TEXT NOT NULL,
+            source                  TEXT NOT NULL,
+            turn_index              INTEGER NOT NULL,
+            role                    TEXT,     -- user | assistant | tool | system
+            started_at              INTEGER,
+            ended_at                INTEGER,
+            model                   TEXT,
+            -- Per-call token deltas (exactly as the model API reports them).
+            input_tokens            INTEGER,  -- non-cached prompt tokens THIS call
+            cache_read_tokens       INTEGER,  -- cached prompt tokens read THIS call
+            cache_creation_tokens   INTEGER,  -- tokens written to cache THIS call
+            output_tokens           INTEGER,  -- generated tokens THIS call
+            cost_usd                REAL,     -- computed from model pricing
+            tool_call_count         INTEGER DEFAULT 0,
+            thinking_ms             INTEGER,
+            message_preview         TEXT,     -- redacted snippet for search/UI
+            raw_ref                 TEXT,     -- pointer back to source artifact
+            ingested_at             INTEGER NOT NULL,
+            UNIQUE (session_id, source, turn_index)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_turns_session
+            ON turns(session_id, source, turn_index);
+        CREATE INDEX IF NOT EXISTS idx_turns_started
+            ON turns(started_at);
+        CREATE INDEX IF NOT EXISTS idx_turns_ended
+            ON turns(ended_at);
+
+        ---------------------------------------------------------------
+        -- anchor_contributions: one row per (commit, session), storing
+        -- the DELTA of work done between the previous anchor for this
+        -- session and this commit. Never cumulative.
+        ---------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS anchor_contributions (
+            commit_hash            TEXT NOT NULL REFERENCES anchors(commit_hash),
+            session_id             TEXT NOT NULL,
+            source                 TEXT NOT NULL,
+            link_type              TEXT NOT NULL DEFAULT 'inferred',
+            -- [first_turn_index, last_turn_index] inclusive: the window
+            -- of session turns that contributed to this commit.
+            first_turn_index       INTEGER NOT NULL,
+            last_turn_index        INTEGER NOT NULL,
+            -- Denormalized totals across [first, last]. Always deltas.
+            input_tokens           INTEGER,
+            cache_read_tokens      INTEGER,
+            cache_creation_tokens  INTEGER,
+            output_tokens          INTEGER,
+            cost_usd               REAL,
+            tool_call_count        INTEGER,
+            duration_secs          INTEGER,
+            is_subagent            INTEGER NOT NULL DEFAULT 0,
+            parent_session_id      TEXT,
+            parent_source          TEXT,
+            subagent_kind          TEXT,
+            PRIMARY KEY (commit_hash, session_id, source)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_contributions_session
+            ON anchor_contributions(session_id, source);
+        CREATE INDEX IF NOT EXISTS idx_contributions_parent
+            ON anchor_contributions(parent_session_id, parent_source);
+
+        ---------------------------------------------------------------
+        -- anchor_contribution_files: per-(commit, session) file-level
+        -- attribution. Lets the TUI answer 'which session wrote which
+        -- file in this commit'.
+        ---------------------------------------------------------------
+        CREATE TABLE IF NOT EXISTS anchor_contribution_files (
+            commit_hash   TEXT NOT NULL,
+            session_id    TEXT NOT NULL,
+            source        TEXT NOT NULL,
+            path          TEXT NOT NULL,
+            lines_added   INTEGER DEFAULT 0,
+            lines_deleted INTEGER DEFAULT 0,
+            PRIMARY KEY (commit_hash, session_id, source, path)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_contrib_files_commit
+            ON anchor_contribution_files(commit_hash);
+        ",
+    )
+    .map_err(|e| format!("migration v11 (new tables): {e}"))?;
+
+    // Add subagent hierarchy columns to `sessions`. SQLite cannot add a
+    // column "IF NOT EXISTS"; do a feature-test via PRAGMA for idempotency.
+    for (col, def) in [
+        ("parent_session_id", "TEXT"),
+        ("parent_source",     "TEXT"),
+        ("parent_turn_id",    "TEXT"),
+        ("subagent_kind",     "TEXT"),
+    ] {
+        if !column_exists(conn, "sessions", col)? {
+            conn.execute_batch(&format!(
+                "ALTER TABLE sessions ADD COLUMN {col} {def};"
+            ))
+            .map_err(|e| format!("migration v11 (alter sessions.{col}): {e}"))?;
+        }
+    }
+
+    conn.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_sessions_parent
+            ON sessions(parent_session_id, parent_source);
+
+        ---------------------------------------------------------------
+        -- CANONICAL VIEWS: the ONLY legitimate source of 'how many
+        -- tokens'. Every reader must go through these. Writing raw
+        -- SUM() aggregations elsewhere in the codebase is a lint bug.
+        ---------------------------------------------------------------
+
+        -- Per-turn billed tokens: exactly what the API charged for
+        -- this single call (no sliding cumulative).
+        DROP VIEW IF EXISTS v_turn_spend;
+        CREATE VIEW v_turn_spend AS
+        SELECT
+            t.id,
+            t.session_id,
+            t.source,
+            t.turn_index,
+            t.model,
+            t.role,
+            t.started_at,
+            t.ended_at,
+            COALESCE(t.input_tokens,          0)
+              + COALESCE(t.cache_read_tokens,    0)
+              + COALESCE(t.cache_creation_tokens, 0)
+              + COALESCE(t.output_tokens,        0)  AS billed_tokens,
+            -- 'New work' = output + cache_creation (novel content produced).
+            COALESCE(t.output_tokens,        0)
+              + COALESCE(t.cache_creation_tokens, 0) AS new_work_tokens,
+            -- 'Context' = input + cache_read (size of conversation this call).
+            COALESCE(t.input_tokens,       0)
+              + COALESCE(t.cache_read_tokens, 0)     AS context_tokens,
+            t.cost_usd,
+            t.tool_call_count
+        FROM turns t;
+
+        DROP VIEW IF EXISTS v_session_totals;
+        CREATE VIEW v_session_totals AS
+        SELECT
+            vs.session_id,
+            vs.source,
+            COUNT(*)                      AS turns,
+            SUM(vs.billed_tokens)         AS billed_tokens,
+            SUM(vs.new_work_tokens)       AS new_work_tokens,
+            MAX(vs.context_tokens)        AS max_context_tokens,
+            SUM(COALESCE(vs.cost_usd, 0)) AS cost_usd,
+            SUM(COALESCE(vs.tool_call_count, 0)) AS tool_calls,
+            MIN(vs.started_at)            AS first_turn_at,
+            MAX(COALESCE(vs.ended_at, vs.started_at)) AS last_turn_at
+        FROM v_turn_spend vs
+        GROUP BY vs.session_id, vs.source;
+
+        DROP VIEW IF EXISTS v_anchor_totals;
+        CREATE VIEW v_anchor_totals AS
+        SELECT
+            ac.commit_hash,
+            COUNT(*)                                    AS contributing_sessions,
+            SUM(CASE WHEN ac.is_subagent = 0 THEN 1 ELSE 0 END) AS top_level_sessions,
+            SUM(CASE WHEN ac.is_subagent = 1 THEN 1 ELSE 0 END) AS subagents,
+            SUM(COALESCE(ac.input_tokens,0)
+              + COALESCE(ac.cache_read_tokens,0)
+              + COALESCE(ac.cache_creation_tokens,0)
+              + COALESCE(ac.output_tokens,0))           AS billed_tokens,
+            SUM(COALESCE(ac.output_tokens,0)
+              + COALESCE(ac.cache_creation_tokens,0))   AS new_work_tokens,
+            SUM(COALESCE(ac.cost_usd, 0))               AS cost_usd,
+            SUM(COALESCE(ac.tool_call_count, 0))        AS tool_calls,
+            SUM(COALESCE(ac.duration_secs, 0))          AS duration_secs
+        FROM anchor_contributions ac
+        GROUP BY ac.commit_hash;
+
+        DROP VIEW IF EXISTS v_project_totals;
+        CREATE VIEW v_project_totals AS
+        SELECT
+            s.project_id,
+            COUNT(DISTINCT s.id || '|' || s.source)   AS sessions,
+            COALESCE(SUM(vst.turns), 0)               AS turns,
+            COALESCE(SUM(vst.billed_tokens), 0)       AS billed_tokens,
+            COALESCE(SUM(vst.new_work_tokens), 0)     AS new_work_tokens,
+            COALESCE(SUM(vst.cost_usd), 0)            AS cost_usd,
+            COALESCE(MAX(vst.last_turn_at), 0)        AS last_turn_at
+        FROM sessions s
+        LEFT JOIN v_session_totals vst
+               ON vst.session_id = s.id AND vst.source = s.source
+        GROUP BY s.project_id;
+        ",
+    )
+    .map_err(|e| format!("migration v11 (views): {e}"))?;
+
+    Ok(())
+}
+
+/// True if `table` has a column named `col`. SQLite has no native
+/// `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`; this is the standard
+/// feature-test workaround via `PRAGMA table_info`.
+fn column_exists(conn: &Connection, table: &str, col: &str) -> Result<bool, String> {
+    let sql = format!("PRAGMA table_info({table})");
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("pragma {table}: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(1))
+        .map_err(|e| format!("pragma {table} iter: {e}"))?;
+    for name in rows.flatten() {
+        if name == col {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -794,5 +1056,152 @@ mod tests {
         assert!(indexes.contains(&"idx_sessions_updated".to_string()));
         assert!(indexes.contains(&"idx_events_timestamp".to_string()));
         assert!(indexes.contains(&"idx_session_stats_source".to_string()));
+    }
+
+    #[test]
+    fn test_migration_v11_creates_objects() {
+        let conn = Connection::open_in_memory().unwrap();
+        run(&conn).unwrap();
+
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(tables.contains(&"turns".to_string()), "turns missing");
+        assert!(
+            tables.contains(&"anchor_contributions".to_string()),
+            "anchor_contributions missing"
+        );
+        assert!(
+            tables.contains(&"anchor_contribution_files".to_string()),
+            "anchor_contribution_files missing"
+        );
+
+        let views: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='view' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for v in [
+            "v_turn_spend",
+            "v_session_totals",
+            "v_anchor_totals",
+            "v_project_totals",
+        ] {
+            assert!(views.contains(&v.to_string()), "view {v} missing");
+        }
+
+        assert!(column_exists(&conn, "sessions", "parent_session_id").unwrap());
+        assert!(column_exists(&conn, "sessions", "parent_source").unwrap());
+        assert!(column_exists(&conn, "sessions", "parent_turn_id").unwrap());
+        assert!(column_exists(&conn, "sessions", "subagent_kind").unwrap());
+    }
+
+    #[test]
+    fn test_v11_views_roll_up_deltas_not_cumulative() {
+        // This is THE property that 'anchor_sessions' historically got
+        // wrong: storing cumulative session totals per commit, causing
+        // project aggregates to multiply real work by commit count.
+        //
+        // With the new schema, each turn is a delta and contributions
+        // reference a *window* of turns. Summing contributions yields
+        // exactly SUM(turns_in_window) with no double counting.
+        let conn = Connection::open_in_memory().unwrap();
+        run(&conn).unwrap();
+
+        // Seed a minimal project + session.
+        conn.execute(
+            "INSERT INTO projects (id, path, name, discovered_at, last_seen_at) \
+             VALUES ('r:gh/acme/p', '/tmp/p', 'p', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, source, project_id, indexed_at) \
+             VALUES ('s1', 'claude', 'r:gh/acme/p', 1)",
+            [],
+        )
+        .unwrap();
+
+        // 3 turns, 100 billed tokens each.
+        for i in 0..3i64 {
+            conn.execute(
+                "INSERT INTO turns (id, session_id, source, turn_index, output_tokens, \
+                 input_tokens, ingested_at) VALUES (?1, 's1', 'claude', ?2, 60, 40, 1)",
+                rusqlite::params![format!("t{i}"), i],
+            )
+            .unwrap();
+        }
+
+        // Two anchors. First covers turns 0..=0; second covers 1..=2.
+        conn.execute(
+            "INSERT INTO anchors (commit_hash, created_at) VALUES ('c1', 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO anchors (commit_hash, created_at) VALUES ('c2', 2)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO anchor_contributions \
+             (commit_hash, session_id, source, first_turn_index, last_turn_index, \
+              input_tokens, output_tokens) \
+             VALUES ('c1', 's1', 'claude', 0, 0, 40, 60),\
+                    ('c2', 's1', 'claude', 1, 2, 80, 120)",
+            [],
+        )
+        .unwrap();
+
+        let session_billed: i64 = conn
+            .query_row(
+                "SELECT billed_tokens FROM v_session_totals WHERE session_id='s1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(session_billed, 300, "3 turns * 100 = 300, no dup");
+
+        let c1_billed: i64 = conn
+            .query_row(
+                "SELECT billed_tokens FROM v_anchor_totals WHERE commit_hash='c1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let c2_billed: i64 = conn
+            .query_row(
+                "SELECT billed_tokens FROM v_anchor_totals WHERE commit_hash='c2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(c1_billed + c2_billed, session_billed,
+            "sum of per-anchor deltas must equal session total exactly");
+
+        let project_billed: i64 = conn
+            .query_row(
+                "SELECT billed_tokens FROM v_project_totals WHERE project_id='r:gh/acme/p'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(project_billed, session_billed,
+            "project total == session total; no double counting across commits");
+    }
+
+    #[test]
+    fn test_v11_idempotent_rerun() {
+        let conn = Connection::open_in_memory().unwrap();
+        run(&conn).unwrap();
+        // Calling migrate_v11 again directly must be a no-op (ALTER guarded).
+        migrate_v11(&conn).unwrap();
+        assert!(column_exists(&conn, "sessions", "parent_session_id").unwrap());
     }
 }
