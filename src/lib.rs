@@ -10,6 +10,7 @@ pub mod git;
 pub mod hooks;
 pub mod notify;
 pub mod paths;
+pub mod project;
 pub mod redact;
 pub mod remote;
 pub mod scanner;
