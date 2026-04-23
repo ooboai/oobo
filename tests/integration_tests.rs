@@ -1278,8 +1278,8 @@ fn test_oobo_blame_json_output() {
     if blame_output.status.success() {
         let val: serde_json::Value =
             serde_json::from_str(&stdout).expect("blame --json should return valid JSON");
-        assert_eq!(val["path"], "src.rs");
-        assert!(val["attribution"].is_string());
+        assert_eq!(val["file"], "src.rs");
+        assert!(val["lines"].is_array());
     }
     // If blame fails (no anchor yet for this commit), that's ok —
     // the commit might not have generated line-level data without
@@ -1416,15 +1416,18 @@ fn test_after_tool_use_snapshots_enable_line_attribution() {
     if blame.status.success() {
         let val: serde_json::Value =
             serde_json::from_str(&stdout).expect("blame --json should return valid JSON");
-        assert_eq!(val["path"], "app.rs");
-        let line_attrs = val["line_attributions"]
+        assert_eq!(val["file"], "app.rs");
+        let lines = val["lines"]
             .as_array()
-            .expect("line_attributions should be an array");
+            .expect("lines should be an array");
+        // At least one line should have non-null AI attribution, proving
+        // after-tool-use snapshots produced per-line data.
+        let has_ai = lines.iter().any(|l| !l["ai"].is_null());
         assert!(
-            !line_attrs.is_empty(),
-            "line_attributions should not be empty — after-tool-use should have \
-             snapshotted the file so enrich_commit can produce per-line data. \
-             Got: {stdout}"
+            has_ai,
+            "at least one line should have AI attribution — after-tool-use \
+             should have snapshotted the file so enrich_commit can produce \
+             per-line data. Got: {stdout}"
         );
     }
 }

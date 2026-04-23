@@ -125,10 +125,12 @@ pub enum Command {
                        oobo blame src/main.rs --json   JSON output"
     )]
     Blame {
-        /// File path to show attribution for
-        file: String,
-        /// Commit hash (defaults to HEAD)
-        commit: Option<String>,
+        /// Pure `git blame` output (no AI column).
+        #[arg(long = "no-ai")]
+        no_ai: bool,
+        /// Arguments forwarded to `git blame` (plus AI overlay).
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
 
     /// Search past sessions across all projects
@@ -545,9 +547,35 @@ fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, Strin
                 }
             }
         }
-        Some(Command::Blame { file, commit }) => {
-            crate::commands::blame::run(&cfg, &file, commit.as_deref(), mode)?;
-            Ok(0)
+        Some(Command::Blame { no_ai, mut args }) => {
+            // `trailing_var_arg` slurps global flags when they appear
+            // after the first positional. Recover them here.
+            let mut mode = mode;
+            let mut local_json = false;
+            let mut local_agent = false;
+            args.retain(|a| match a.as_str() {
+                "--json" => {
+                    local_json = true;
+                    false
+                }
+                "--agent" => {
+                    local_agent = true;
+                    false
+                }
+                "--interactive" => false,
+                _ => true,
+            });
+            if local_json && local_agent {
+                eprintln!("error: --agent and --json are mutually exclusive");
+                return Ok(2);
+            }
+            if local_json {
+                mode = OutputMode::Json;
+            } else if local_agent {
+                mode = OutputMode::Agent;
+            }
+            let code = crate::commands::blame::run(&cfg, no_ai, &args, mode)?;
+            Ok(code)
         }
         Some(Command::Hooks { action }) => {
             match action {

@@ -1,176 +1,279 @@
+//! `oobo blame` — strict superset of `git blame`.
+//!
+//! We forward every arg to `git blame` and, by default, prepend an AI-column
+//! attribution (the tool that wrote each line, or `human`). In a handful of
+//! cases we must NOT modify the output: `--no-ai`, `--porcelain`,
+//! `--line-porcelain`, and `--incremental` are passed through byte-for-byte.
+
 use crate::cli::OutputMode;
 use crate::config::Config;
 use crate::core::anchor::FileAttribution;
 use crate::git::{orphan, proxy};
 
-pub fn run(cfg: &Config, file: &str, commit: Option<&str>, mode: OutputMode) -> Result<(), String> {
-    let project_root = proxy::project_root(cfg).ok_or("not inside a git repository")?;
-
-    let commit_hash = match commit {
-        Some(rev) => proxy::run_git_capture(cfg, &["rev-parse", rev])
-            .map_err(|e| format!("could not resolve '{rev}': {e}"))?,
-        None => proxy::run_git_capture(cfg, &["rev-parse", "HEAD"])
-            .map_err(|_| "could not resolve HEAD".to_string())?,
-    };
-
-    let normalized = normalize_file_path(file, &project_root);
-
-    let anchor = orphan::read_anchor(&project_root, &commit_hash).ok_or_else(|| {
-        format!(
-            "no anchor metadata for commit {}",
-            &commit_hash[..7.min(commit_hash.len())]
-        )
-    })?;
-
-    let file_change = anchor
-        .file_changes
-        .iter()
-        .find(|fc| fc.path == normalized)
-        .ok_or_else(|| {
-            format!(
-                "file '{normalized}' not found in commit {}",
-                &commit_hash[..7.min(commit_hash.len())]
-            )
-        })?;
-
-    if mode == OutputMode::Json {
-        let j = serde_json::to_string_pretty(file_change).map_err(|e| format!("json: {e}"))?;
-        println!("{j}");
-        return Ok(());
+/// Entry point.
+///
+/// - `no_ai = true`  → pure git-blame passthrough.
+/// - porcelain-family flag in `args` → pure passthrough.
+/// - `mode == Json` → structured JSON output.
+/// - `mode == Agent` → flat columns.
+/// - `mode == Tui` → colored git-blame + AI column.
+pub fn run(cfg: &Config, no_ai: bool, args: &[String], mode: OutputMode) -> Result<i32, String> {
+    if no_ai || is_machine_output(args) {
+        return passthrough(cfg, args);
     }
 
+    let (file, commit) = detect_file_and_commit(args)?;
+    if file.is_empty() {
+        return passthrough(cfg, args);
+    }
+
+    match mode {
+        OutputMode::Json => emit_json(cfg, &file, commit.as_deref()),
+        OutputMode::Agent => emit_agent(cfg, &file, commit.as_deref(), args),
+        OutputMode::Tui => emit_overlay(cfg, &file, commit.as_deref(), args),
+    }
+}
+
+// ------------------------------------------------------------------
+// passthrough
+// ------------------------------------------------------------------
+
+/// Exec `git blame <args>` and forward stdout/stderr and the exit code.
+fn passthrough(cfg: &Config, args: &[String]) -> Result<i32, String> {
+    let mut argv: Vec<String> = vec!["blame".to_string()];
+    for a in args {
+        argv.push(a.clone());
+    }
+    let borrowed: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
+    proxy::run_and_intercept(cfg, &borrowed)
+}
+
+fn is_machine_output(args: &[String]) -> bool {
+    args.iter().any(|a| {
+        a == "--porcelain" || a == "--line-porcelain" || a == "--incremental"
+    })
+}
+
+/// Scan passed args for the first positional that looks like a file path.
+/// Returns `(file, commit)` where `commit` is optional.
+fn detect_file_and_commit(args: &[String]) -> Result<(String, Option<String>), String> {
+    let mut positionals: Vec<String> = Vec::new();
+    let mut iter = args.iter().peekable();
+    while let Some(a) = iter.next() {
+        if a == "--" {
+            while let Some(rest) = iter.next() {
+                positionals.push(rest.clone());
+            }
+            break;
+        }
+        if a.starts_with('-') {
+            // Flags that take a value on the next token.
+            if matches!(a.as_str(), "-L" | "--abbrev" | "--date" | "--since" | "--until") {
+                iter.next();
+            }
+            continue;
+        }
+        positionals.push(a.clone());
+    }
+    match positionals.len() {
+        0 => Ok((String::new(), None)),
+        1 => Ok((positionals.remove(0), None)),
+        _ => {
+            // git blame convention: last arg is file, preceding is commit-ish.
+            let file = positionals.pop().unwrap();
+            let commit = positionals.pop();
+            Ok((file, commit))
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// JSON
+// ------------------------------------------------------------------
+
+fn emit_json(cfg: &Config, file: &str, commit: Option<&str>) -> Result<i32, String> {
+    let root = match proxy::project_root(cfg) {
+        Some(r) => r,
+        None => return passthrough(cfg, &[file.to_string()]),
+    };
+    let commit_hash = resolve_commit(cfg, commit)?;
+    let normalized = normalize_file_path(file, &root);
+
+    let anchor = orphan::read_anchor(&root, &commit_hash);
     let file_content =
         proxy::run_git_capture(cfg, &["show", &format!("{commit_hash}:{normalized}")]).ok();
-
     let lines: Vec<&str> = file_content
         .as_deref()
         .map(|c| c.lines().collect())
         .unwrap_or_default();
 
-    let short_hash = &commit_hash[..7.min(commit_hash.len())];
+    let line_map = anchor
+        .as_ref()
+        .and_then(|a| a.file_changes.iter().find(|f| f.path == normalized))
+        .map(build_line_map)
+        .unwrap_or_default();
 
-    if mode == OutputMode::Agent {
-        print_agent_output(&normalized, short_hash, file_change, &lines);
-        return Ok(());
-    }
-
-    print_tui_output(&normalized, short_hash, file_change, &lines);
-    Ok(())
-}
-
-fn print_tui_output(
-    file: &str,
-    short_hash: &str,
-    fc: &crate::core::anchor::FileChange,
-    lines: &[&str],
-) {
-    let attribution_label = match fc.attribution {
-        Some(FileAttribution::Ai) => "AI",
-        Some(FileAttribution::Human) => "human",
-        Some(FileAttribution::Mixed) => "mixed",
-        None => "unknown",
-    };
-    println!(
-        "\x1b[1m{file}\x1b[0m ({short_hash}) — {attribution_label}{}",
-        fc.agent
-            .as_ref()
-            .map(|a| format!(" via {a}"))
-            .unwrap_or_default()
-    );
-    println!();
-
-    if fc.line_attributions.is_empty() {
-        println!("  File-level attribution only (no per-line data).");
-        if let Some(ref attr) = fc.attribution {
-            let (ai_add, ai_del, human_add, human_del) = match attr {
-                FileAttribution::Ai => (fc.added, fc.deleted, 0, 0),
-                FileAttribution::Human => (0, 0, fc.added, fc.deleted),
-                FileAttribution::Mixed => {
-                    let ai_a = fc.added / 2;
-                    let ai_d = fc.deleted / 2;
-                    (ai_a, ai_d, fc.added - ai_a, fc.deleted - ai_d)
+    let line_entries: Vec<serde_json::Value> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, content)| {
+            let n = (i + 1) as u32;
+            let entry = line_map.get(&n);
+            let (ai_val, agent) = match entry {
+                Some((FileAttribution::Ai, a)) => {
+                    (serde_json::Value::String(a.clone().unwrap_or_else(|| "ai".into()))
+                        , a.clone())
                 }
+                Some((FileAttribution::Mixed, a)) => {
+                    (serde_json::Value::String(a.clone().unwrap_or_else(|| "mixed".into()))
+                        , a.clone())
+                }
+                Some((FileAttribution::Human, _)) | None => (serde_json::Value::Null, None),
             };
-            println!("  AI: +{ai_add} -{ai_del}, Human: +{human_add} -{human_del}");
-        }
-        return;
-    }
+            let _ = agent;
+            serde_json::json!({
+                "line": n,
+                "sha": short(&commit_hash),
+                "ai": ai_val,
+                "content": content,
+            })
+        })
+        .collect();
 
-    if lines.is_empty() {
-        println!("  (file content not available)");
-        return;
-    }
-
-    let line_map = build_line_map(fc);
-    let width = format!("{}", lines.len()).len();
-
-    for (i, line_text) in lines.iter().enumerate() {
-        let line_num = (i + 1) as u32;
-        let (label, color, agent_str) = match line_map.get(&line_num) {
-            Some((FileAttribution::Ai, agent)) => {
-                let agent_label = agent
-                    .as_ref()
-                    .map(|a| format!(" {a:<8}"))
-                    .unwrap_or_else(|| " ai      ".to_string());
-                ("ai   ", "\x1b[36m", agent_label)
-            }
-            Some((FileAttribution::Human, _)) => ("human", "\x1b[33m", "         ".to_string()),
-            Some((FileAttribution::Mixed, agent)) => {
-                let agent_label = agent
-                    .as_ref()
-                    .map(|a| format!(" {a:<8}"))
-                    .unwrap_or_else(|| "         ".to_string());
-                ("mixed", "\x1b[35m", agent_label)
-            }
-            None => ("     ", "\x1b[2m", "         ".to_string()),
-        };
-
-        println!(
-            "{color}{:>width$}\x1b[0m│{color}{label}{agent_str}\x1b[0m│ {line_text}",
-            line_num,
-        );
-    }
+    let json = serde_json::json!({
+        "file": normalized,
+        "commit": commit.unwrap_or("HEAD"),
+        "lines": line_entries,
+    });
+    crate::utils::print_json(&json);
+    Ok(0)
 }
 
-fn print_agent_output(
+// ------------------------------------------------------------------
+// Agent
+// ------------------------------------------------------------------
+
+fn emit_agent(
+    cfg: &Config,
     file: &str,
-    short_hash: &str,
-    fc: &crate::core::anchor::FileChange,
-    lines: &[&str],
-) {
-    let attribution_label = match fc.attribution {
-        Some(FileAttribution::Ai) => "ai",
-        Some(FileAttribution::Human) => "human",
-        Some(FileAttribution::Mixed) => "mixed",
-        None => "unknown",
+    commit: Option<&str>,
+    args: &[String],
+) -> Result<i32, String> {
+    let root = match proxy::project_root(cfg) {
+        Some(r) => r,
+        None => return passthrough(cfg, args),
     };
-    println!("# {file} ({short_hash}) — {attribution_label}");
+    let commit_hash = resolve_commit(cfg, commit)?;
+    let normalized = normalize_file_path(file, &root);
+    let anchor = orphan::read_anchor(&root, &commit_hash);
 
-    if fc.line_attributions.is_empty() {
-        println!("file-level only | no per-line data");
-        return;
-    }
+    let file_content =
+        proxy::run_git_capture(cfg, &["show", &format!("{commit_hash}:{normalized}")]).ok();
+    let lines: Vec<&str> = file_content
+        .as_deref()
+        .map(|c| c.lines().collect())
+        .unwrap_or_default();
 
-    if lines.is_empty() {
-        println!("(file content not available)");
-        return;
-    }
+    let line_map = anchor
+        .as_ref()
+        .and_then(|a| a.file_changes.iter().find(|f| f.path == normalized))
+        .map(build_line_map)
+        .unwrap_or_default();
 
-    let line_map = build_line_map(fc);
-
+    let sha7 = short(&commit_hash);
     for (i, line_text) in lines.iter().enumerate() {
-        let line_num = (i + 1) as u32;
-        let label = match line_map.get(&line_num) {
-            Some((FileAttribution::Ai, _)) => "ai   ",
-            Some((FileAttribution::Human, _)) => "human",
-            Some((FileAttribution::Mixed, _)) => "mixed",
-            None => "     ",
+        let n = (i + 1) as u32;
+        let attr = match line_map.get(&n) {
+            Some((FileAttribution::Ai, agent)) => {
+                agent.clone().unwrap_or_else(|| "ai".into())
+            }
+            Some((FileAttribution::Mixed, agent)) => {
+                agent.clone().unwrap_or_else(|| "mixed".into())
+            }
+            Some((FileAttribution::Human, _)) => "human".into(),
+            None => "-".into(),
         };
-        println!("{:>4}|{label}| {line_text}", line_num);
+        println!("{sha7} {attr:<7} {n:>4}  {line_text}");
+    }
+    Ok(0)
+}
+
+// ------------------------------------------------------------------
+// TUI (overlay)
+// ------------------------------------------------------------------
+
+fn emit_overlay(
+    cfg: &Config,
+    file: &str,
+    commit: Option<&str>,
+    args: &[String],
+) -> Result<i32, String> {
+    let root = match proxy::project_root(cfg) {
+        Some(r) => r,
+        None => return passthrough(cfg, args),
+    };
+    let commit_hash = resolve_commit(cfg, commit)?;
+    let normalized = normalize_file_path(file, &root);
+    let anchor = orphan::read_anchor(&root, &commit_hash);
+
+    // Capture git blame output verbatim; we'll add a leading column.
+    let mut blame_argv: Vec<String> = vec!["blame".to_string()];
+    for a in args {
+        blame_argv.push(a.clone());
+    }
+    let borrowed: Vec<&str> = blame_argv.iter().map(|s| s.as_str()).collect();
+    let raw = match proxy::run_git_capture(cfg, &borrowed) {
+        Ok(s) => s,
+        Err(_) => return passthrough(cfg, args),
+    };
+
+    let line_map = anchor
+        .as_ref()
+        .and_then(|a| a.file_changes.iter().find(|f| f.path == normalized))
+        .map(build_line_map)
+        .unwrap_or_default();
+
+    for raw_line in raw.lines() {
+        let n = parse_blame_line_number(raw_line);
+        let attr = n
+            .and_then(|n| line_map.get(&n))
+            .map(|(a, agent)| format_attr(a, agent))
+            .unwrap_or_else(|| "-".to_string());
+        println!("\x1b[36m{attr:<8}\x1b[0m {raw_line}");
+    }
+    Ok(0)
+}
+
+fn format_attr(a: &FileAttribution, agent: &Option<String>) -> String {
+    match a {
+        FileAttribution::Ai => agent.clone().unwrap_or_else(|| "ai".into()),
+        FileAttribution::Mixed => agent.clone().unwrap_or_else(|| "mixed".into()),
+        FileAttribution::Human => "human".into(),
     }
 }
 
-/// Build a lookup from line number → (attribution, agent) for fast rendering.
+/// Best-effort extractor of the source-line number from a `git blame` line.
+/// Default `git blame` output looks like:
+///   a1b2c3d (Author 2024-01-01 14:03:12 +0000   12) source
+/// We match the token directly before the closing ')'.
+fn parse_blame_line_number(line: &str) -> Option<u32> {
+    let close = line.find(')')?;
+    let head = &line[..close];
+    let start = head.rfind(' ').map(|i| i + 1).unwrap_or(0);
+    head[start..].parse::<u32>().ok()
+}
+
+// ------------------------------------------------------------------
+// shared helpers
+// ------------------------------------------------------------------
+
+fn resolve_commit(cfg: &Config, commit: Option<&str>) -> Result<String, String> {
+    let rev = commit.unwrap_or("HEAD");
+    proxy::run_git_capture(cfg, &["rev-parse", rev])
+        .map(|s| s.trim().to_string())
+        .map_err(|e| format!("could not resolve '{rev}': {e}"))
+}
+
 fn build_line_map(
     fc: &crate::core::anchor::FileChange,
 ) -> std::collections::HashMap<u32, (FileAttribution, Option<String>)> {
@@ -185,11 +288,8 @@ fn build_line_map(
     map
 }
 
-/// Normalize a user-supplied file path to the repo-relative form that anchors use.
-/// Handles `./src/main.rs`, absolute paths, and trailing slashes.
 fn normalize_file_path(file: &str, project_root: &str) -> String {
     let path = std::path::Path::new(file);
-
     let relative = if path.is_absolute() {
         path.strip_prefix(project_root)
             .map(|p| p.to_path_buf())
@@ -201,9 +301,70 @@ fn normalize_file_path(file: &str, project_root: &str) -> String {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|_| path.to_path_buf())
     };
-
     relative
         .to_string_lossy()
         .trim_start_matches("./")
         .to_string()
+}
+
+fn short(sha: &str) -> String {
+    if sha.len() >= 7 {
+        sha[..7].to_string()
+    } else {
+        sha.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_file_only() {
+        let a = vec!["src/main.rs".to_string()];
+        let (f, c) = detect_file_and_commit(&a).unwrap();
+        assert_eq!(f, "src/main.rs");
+        assert_eq!(c, None);
+    }
+
+    #[test]
+    fn test_detect_file_and_commit() {
+        let a = vec!["a1b2c3d".to_string(), "src/main.rs".to_string()];
+        let (f, c) = detect_file_and_commit(&a).unwrap();
+        assert_eq!(f, "src/main.rs");
+        assert_eq!(c.as_deref(), Some("a1b2c3d"));
+    }
+
+    #[test]
+    fn test_detect_skips_flags() {
+        let a = vec!["-w".to_string(), "src/main.rs".to_string()];
+        let (f, c) = detect_file_and_commit(&a).unwrap();
+        assert_eq!(f, "src/main.rs");
+        assert_eq!(c, None);
+    }
+
+    #[test]
+    fn test_detect_flag_with_value() {
+        let a = vec![
+            "-L".to_string(),
+            "10,20".to_string(),
+            "src/main.rs".to_string(),
+        ];
+        let (f, _) = detect_file_and_commit(&a).unwrap();
+        assert_eq!(f, "src/main.rs");
+    }
+
+    #[test]
+    fn test_machine_flags_bypass() {
+        assert!(is_machine_output(&["--porcelain".to_string()]));
+        assert!(is_machine_output(&["--line-porcelain".to_string()]));
+        assert!(is_machine_output(&["--incremental".to_string()]));
+        assert!(!is_machine_output(&["-w".to_string()]));
+    }
+
+    #[test]
+    fn test_parse_blame_line_number() {
+        let line = "a1b2c3d (Teddy 2024-01-01 14:03:12 +0000  12) fn main() {";
+        assert_eq!(parse_blame_line_number(line), Some(12));
+    }
 }
