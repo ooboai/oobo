@@ -52,7 +52,8 @@ impl OutputMode {
   oobo commit -m \"fix\"     git commit + AI context capture
   oobo push origin main    git push + anchor sync
 
-\x1b[2mUse --agent for compact agent output or --json for structured JSON.\x1b[0m
+\x1b[2mOutput modes: default pretty (TTY); --agent for LLMs; --json for scripts.\x1b[0m
+\x1b[2mRun `oobo <cmd> --help` for per-command usage and examples.\x1b[0m
 ",
     disable_help_subcommand = true
 )]
@@ -60,11 +61,11 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// Compact output for AI agents (minimal, pipe-delimited)
+    /// Compact, token-efficient plain-text output for LLMs and scripts
     #[arg(long, global = true, conflicts_with = "json")]
     pub agent: bool,
 
-    /// Structured JSON output for scripts and programmatic use
+    /// Full-fidelity structured JSON (parseable by jq)
     #[arg(long, global = true, conflicts_with = "agent")]
     pub json: bool,
 
