@@ -307,6 +307,7 @@ fn test_config_save_and_load() {
         scan: oobo::config::ScanConfig::default(),
         update: oobo::config::UpdateConfig::default(),
         transparency: oobo::config::TransparencyConfig::default(),
+        tools: oobo::config::ToolsConfig::default(),
         ignored_repos: Vec::new(),
     };
 

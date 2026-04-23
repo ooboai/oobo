@@ -48,8 +48,20 @@ pub struct Config {
     pub update: UpdateConfig,
     #[serde(default)]
     pub transparency: TransparencyConfig,
+    #[serde(default)]
+    pub tools: ToolsConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ignored_repos: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolsConfig {
+    /// Enable contrib/experimental tool adapters (Windsurf, Trae, Kiro,
+    /// Junie, Amp). These adapters have partial or discovery-only coverage
+    /// and may produce lower-quality session / token data than first-class
+    /// integrations. Disabled by default in 1.0.
+    #[serde(default)]
+    pub experimental: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -490,6 +502,7 @@ mod tests {
             scan: ScanConfig::default(),
             update: UpdateConfig::default(),
             transparency: TransparencyConfig::default(),
+            tools: ToolsConfig::default(),
             ignored_repos: Vec::new(),
         };
         let serialized = toml::to_string_pretty(&cfg).unwrap();

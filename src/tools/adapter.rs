@@ -199,27 +199,27 @@ impl Tool for WindsurfTool {
     }
 
     fn sessions_for_project(&self, project_path: &str) -> Result<Vec<Session>, String> {
-        crate::tools::windsurf::sessions_for_project(project_path)
+        crate::tools::contrib::windsurf::sessions_for_project(project_path)
     }
 
     fn all_sessions(&self) -> Result<Vec<Session>, String> {
-        crate::tools::windsurf::all_sessions()
+        crate::tools::contrib::windsurf::all_sessions()
     }
 
     fn find_transcript(&self, project_path: &str, session_id: &str) -> Option<PathBuf> {
-        crate::tools::windsurf::transcript::find_transcript_path(project_path, session_id)
+        crate::tools::contrib::windsurf::transcript::find_transcript_path(project_path, session_id)
     }
 
     fn parse_messages(&self, path: &Path) -> Vec<Message> {
-        crate::tools::windsurf::transcript::parse_messages(path)
+        crate::tools::contrib::windsurf::transcript::parse_messages(path)
     }
 
     fn count_messages(&self, project_path: &str, session_id: &str) -> u32 {
-        crate::tools::windsurf::transcript::count_messages(project_path, session_id)
+        crate::tools::contrib::windsurf::transcript::count_messages(project_path, session_id)
     }
 
     fn read_transcript(&self, path: &Path, max_messages: u32) -> String {
-        crate::tools::windsurf::transcript::read_transcript(path, max_messages)
+        crate::tools::contrib::windsurf::transcript::read_transcript(path, max_messages)
     }
 }
 
@@ -508,27 +508,27 @@ impl Tool for TraeTool {
     }
 
     fn sessions_for_project(&self, project_path: &str) -> Result<Vec<Session>, String> {
-        crate::tools::trae::sessions_for_project(project_path)
+        crate::tools::contrib::trae::sessions_for_project(project_path)
     }
 
     fn all_sessions(&self) -> Result<Vec<Session>, String> {
-        crate::tools::trae::all_sessions()
+        crate::tools::contrib::trae::all_sessions()
     }
 
     fn find_transcript(&self, project_path: &str, session_id: &str) -> Option<PathBuf> {
-        crate::tools::trae::transcript::find_transcript_path(project_path, session_id)
+        crate::tools::contrib::trae::transcript::find_transcript_path(project_path, session_id)
     }
 
     fn parse_messages(&self, path: &Path) -> Vec<Message> {
-        crate::tools::trae::transcript::parse_messages(path)
+        crate::tools::contrib::trae::transcript::parse_messages(path)
     }
 
     fn count_messages(&self, project_path: &str, session_id: &str) -> u32 {
-        crate::tools::trae::transcript::count_messages(project_path, session_id)
+        crate::tools::contrib::trae::transcript::count_messages(project_path, session_id)
     }
 
     fn read_transcript(&self, path: &Path, max_messages: u32) -> String {
-        crate::tools::trae::transcript::read_transcript(path, max_messages)
+        crate::tools::contrib::trae::transcript::read_transcript(path, max_messages)
     }
 }
 
@@ -604,27 +604,27 @@ impl Tool for KiroTool {
     }
 
     fn sessions_for_project(&self, project_path: &str) -> Result<Vec<Session>, String> {
-        crate::tools::kiro::sessions_for_project(project_path)
+        crate::tools::contrib::kiro::sessions_for_project(project_path)
     }
 
     fn all_sessions(&self) -> Result<Vec<Session>, String> {
-        crate::tools::kiro::all_sessions()
+        crate::tools::contrib::kiro::all_sessions()
     }
 
     fn find_transcript(&self, project_path: &str, session_id: &str) -> Option<PathBuf> {
-        crate::tools::kiro::transcript::find_transcript_path(project_path, session_id)
+        crate::tools::contrib::kiro::transcript::find_transcript_path(project_path, session_id)
     }
 
     fn parse_messages(&self, path: &Path) -> Vec<Message> {
-        crate::tools::kiro::transcript::parse_messages(path)
+        crate::tools::contrib::kiro::transcript::parse_messages(path)
     }
 
     fn count_messages(&self, project_path: &str, session_id: &str) -> u32 {
-        crate::tools::kiro::transcript::count_messages(project_path, session_id)
+        crate::tools::contrib::kiro::transcript::count_messages(project_path, session_id)
     }
 
     fn read_transcript(&self, path: &Path, max_messages: u32) -> String {
-        crate::tools::kiro::transcript::read_transcript(path, max_messages)
+        crate::tools::contrib::kiro::transcript::read_transcript(path, max_messages)
     }
 }
 
@@ -742,27 +742,27 @@ impl Tool for JunieTool {
     }
 
     fn sessions_for_project(&self, project_path: &str) -> Result<Vec<Session>, String> {
-        crate::tools::junie::sessions_for_project(project_path)
+        crate::tools::contrib::junie::sessions_for_project(project_path)
     }
 
     fn all_sessions(&self) -> Result<Vec<Session>, String> {
-        crate::tools::junie::all_sessions()
+        crate::tools::contrib::junie::all_sessions()
     }
 
     fn find_transcript(&self, project_path: &str, session_id: &str) -> Option<PathBuf> {
-        crate::tools::junie::transcript::find_transcript_path(project_path, session_id)
+        crate::tools::contrib::junie::transcript::find_transcript_path(project_path, session_id)
     }
 
     fn parse_messages(&self, path: &Path) -> Vec<Message> {
-        crate::tools::junie::transcript::parse_messages(path)
+        crate::tools::contrib::junie::transcript::parse_messages(path)
     }
 
     fn count_messages(&self, project_path: &str, session_id: &str) -> u32 {
-        crate::tools::junie::transcript::count_messages(project_path, session_id)
+        crate::tools::contrib::junie::transcript::count_messages(project_path, session_id)
     }
 
     fn read_transcript(&self, path: &Path, max_messages: u32) -> String {
-        crate::tools::junie::transcript::read_transcript(path, max_messages)
+        crate::tools::contrib::junie::transcript::read_transcript(path, max_messages)
     }
 }
 
@@ -788,26 +788,26 @@ impl Tool for AmpTool {
     }
 
     fn sessions_for_project(&self, project_path: &str) -> Result<Vec<Session>, String> {
-        crate::tools::amp::sessions_for_project(project_path)
+        crate::tools::contrib::amp::sessions_for_project(project_path)
     }
 
     fn all_sessions(&self) -> Result<Vec<Session>, String> {
-        crate::tools::amp::all_sessions()
+        crate::tools::contrib::amp::all_sessions()
     }
 
     fn find_transcript(&self, project_path: &str, session_id: &str) -> Option<PathBuf> {
-        crate::tools::amp::transcript::find_transcript_path(project_path, session_id)
+        crate::tools::contrib::amp::transcript::find_transcript_path(project_path, session_id)
     }
 
     fn parse_messages(&self, path: &Path) -> Vec<Message> {
-        crate::tools::amp::transcript::parse_messages(path)
+        crate::tools::contrib::amp::transcript::parse_messages(path)
     }
 
     fn count_messages(&self, project_path: &str, session_id: &str) -> u32 {
-        crate::tools::amp::transcript::count_messages(project_path, session_id)
+        crate::tools::contrib::amp::transcript::count_messages(project_path, session_id)
     }
 
     fn read_transcript(&self, path: &Path, max_messages: u32) -> String {
-        crate::tools::amp::transcript::read_transcript(path, max_messages)
+        crate::tools::contrib::amp::transcript::read_transcript(path, max_messages)
     }
 }

@@ -75,22 +75,18 @@ oobo is a Rust binary that acts as a transparent git decorator. Key modules:
 |--------|---------|
 | `src/cli.rs` | Command-line argument parsing and routing |
 | `src/git/` | Git decorator, write operation detection, interceptor, orphan branch |
-| `src/tools/cursor/` | Cursor IDE local data extraction (SQLite, transcripts, usage API) |
+| `src/tools/cursor/` | Cursor IDE local data extraction (SQLite, transcripts) |
 | `src/tools/claude/` | Claude Code local data extraction (JSONL sessions) |
-| `src/tools/vscode_fork.rs` | Shared VS Code fork extraction (Windsurf, Trae) |
-| `src/tools/windsurf.rs` | Windsurf / Cascade support |
-| `src/tools/trae.rs` | Trae IDE support |
+| `src/tools/vscode_fork.rs` | Shared VS Code fork extraction (Copilot, contrib/Windsurf, contrib/Trae) |
 | `src/tools/aider.rs` | Aider chat history (markdown) |
 | `src/tools/copilot.rs` | GitHub Copilot Chat session support |
 | `src/tools/zed.rs` | Zed AI conversation support |
 | `src/tools/codex.rs` | OpenAI Codex CLI session support |
 | `src/tools/opencode.rs` | OpenCode session support |
 | `src/tools/gemini.rs` | Gemini CLI session support |
-| `src/tools/kiro.rs` | Kiro IDE session support |
 | `src/tools/continue_dev.rs` | Continue session support |
 | `src/tools/droid.rs` | Factory Droid session support |
-| `src/tools/junie.rs` | Junie session support |
-| `src/tools/amp.rs` | Amp session support |
+| `src/tools/contrib/` | Community-maintained adapters gated behind `tools.experimental` (Windsurf, Trae, Kiro, Junie, Amp) |
 | `src/core/` | Domain types: anchor, message, session, tool trait |
 | `src/commands/` | CLI subcommands (23 commands) |
 | `src/analytics/` | Token computation, attribution, git activity |
