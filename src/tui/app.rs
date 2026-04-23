@@ -7,8 +7,9 @@
 //!
 //! Views:
 //! - [`View::Feed`]        two-pane list + detail
-//! - [`View::Transcript`]  scrollable session messages
+//! - [`View::Transcript`]  scrollable session messages with per-session cycling
 //! - [`View::Search`]      in-TUI search (project/global toggle)
+//! - [`View::Picker`]      modal list picker (session / file chooser)
 //! - [`View::Help`]        keybindings overlay
 //!
 //! For some actions we suspend the TUI, shell out to an external tool
@@ -121,6 +122,7 @@ enum View {
     Feed(FeedState),
     Transcript(TranscriptState),
     Search(SearchState),
+    Picker(PickerState),
     Help,
 }
 
@@ -130,9 +132,16 @@ struct FeedState {
 }
 
 struct TranscriptState {
-    session: SessionLink,
+    sessions: Vec<SessionLink>,
+    idx: usize,
+    project_path: String,
     lines: Vec<Line<'static>>,
     scroll: u16,
+    // in-transcript filter
+    filter: String,
+    filter_open: bool,
+    match_lines: Vec<usize>, // line indices that contain filter match
+    match_cursor: usize,     // current position in match_lines
 }
 
 struct SearchState {
@@ -141,6 +150,54 @@ struct SearchState {
     results: Vec<crate::commands::search::Hit>,
     list: ListState,
     running: bool,
+}
+
+/// Generic modal picker used for session and file selection.
+struct PickerState {
+    title: String,
+    list: ListState,
+    kind: PickerKind,
+}
+
+enum PickerKind {
+    Session {
+        sessions: Vec<SessionLink>,
+        project_path: String,
+    },
+    BlameFile {
+        files: Vec<String>,
+        sha: String,
+        root: String,
+    },
+}
+
+impl PickerState {
+    fn len(&self) -> usize {
+        match &self.kind {
+            PickerKind::Session { sessions, .. } => sessions.len(),
+            PickerKind::BlameFile { files, .. } => files.len(),
+        }
+    }
+    fn row_label(&self, i: usize) -> String {
+        match &self.kind {
+            PickerKind::Session { sessions, .. } => sessions
+                .get(i)
+                .map(|s| {
+                    let sid: String = s.session_id.chars().take(10).collect();
+                    let model = s.model.clone().unwrap_or_else(|| "-".into());
+                    let tok = if s.tokens > 0 {
+                        super::format_tokens(s.tokens)
+                    } else {
+                        "-".into()
+                    };
+                    format!(" {sid:<10}  {:<10}  {model:<20}  {tok}", s.source)
+                })
+                .unwrap_or_default(),
+            PickerKind::BlameFile { files, .. } => {
+                files.get(i).cloned().unwrap_or_default()
+            }
+        }
+    }
 }
 
 // ── Loading ───────────────────────────────────────────────────────────
@@ -189,7 +246,6 @@ impl App {
             let settings = db.get_project_settings(&self.project_id).unwrap_or_default();
             self.enabled = !settings.ignored;
         }
-        // Snap selection back to a valid row.
         if let Some(View::Feed(feed)) = self.stack.first_mut() {
             let visible = visible_anchor_count(&self.anchors, &self.filter);
             let sel = feed.list.selected().unwrap_or(0);
@@ -197,6 +253,8 @@ impl App {
                 feed.list.select(None);
             } else if sel >= visible {
                 feed.list.select(Some(visible - 1));
+            } else if feed.list.selected().is_none() {
+                feed.list.select(Some(0));
             }
         }
     }
@@ -206,9 +264,7 @@ impl App {
             return None;
         };
         let idx = feed.list.selected()?;
-        visible_anchors(&self.anchors, &self.filter)
-            .nth(idx)
-            .cloned()
+        visible_anchors(&self.anchors, &self.filter).nth(idx).cloned()
     }
 
     fn flash(&mut self, msg: impl Into<String>) {
@@ -259,7 +315,6 @@ fn event_loop(
             continue;
         };
 
-        // Clear any transient flash on the next keystroke.
         app.flash = None;
 
         if handle_key(terminal, app, key)? {
@@ -268,13 +323,11 @@ fn event_loop(
     }
 }
 
-/// Returns true if the app should quit.
 fn handle_key(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
     key: KeyEvent,
 ) -> Result<bool, String> {
-    // Help overlay swallows all keys (dismisses on any press).
     if matches!(app.stack.last(), Some(View::Help)) {
         app.stack.pop();
         return Ok(false);
@@ -284,24 +337,26 @@ fn handle_key(
         Some(View::Feed(_)) => handle_feed_key(terminal, app, key),
         Some(View::Transcript(_)) => Ok(handle_transcript_key(app, key)),
         Some(View::Search(_)) => handle_search_key(app, key),
+        Some(View::Picker(_)) => handle_picker_key(terminal, app, key),
         Some(View::Help) | None => Ok(false),
     }
 }
+
+// ── Feed view keys ────────────────────────────────────────────────────
 
 fn handle_feed_key(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
     key: KeyEvent,
 ) -> Result<bool, String> {
-    // Filter-input sub-mode: absorb printable keys into the filter buffer.
-    let feed_filter_open = matches!(
+    let filter_open = matches!(
         app.stack.last(),
         Some(View::Feed(FeedState {
             filter_input_open: true,
             ..
         }))
     );
-    if feed_filter_open {
+    if filter_open {
         if let Some(View::Feed(feed)) = app.stack.last_mut() {
             match key.code {
                 KeyCode::Esc => {
@@ -319,7 +374,6 @@ fn handle_feed_key(
                 }
                 _ => {}
             }
-            // Reset selection to top after filter change.
             let total = visible_anchor_count(&app.anchors, &app.filter);
             if total == 0 {
                 feed.list.select(None);
@@ -330,7 +384,6 @@ fn handle_feed_key(
         return Ok(false);
     }
 
-    // Ctrl-F / Ctrl-/ → full search
     if key.modifiers.contains(KeyModifiers::CONTROL)
         && matches!(key.code, KeyCode::Char('f') | KeyCode::Char('/'))
     {
@@ -365,39 +418,66 @@ fn handle_feed_key(
             app.reload_anchors();
             app.flash("reloaded");
         }
-        KeyCode::Char('e') => {
-            toggle_enabled(app);
-        }
+        KeyCode::Char('e') => toggle_enabled(app),
         KeyCode::Char('d') => {
             if let Some(anchor) = app.selected_anchor() {
                 suspend_and_run(terminal, || run_git_show(&app.root, &anchor.sha))?;
             }
         }
-        KeyCode::Char('b') => {
-            if let Some(anchor) = app.selected_anchor() {
-                match pick_file_for_anchor(&app.root, &anchor.sha) {
-                    Some(file) => suspend_and_run(terminal, || {
-                        run_oobo_blame(&app.root, &file, &anchor.sha)
-                    })?,
-                    None => app.flash("no files touched in this anchor"),
-                }
-            }
-        }
+        KeyCode::Char('b') => open_blame_picker(app),
         KeyCode::Up | KeyCode::Char('k') => move_selection(app, -1),
         KeyCode::Down | KeyCode::Char('j') => move_selection(app, 1),
         KeyCode::PageUp => move_selection(app, -10),
         KeyCode::PageDown => move_selection(app, 10),
         KeyCode::Char('g') => move_to(app, 0),
         KeyCode::Char('G') => move_to(app, usize::MAX),
-        KeyCode::Enter | KeyCode::Char('s') => {
-            open_transcript(app);
-        }
+        KeyCode::Enter | KeyCode::Char('s') => open_sessions_for_selected_anchor(app),
         _ => {}
     }
     Ok(false)
 }
 
+// ── Transcript view keys ──────────────────────────────────────────────
+
 fn handle_transcript_key(app: &mut App, key: KeyEvent) -> bool {
+    // Filter-input sub-mode absorbs keys into filter buffer.
+    let filter_open = matches!(
+        app.stack.last(),
+        Some(View::Transcript(TranscriptState {
+            filter_open: true,
+            ..
+        }))
+    );
+    if filter_open {
+        if let Some(View::Transcript(ts)) = app.stack.last_mut() {
+            match key.code {
+                KeyCode::Esc => {
+                    ts.filter_open = false;
+                    ts.filter.clear();
+                    ts.match_lines.clear();
+                    ts.match_cursor = 0;
+                }
+                KeyCode::Enter => {
+                    ts.filter_open = false;
+                    if !ts.match_lines.is_empty() {
+                        ts.scroll = ts.match_lines[0] as u16;
+                        ts.match_cursor = 0;
+                    }
+                }
+                KeyCode::Backspace => {
+                    ts.filter.pop();
+                    recompute_transcript_matches(ts);
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    ts.filter.push(c);
+                    recompute_transcript_matches(ts);
+                }
+                _ => {}
+            }
+        }
+        return false;
+    }
+
     if let Some(View::Transcript(ts)) = app.stack.last_mut() {
         match key.code {
             KeyCode::Char('q') => return true,
@@ -422,16 +502,84 @@ fn handle_transcript_key(app: &mut App, key: KeyEvent) -> bool {
             KeyCode::Char('G') => {
                 ts.scroll = ts.lines.len().saturating_sub(1) as u16;
             }
+            KeyCode::Char('[') => {
+                if !ts.sessions.is_empty() {
+                    ts.idx = if ts.idx == 0 {
+                        ts.sessions.len() - 1
+                    } else {
+                        ts.idx - 1
+                    };
+                    reload_transcript(ts);
+                }
+            }
+            KeyCode::Char(']') => {
+                if !ts.sessions.is_empty() {
+                    ts.idx = (ts.idx + 1) % ts.sessions.len();
+                    reload_transcript(ts);
+                }
+            }
+            KeyCode::Char('/') => {
+                ts.filter_open = true;
+                ts.filter.clear();
+                ts.match_lines.clear();
+                ts.match_cursor = 0;
+            }
+            KeyCode::Char('n') => jump_to_match(ts, 1),
+            KeyCode::Char('N') => jump_to_match(ts, -1),
             _ => {}
         }
     }
     false
 }
 
+fn recompute_transcript_matches(ts: &mut TranscriptState) {
+    ts.match_lines.clear();
+    ts.match_cursor = 0;
+    let needle = ts.filter.to_ascii_lowercase();
+    if needle.is_empty() {
+        return;
+    }
+    for (i, line) in ts.lines.iter().enumerate() {
+        let text = line.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        if text.to_ascii_lowercase().contains(&needle) {
+            ts.match_lines.push(i);
+        }
+    }
+    if let Some(first) = ts.match_lines.first() {
+        ts.scroll = *first as u16;
+    }
+}
+
+fn jump_to_match(ts: &mut TranscriptState, delta: i32) {
+    if ts.match_lines.is_empty() {
+        return;
+    }
+    let n = ts.match_lines.len() as i32;
+    let cur = ts.match_cursor as i32;
+    let next = (cur + delta).rem_euclid(n) as usize;
+    ts.match_cursor = next;
+    ts.scroll = ts.match_lines[next] as u16;
+}
+
+fn reload_transcript(ts: &mut TranscriptState) {
+    let session = &ts.sessions[ts.idx];
+    ts.lines = load_transcript_lines(&ts.project_path, session);
+    ts.scroll = 0;
+    ts.match_lines.clear();
+    ts.match_cursor = 0;
+    if !ts.filter.is_empty() {
+        recompute_transcript_matches(ts);
+    }
+}
+
+// ── Search view keys ──────────────────────────────────────────────────
+
 fn handle_search_key(app: &mut App, key: KeyEvent) -> Result<bool, String> {
+    // Handle nav/action keys before consuming printable keys into the query.
     let Some(View::Search(state)) = app.stack.last_mut() else {
         return Ok(false);
     };
+
     match key.code {
         KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(true),
         KeyCode::Esc => {
@@ -443,29 +591,33 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> Result<bool, String> {
             if !state.query.trim().is_empty() {
                 run_search(app);
             }
+            return Ok(false);
         }
         KeyCode::Enter => {
-            if !state.query.trim().is_empty() {
+            // If results exist and a row is selected, drill into it;
+            // otherwise run/re-run the query.
+            if !state.results.is_empty() && state.list.selected().is_some() {
+                open_search_hit(app);
+            } else if !state.query.trim().is_empty() {
                 run_search(app);
             }
+            return Ok(false);
         }
         KeyCode::Backspace => {
             state.query.pop();
+            return Ok(false);
         }
-        KeyCode::Up | KeyCode::Char('k')
-            if key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
+        KeyCode::Up => {
             nav_search(state, -1);
+            return Ok(false);
         }
-        KeyCode::Down | KeyCode::Char('j')
-            if key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
+        KeyCode::Down => {
             nav_search(state, 1);
+            return Ok(false);
         }
-        KeyCode::Up => nav_search(state, -1),
-        KeyCode::Down => nav_search(state, 1),
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.query.push(c);
+            return Ok(false);
         }
         _ => {}
     }
@@ -513,6 +665,206 @@ fn run_search(app: &mut App) {
     }
 }
 
+/// Drill into a selected search hit — open transcript if we have a session_id,
+/// otherwise focus on the anchor by jumping to it in the feed (if same project).
+fn open_search_hit(app: &mut App) {
+    let (session_id, source, project_id, anchor_sha) = {
+        let Some(View::Search(state)) = app.stack.last() else {
+            return;
+        };
+        let Some(idx) = state.list.selected() else {
+            return;
+        };
+        let Some(hit) = state.results.get(idx) else {
+            return;
+        };
+        (
+            hit.session_id.clone(),
+            hit.tool.clone(),
+            hit.project_id.clone(),
+            hit.anchor_sha.clone(),
+        )
+    };
+
+    // Resolve target project_path from the DB (may differ from current repo).
+    let project_path = match lookup_project_path(&project_id) {
+        Some(p) => p,
+        None => app.root.clone(),
+    };
+
+    // Session hit → open its transcript directly.
+    if let (Some(sid), Some(src)) = (session_id, source) {
+        let link = SessionLink {
+            session_id: sid,
+            source: src,
+            model: None,
+            tokens: 0,
+        };
+        let lines = load_transcript_lines(&project_path, &link);
+        app.stack.push(View::Transcript(TranscriptState {
+            sessions: vec![link],
+            idx: 0,
+            project_path,
+            lines,
+            scroll: 0,
+            filter: String::new(),
+            filter_open: false,
+            match_lines: Vec::new(),
+            match_cursor: 0,
+        }));
+        return;
+    }
+
+    // Anchor hit → load its sessions and open the first transcript.
+    if let Some(sha) = anchor_sha {
+        let sessions = load_sessions_for_anchor(&sha);
+        if sessions.is_empty() {
+            app.flash("no sessions linked to this anchor");
+            return;
+        }
+        let lines = load_transcript_lines(&project_path, &sessions[0]);
+        app.stack.push(View::Transcript(TranscriptState {
+            sessions,
+            idx: 0,
+            project_path,
+            lines,
+            scroll: 0,
+            filter: String::new(),
+            filter_open: false,
+            match_lines: Vec::new(),
+            match_cursor: 0,
+        }));
+    }
+}
+
+// ── Picker view keys ──────────────────────────────────────────────────
+
+fn handle_picker_key(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    key: KeyEvent,
+) -> Result<bool, String> {
+    // Navigation first.
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.stack.pop();
+            return Ok(false);
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(View::Picker(p)) = app.stack.last_mut() {
+                picker_move(p, -1);
+            }
+            return Ok(false);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(View::Picker(p)) = app.stack.last_mut() {
+                picker_move(p, 1);
+            }
+            return Ok(false);
+        }
+        KeyCode::Enter => {
+            // Resolve action and pop.
+            let action = match app.stack.last_mut() {
+                Some(View::Picker(p)) => resolve_picker_action(p),
+                _ => return Ok(false),
+            };
+            app.stack.pop();
+            apply_picker_action(terminal, app, action)?;
+            return Ok(false);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn picker_move(p: &mut PickerState, delta: i32) {
+    let n = p.len() as i32;
+    if n == 0 {
+        return;
+    }
+    let cur = p.list.selected().unwrap_or(0) as i32;
+    let next = (cur + delta).clamp(0, n - 1);
+    p.list.select(Some(next as usize));
+}
+
+enum PickerAction {
+    OpenSession {
+        session: SessionLink,
+        project_path: String,
+        siblings: Vec<SessionLink>,
+        idx: usize,
+    },
+    Blame {
+        root: String,
+        file: String,
+        sha: String,
+    },
+    Noop,
+}
+
+fn resolve_picker_action(p: &PickerState) -> PickerAction {
+    let Some(idx) = p.list.selected() else {
+        return PickerAction::Noop;
+    };
+    match &p.kind {
+        PickerKind::Session {
+            sessions,
+            project_path,
+        } => sessions
+            .get(idx)
+            .map(|s| PickerAction::OpenSession {
+                session: s.clone(),
+                project_path: project_path.clone(),
+                siblings: sessions.clone(),
+                idx,
+            })
+            .unwrap_or(PickerAction::Noop),
+        PickerKind::BlameFile { files, sha, root } => files
+            .get(idx)
+            .map(|f| PickerAction::Blame {
+                root: root.clone(),
+                file: f.clone(),
+                sha: sha.clone(),
+            })
+            .unwrap_or(PickerAction::Noop),
+    }
+}
+
+fn apply_picker_action(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    action: PickerAction,
+) -> Result<(), String> {
+    match action {
+        PickerAction::OpenSession {
+            session,
+            project_path,
+            siblings,
+            idx,
+        } => {
+            let lines = load_transcript_lines(&project_path, &session);
+            app.stack.push(View::Transcript(TranscriptState {
+                sessions: siblings,
+                idx,
+                project_path,
+                lines,
+                scroll: 0,
+                filter: String::new(),
+                filter_open: false,
+                match_lines: Vec::new(),
+                match_cursor: 0,
+            }));
+        }
+        PickerAction::Blame { root, file, sha } => {
+            suspend_and_run(terminal, || run_oobo_blame(&root, &file, &sha))?;
+        }
+        PickerAction::Noop => {}
+    }
+    Ok(())
+}
+
+// ── Actions ───────────────────────────────────────────────────────────
+
 fn move_selection(app: &mut App, delta: i32) {
     let total = visible_anchor_count(&app.anchors, &app.filter) as i32;
     if total == 0 {
@@ -535,20 +887,87 @@ fn move_to(app: &mut App, idx: usize) {
     }
 }
 
-fn open_transcript(app: &mut App) {
+/// Open transcript for the selected anchor. If it has a single session,
+/// open it directly. If multiple, push a session picker.
+fn open_sessions_for_selected_anchor(app: &mut App) {
     let Some(anchor) = app.selected_anchor() else {
         return;
     };
     let sessions = load_sessions_for_anchor(&anchor.sha);
-    let Some(session) = sessions.into_iter().next() else {
+    if sessions.is_empty() {
         app.flash("no sessions linked to this anchor");
         return;
+    }
+    if sessions.len() == 1 {
+        let session = sessions.into_iter().next().unwrap();
+        let lines = load_transcript_lines(&app.root, &session);
+        app.stack.push(View::Transcript(TranscriptState {
+            sessions: vec![session],
+            idx: 0,
+            project_path: app.root.clone(),
+            lines,
+            scroll: 0,
+            filter: String::new(),
+            filter_open: false,
+            match_lines: Vec::new(),
+            match_cursor: 0,
+        }));
+        return;
+    }
+
+    let mut list = ListState::default();
+    list.select(Some(0));
+    app.stack.push(View::Picker(PickerState {
+        title: format!("sessions for {}", short_sha(&anchor.sha)),
+        list,
+        kind: PickerKind::Session {
+            sessions,
+            project_path: app.root.clone(),
+        },
+    }));
+}
+
+/// Build a file picker for `b` — blame one of the touched files at the
+/// selected anchor. Skips the picker if only one file.
+fn open_blame_picker(app: &mut App) {
+    let Some(anchor) = app.selected_anchor() else {
+        return;
     };
-    let lines = load_transcript_lines(&app.root, &session);
-    app.stack.push(View::Transcript(TranscriptState {
-        session,
-        lines,
-        scroll: 0,
+    let files = touched_files_for(&app.root, &anchor.sha);
+    if files.is_empty() {
+        app.flash("no files touched in this anchor");
+        return;
+    }
+    if files.len() == 1 {
+        let file = files.into_iter().next().unwrap();
+        // Stash and invoke after returning true, but we don't have the terminal
+        // here; so set a deferred flash and return; actual suspend happens
+        // through the picker action path for uniformity.
+        let sha = anchor.sha.clone();
+        let mut list = ListState::default();
+        list.select(Some(0));
+        app.stack.push(View::Picker(PickerState {
+            title: format!("blame at {}  (press enter)", short_sha(&sha)),
+            list,
+            kind: PickerKind::BlameFile {
+                files: vec![file],
+                sha,
+                root: app.root.clone(),
+            },
+        }));
+        return;
+    }
+
+    let mut list = ListState::default();
+    list.select(Some(0));
+    app.stack.push(View::Picker(PickerState {
+        title: format!("blame — pick a file (at {})", short_sha(&anchor.sha)),
+        list,
+        kind: PickerKind::BlameFile {
+            files,
+            sha: anchor.sha.clone(),
+            root: app.root.clone(),
+        },
     }));
 }
 
@@ -592,7 +1011,6 @@ where
 
 fn run_git_show(root: &str, sha: &str) -> Result<(), String> {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    // Pipe through a pager so long diffs are browsable.
     let status = std::process::Command::new(&git)
         .args(["show", "--color=always", sha])
         .current_dir(root)
@@ -615,30 +1033,10 @@ fn run_oobo_blame(root: &str, file: &str, sha: &str) -> Result<(), String> {
     if !status.success() {
         return Err(format!("oobo blame exited {status}"));
     }
-    // Pause so the user can read the output before the TUI repaints.
     println!("\npress enter to return...");
     let mut buf = String::new();
     let _ = std::io::stdin().read_line(&mut buf);
     Ok(())
-}
-
-fn pick_file_for_anchor(root: &str, sha: &str) -> Option<String> {
-    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let output = std::process::Command::new(git)
-        .args(["show", "--name-only", "--pretty=format:", sha])
-        .current_dir(root)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .map(|s| s.to_string())
 }
 
 // ── DB loaders ────────────────────────────────────────────────────────
@@ -764,6 +1162,18 @@ fn load_sessions_for_anchor(commit_hash: &str) -> Vec<SessionLink> {
     out
 }
 
+fn lookup_project_path(project_id: &str) -> Option<String> {
+    use rusqlite::params;
+    let db = Db::open().ok()?;
+    db.conn
+        .query_row(
+            "SELECT path FROM projects WHERE id = ?1",
+            params![project_id],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+}
+
 fn touched_files_for(root: &str, sha: &str) -> Vec<String> {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let Ok(output) = std::process::Command::new(git)
@@ -853,22 +1263,31 @@ fn timestamp_short(ts_ms: Option<i64>) -> String {
 // ── Rendering ─────────────────────────────────────────────────────────
 
 fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
-    match app.stack.last() {
-        Some(View::Feed(feed)) => draw_feed(frame, app, feed),
-        Some(View::Transcript(ts)) => draw_transcript(frame, app, ts),
-        Some(View::Search(s)) => draw_search(frame, app, s),
-        Some(View::Help) => {
-            if let Some(first) = app.stack.first() {
-                match first {
-                    View::Feed(feed) => draw_feed(frame, app, feed),
-                    View::Transcript(ts) => draw_transcript(frame, app, ts),
-                    View::Search(s) => draw_search(frame, app, s),
-                    View::Help => {}
-                }
-            }
-            draw_help_overlay(frame);
+    // Always draw the root view (Feed) as the base. Then, if another view is
+    // on top, overlay it. This keeps the feed visible behind overlays like
+    // Help and Picker.
+    if let Some(first) = app.stack.first() {
+        match first {
+            View::Feed(feed) => draw_feed(frame, app, feed),
+            View::Transcript(ts) => draw_transcript(frame, app, ts),
+            View::Search(s) => draw_search(frame, app, s),
+            View::Picker(_) | View::Help => {}
         }
-        None => {}
+    }
+
+    // Draw additional views on top of the root (if any).
+    if app.stack.len() > 1 {
+        if let Some(top) = app.stack.last() {
+            match top {
+                View::Feed(_) => {} // already drawn as root
+                View::Transcript(ts) => draw_transcript(frame, app, ts),
+                View::Search(s) => draw_search(frame, app, s),
+                View::Picker(p) => draw_picker_overlay(frame, p),
+                View::Help => draw_help_overlay(frame),
+            }
+        }
+    } else if matches!(app.stack.last(), Some(View::Help)) {
+        draw_help_overlay(frame);
     }
 }
 
@@ -885,6 +1304,13 @@ fn draw_feed(frame: &mut ratatui::Frame<'_>, app: &App, feed: &FeedState) {
 
     draw_header(frame, app, layout[0]);
 
+    // Empty state
+    if app.anchors.is_empty() {
+        draw_empty_state(frame, app, layout[1]);
+        draw_footer(frame, app, feed, layout[2]);
+        return;
+    }
+
     let body = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
@@ -893,6 +1319,44 @@ fn draw_feed(frame: &mut ratatui::Frame<'_>, app: &App, feed: &FeedState) {
     draw_anchor_list(frame, app, feed, body[0]);
     draw_anchor_detail(frame, app, body[1]);
     draw_footer(frame, app, feed, layout[2]);
+}
+
+fn draw_empty_state(frame: &mut ratatui::Frame<'_>, app: &App, area: Rect) {
+    let hints: Vec<Line<'static>> = vec![
+        Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  no anchors yet for \"{}\"", app.project_name),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  an anchor is created each time you commit with oobo active.",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  · make a commit:   oobo commit -m \"your message\"",
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(Span::styled(
+            "  · (re)install git alias:  oobo alias install",
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(Span::styled(
+            "  · index existing sessions: oobo setup",
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  press ? for keybindings · q to quit",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(hints).wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 fn draw_header(frame: &mut ratatui::Frame<'_>, app: &App, area: Rect) {
@@ -1091,7 +1555,7 @@ fn draw_footer(
         ))
     } else {
         Line::from(vec![Span::styled(
-            " ↑↓ nav · enter transcript · d diff · b blame · / filter · ^f search · t time · e toggle · ? help · q quit ",
+            " ↑↓ nav · enter sessions · d diff · b blame · / filter · ^f search · t time · e toggle · ? help · q quit ",
             Style::default().fg(Color::DarkGray),
         )])
     };
@@ -1109,7 +1573,23 @@ fn draw_transcript(frame: &mut ratatui::Frame<'_>, _app: &App, ts: &TranscriptSt
         ])
         .split(area);
 
-    let short_sid: String = ts.session.session_id.chars().take(8).collect();
+    let session = &ts.sessions[ts.idx];
+    let short_sid: String = session.session_id.chars().take(8).collect();
+    let model = session.model.clone().unwrap_or_default();
+    let position = if ts.sessions.len() > 1 {
+        format!("  [{}/{}]", ts.idx + 1, ts.sessions.len())
+    } else {
+        String::new()
+    };
+    let matches = if ts.match_lines.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "  {}/{} matches",
+            ts.match_cursor + 1,
+            ts.match_lines.len()
+        )
+    };
     let header = Line::from(vec![
         Span::styled(
             " transcript",
@@ -1117,31 +1597,61 @@ fn draw_transcript(frame: &mut ratatui::Frame<'_>, _app: &App, ts: &TranscriptSt
         ),
         Span::styled(
             format!(
-                "  {}  {}  {}",
-                short_sid,
-                ts.session.source,
-                ts.session.model.clone().unwrap_or_default(),
+                "  {}  {}  {}{}{}",
+                short_sid, session.source, model, position, matches
             ),
             Style::default().fg(Color::DarkGray),
         ),
     ]);
     frame.render_widget(Paragraph::new(header), layout[0]);
 
-    let max_scroll = ts
+    // Highlight matching lines by colouring them.
+    let rendered: Vec<Line<'static>> = ts
         .lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            if ts.match_lines.contains(&i) {
+                let mut new = line.clone();
+                for span in new.spans.iter_mut() {
+                    span.style = span.style.bg(Color::Yellow).fg(Color::Black);
+                }
+                new
+            } else {
+                line.clone()
+            }
+        })
+        .collect();
+
+    let max_scroll = rendered
         .len()
         .saturating_sub(layout[1].height as usize) as u16;
     let scroll = ts.scroll.min(max_scroll);
-    let body = Paragraph::new(ts.lines.clone())
+    let body = Paragraph::new(rendered)
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
     frame.render_widget(body, layout[1]);
 
-    let footer = Paragraph::new(Line::from(Span::styled(
-        " ↑↓ scroll · pgup/pgdn page · g/G top/bot · esc back · q quit ",
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(footer, layout[2]);
+    let footer_content: Line<'static> = if ts.filter_open {
+        Line::from(vec![
+            Span::styled(
+                " /",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(ts.filter.clone()),
+            Span::styled("_", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "   (enter to jump · esc to clear)",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])
+    } else {
+        Line::from(Span::styled(
+            " ↑↓ scroll · pgup/pgdn page · g/G top/bot · [ / ] prev/next session · / find · n/N · esc back · q quit ",
+            Style::default().fg(Color::DarkGray),
+        ))
+    };
+    frame.render_widget(Paragraph::new(footer_content), layout[2]);
 }
 
 fn draw_search(frame: &mut ratatui::Frame<'_>, _app: &App, state: &SearchState) {
@@ -1201,10 +1711,19 @@ fn draw_search(frame: &mut ratatui::Frame<'_>, _app: &App, state: &SearchState) 
             .map(|h| {
                 let pname = &h.project_name;
                 let when = h.timestamp.map(relative_time).unwrap_or_else(|| "-".into());
+                let kind = if h.session_id.is_some() {
+                    "session"
+                } else {
+                    "anchor "
+                };
                 let snippet = truncate(&h.snippet, 60);
                 ListItem::new(Line::from(vec![
                     Span::styled(
-                        format!(" {pname:<14}"),
+                        format!(" {kind}"),
+                        Style::default().fg(Color::Magenta),
+                    ),
+                    Span::styled(
+                        format!("  {pname:<14}"),
                         Style::default().fg(Color::Cyan),
                     ),
                     Span::styled(
@@ -1228,15 +1747,41 @@ fn draw_search(frame: &mut ratatui::Frame<'_>, _app: &App, state: &SearchState) 
     }
 
     let footer = Paragraph::new(Line::from(Span::styled(
-        " enter run · tab scope · ↑↓ nav · esc back ",
+        " enter run/open · tab scope · ↑↓ nav · esc back ",
         Style::default().fg(Color::DarkGray),
     )));
     frame.render_widget(footer, layout[3]);
 }
 
-fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, ) {
+fn draw_picker_overlay(frame: &mut ratatui::Frame<'_>, p: &PickerState) {
     let area = frame.area();
-    let rect = centered(area, 60, 22);
+    let height = (p.len() as u16 + 4).clamp(6, 20);
+    let rect = centered(area, 70, height);
+    frame.render_widget(Clear, rect);
+
+    let items: Vec<ListItem> = (0..p.len())
+        .map(|i| ListItem::new(Line::from(Span::raw(p.row_label(i)))))
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {} ", p.title))
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
+    let mut ls = p.list.clone();
+    frame.render_stateful_widget(list, rect, &mut ls);
+}
+
+fn draw_help_overlay(frame: &mut ratatui::Frame<'_>) {
+    let area = frame.area();
+    let rect = centered(area, 62, 26);
 
     let lines = vec![
         Line::from(Span::styled(
@@ -1247,9 +1792,9 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, ) {
         Line::from(" FEED"),
         Line::from("   ↑/k ↓/j     move selection"),
         Line::from("   g / G       top / bottom"),
-        Line::from("   enter, s    open transcript for first session"),
+        Line::from("   enter, s    open transcript (session picker if >1)"),
         Line::from("   d           git show --color (diff)"),
-        Line::from("   b           oobo blame first touched file"),
+        Line::from("   b           oobo blame (file picker if >1)"),
         Line::from("   /           live filter"),
         Line::from("   ctrl-f      full search (project/global)"),
         Line::from("   t           cycle time window (all / 24h / 7d / 30d)"),
@@ -1257,11 +1802,14 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>, ) {
         Line::from("   r           reload from db"),
         Line::from(""),
         Line::from(" TRANSCRIPT"),
-        Line::from("   ↑↓ pgup/pgdn  scroll · g/G top/bot · esc back"),
+        Line::from("   ↑↓ pgup/pgdn  scroll · g/G top/bot"),
+        Line::from("   [ / ]         prev / next session of this anchor"),
+        Line::from("   /             find in transcript · n/N next/prev match"),
+        Line::from("   esc/backspace back · q quit"),
         Line::from(""),
         Line::from(" SEARCH"),
         Line::from("   tab         toggle project ↔ global"),
-        Line::from("   enter       run · esc close"),
+        Line::from("   enter       run · (on a hit) open transcript"),
         Line::from(""),
         Line::from(Span::styled(
             " press any key to dismiss",
