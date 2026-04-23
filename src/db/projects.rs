@@ -23,6 +23,15 @@ pub struct ProjectSettings {
     pub banner_shown: bool,
 }
 
+/// Summary stats computed from joined tables for cross-project views.
+#[derive(Debug, Clone, Default)]
+pub struct AnchorStats {
+    pub anchors: i64,
+    pub tokens: i64,
+    pub ai_pct: i64,
+    pub last_activity: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProjectRow {
     pub id: String,

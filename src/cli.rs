@@ -267,6 +267,51 @@ const OOBO_SUBCOMMANDS: &[&str] = &[
     "hooks",
 ];
 
+/// Agent-env-var names. Any of these being set & non-empty implies agent mode.
+const AGENT_ENV_VARS: &[&str] = &[
+    "CURSOR_AGENT",
+    "CLAUDECODE",
+    "AIDER",
+    "CONTINUE_SESSION",
+    "CONTINUE_IDE",
+    "AICOMMITS",
+];
+
+fn agent_env_active() -> bool {
+    AGENT_ENV_VARS
+        .iter()
+        .any(|k| std::env::var(k).map(|v| !v.is_empty()).unwrap_or(false))
+}
+
+fn stdout_is_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
+}
+
+/// Resolve the effective output mode from explicit flags + environment.
+///
+/// Precedence (highest first):
+/// 1. `--json` → Json
+/// 2. `--agent` → Agent
+/// 3. `--interactive` → Tui (force)
+/// 4. Auto-detect: non-TTY stdout OR any agent env var → Agent
+/// 5. Default → Tui (pretty)
+pub fn resolve_output_mode(json: bool, agent: bool, interactive: bool) -> OutputMode {
+    if json {
+        return OutputMode::Json;
+    }
+    if agent {
+        return OutputMode::Agent;
+    }
+    if interactive {
+        return OutputMode::Tui;
+    }
+    if !stdout_is_tty() || agent_env_active() {
+        return OutputMode::Agent;
+    }
+    OutputMode::Tui
+}
+
 fn is_oobo_subcommand(args: &[String]) -> bool {
     args.get(1)
         .map(|a| OOBO_SUBCOMMANDS.contains(&a.as_str()))
@@ -316,13 +361,7 @@ pub fn route(cfg: Config) -> Result<i32, String> {
         }
     };
 
-    let mode = if cli.json {
-        OutputMode::Json
-    } else if cli.agent {
-        OutputMode::Agent
-    } else {
-        OutputMode::Tui
-    };
+    let mode = resolve_output_mode(cli.json, cli.agent, cli.interactive);
 
     let result = match cli.command {
         Some(Command::Search {
@@ -448,11 +487,13 @@ pub fn route(cfg: Config) -> Result<i32, String> {
             Ok(0)
         }
         None => {
+            // Truly bare `oobo` (no trailing tokens) → four-quadrant view.
+            // `oobo <non-reserved-verb>` (e.g. `oobo commit`, `oobo status`)
+            // lands here too because clap parks unknown verbs in git_args;
+            // those should still be forwarded to git (passthrough).
             if cli.git_args.is_empty() {
-                use clap::CommandFactory;
-                Cli::command().print_help().ok();
-                println!();
-                Ok(0)
+                let code = crate::commands::bare::run(&cfg, mode)?;
+                Ok(code)
             } else {
                 let git_args: Vec<&str> = cli.git_args.iter().map(|s| s.as_str()).collect();
                 git::proxy::run_and_intercept(&cfg, &git_args)

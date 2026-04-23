@@ -166,6 +166,71 @@ impl Db {
         Ok(())
     }
 
+    /// Cross-project summary stats for the bare `oobo` view.
+    ///
+    /// Returns aggregate anchor count, token total, AI percentage, and the
+    /// last-activity timestamp for a project. All queries degrade gracefully
+    /// to zero on error (this is a best-effort summary, not a critical path).
+    pub fn anchor_stats_for_project(
+        &self,
+        project_id: &str,
+    ) -> Result<crate::db::projects::AnchorStats, String> {
+        use rusqlite::params;
+        let mut stats = crate::db::projects::AnchorStats::default();
+
+        // Anchor count via ai_commits → anchors join.
+        let anchors: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM ai_commits WHERE project_id = ?1",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        stats.anchors = anchors;
+
+        // Tokens via anchor_sessions joined to ai_commits.
+        let tokens: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)+\
+                         COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_tokens,0)), 0)
+                 FROM anchor_sessions s
+                 JOIN ai_commits c ON c.commit_hash = s.commit_hash
+                 WHERE c.project_id = ?1",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        stats.tokens = tokens;
+
+        // AI% average from ai_commits.
+        let ai_pct: f64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(AVG(ai_percentage), 0.0)
+                 FROM ai_commits
+                 WHERE project_id = ?1 AND ai_percentage IS NOT NULL",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0.0);
+        stats.ai_pct = ai_pct.round() as i64;
+
+        // Most recent activity.
+        let last: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(updated_at), 0) FROM sessions WHERE project_id = ?1",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        stats.last_activity = last;
+
+        Ok(stats)
+    }
+
     /// Update a session's first_message field.
     pub fn update_session_first_message(
         &self,
