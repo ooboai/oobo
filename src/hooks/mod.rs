@@ -1,5 +1,6 @@
 pub mod install;
 pub mod state;
+pub mod store;
 
 use serde::Deserialize;
 

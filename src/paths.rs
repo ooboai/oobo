@@ -142,6 +142,12 @@ mod tests {
 
     #[test]
     fn test_oobo_home_is_under_home() {
+        // Other tests (e.g. hooks::state) may transiently override
+        // OOBO_HOME to a tempdir for isolation. Only assert the default
+        // shape when OOBO_HOME is unset.
+        if std::env::var_os("OOBO_HOME").is_some() {
+            return;
+        }
         let home = oobo_home();
         assert!(home.to_string_lossy().contains(".oobo"));
     }

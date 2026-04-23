@@ -604,6 +604,7 @@ fn test_e2e_commit_creates_anchor() {
 #[test]
 fn test_e2e_hook_lifecycle() {
     let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
 
     Command::new("git")
         .args(["init"])
@@ -614,6 +615,7 @@ fn test_e2e_hook_lifecycle() {
     let start_output = Command::new(oobo_binary())
         .args(["hooks", "agent", "session-start"])
         .current_dir(tmp.path())
+        .env("OOBO_HOME", oobo_home.path())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -631,20 +633,33 @@ fn test_e2e_hook_lifecycle() {
 
     assert!(start_output.status.success(), "session-start failed");
 
-    let session_file = tmp.path().join(".git/oobo-sessions/e2e-test.json");
+    // State is now persisted in the SQLite `hook_sessions` table — no
+    // file under `.git/oobo-sessions/` is created anymore.
+    let legacy_file = tmp.path().join(".git/oobo-sessions/e2e-test.json");
     assert!(
-        session_file.exists(),
-        "session state file should be created"
+        !legacy_file.exists(),
+        "legacy session file must NOT be created (state lives in the DB now)"
     );
 
-    let content = fs::read_to_string(&session_file).unwrap();
-    let state: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let db_path = oobo_home.path().join("db").join("oobo.db");
+    assert!(db_path.exists(), "oobo db should exist after session-start");
+
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let payload: String = conn
+        .query_row(
+            "SELECT payload FROM hook_sessions WHERE session_id = ?1",
+            rusqlite::params!["e2e-test"],
+            |row| row.get(0),
+        )
+        .expect("session row should exist in hook_sessions");
+    let state: serde_json::Value = serde_json::from_str(&payload).unwrap();
     assert_eq!(state["agent"], "cursor");
     assert_eq!(state["model"], "claude-opus-4");
 
     let end_output = Command::new(oobo_binary())
         .args(["hooks", "agent", "session-end"])
         .current_dir(tmp.path())
+        .env("OOBO_HOME", oobo_home.path())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -661,10 +676,16 @@ fn test_e2e_hook_lifecycle() {
         .unwrap();
 
     assert!(end_output.status.success(), "session-end failed");
-    assert!(
-        !session_file.exists(),
-        "session state file should be removed"
-    );
+
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM hook_sessions WHERE session_id = ?1",
+            rusqlite::params!["e2e-test"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0, "session row should be removed on session-end");
 }
 
 #[test]

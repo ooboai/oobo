@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use std::path::Path;
 
-const LATEST_VERSION: i32 = 9;
+const LATEST_VERSION: i32 = 10;
 
 pub fn run(conn: &Connection) -> Result<(), String> {
     run_with_path(conn, None)
@@ -55,6 +55,9 @@ pub fn run_with_path(conn: &Connection, db_path: Option<&Path>) -> Result<(), St
     }
     if current < 9 {
         migrate_v9(conn)?;
+    }
+    if current < 10 {
+        migrate_v10(conn)?;
     }
 
     set_version(conn, LATEST_VERSION)?;
@@ -584,6 +587,31 @@ fn migrate_v9(conn: &Connection) -> Result<(), String> {
     }
 
     tx.commit().map_err(|e| format!("v9 commit: {e}"))?;
+    Ok(())
+}
+
+/// v10: hook_sessions table. Moves per-session hook state (previously in
+/// `.git/oobo-sessions/<sid>.json`) into the DB. Existing legacy files
+/// are NOT touched by the migration itself — they're lazily imported on
+/// the first read/write of each session (see `hooks::store`).
+fn migrate_v10(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS hook_sessions (
+            project_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            payload    TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (project_id, session_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_hook_sessions_updated
+            ON hook_sessions(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_hook_sessions_session
+            ON hook_sessions(session_id);
+        ",
+    )
+    .map_err(|e| format!("migration v10 failed: {e}"))?;
     Ok(())
 }
 
