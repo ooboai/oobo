@@ -3,6 +3,7 @@ pub mod anchors;
 pub mod auto;
 pub mod bare;
 pub mod blame;
+pub mod legacy;
 pub mod index;
 pub mod search;
 pub mod settings;

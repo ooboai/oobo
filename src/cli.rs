@@ -279,6 +279,14 @@ const OOBO_SUBCOMMANDS: &[&str] = &[
     "hooks",
 ];
 
+/// Re-parse the CLI with a synthetic argv and dispatch. Used by the legacy
+/// hint system to rewrite e.g. `oobo scan` → `oobo setup --reindex`.
+fn dispatch_with_argv(cfg: Config, argv: Vec<String>) -> Result<i32, String> {
+    let cli = Cli::try_parse_from(argv).map_err(|e| format!("dispatch rewrite: {e}"))?;
+    let mode = resolve_output_mode(cli.json, cli.agent, cli.interactive);
+    dispatch_parsed(cfg, cli, mode)
+}
+
 /// Agent-env-var names. Any of these being set & non-empty implies agent mode.
 const AGENT_ENV_VARS: &[&str] = &[
     "CURSOR_AGENT",
@@ -361,6 +369,31 @@ pub fn route(cfg: Config) -> Result<i32, String> {
         return git::proxy::run_and_intercept(&cfg, &git_args);
     }
 
+    // Legacy 0.1.x command hints. Fires BEFORE git passthrough so we can
+    // intercept names that collide with git verbs only coincidentally.
+    if let Some(verb) = raw_args.get(1) {
+        if !OOBO_SUBCOMMANDS.contains(&verb.as_str()) {
+            if let Some(hint) = crate::commands::legacy::lookup(verb) {
+                match crate::commands::legacy::handle(hint) {
+                    Some(code) => return Ok(code),
+                    None => {
+                        // Continue with mapped args.
+                        if let Some(mapped) = hint.mapped {
+                            let mut new_argv: Vec<String> =
+                                vec![raw_args[0].clone()];
+                            for m in mapped {
+                                new_argv.push((*m).to_string());
+                            }
+                            // Replace argv in-process so clap sees the rewrite.
+                            return dispatch_with_argv(cfg, new_argv);
+                        }
+                        return Ok(2);
+                    }
+                }
+            }
+        }
+    }
+
     let cli = match Cli::try_parse() {
         Ok(c) => c,
         Err(e) => {
@@ -385,6 +418,12 @@ pub fn route(cfg: Config) -> Result<i32, String> {
 
     let mode = resolve_output_mode(cli.json, cli.agent, cli.interactive);
 
+    dispatch_parsed(cfg, cli, mode)
+}
+
+/// Dispatch a parsed `Cli`. Extracted so legacy-hint rewrites can re-enter
+/// the same code path after swapping argv.
+fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, String> {
     // Fire-and-forget auto-index for view-style commands. Never blocks.
     if is_view_command(&cli.command) {
         crate::commands::auto::maybe_kick(&cfg);
