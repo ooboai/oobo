@@ -790,6 +790,91 @@ fn global_state_vscdb_path() -> Option<PathBuf> {
     super::state_vscdb_path()
 }
 
+/// One message bubble as stored in Cursor's `cursorDiskKV` table.
+///
+/// Cursor's new on-disk format (post-2024-ish) stores each composer
+/// message as a `bubbleId:<session>:<uuid>` row carrying its own
+/// token counts — exactly the per-call deltas the new data model
+/// demands. This struct is the tap-facing view.
+///
+/// `btype` mapping (Cursor internal):
+/// - `1` = user bubble
+/// - `2` = assistant bubble
+/// - other values are skipped (system messages, meta entries)
+#[derive(Debug, Clone)]
+pub struct CursorBubble {
+    pub btype: i64,
+    pub text: Option<String>,
+    pub thinking: Option<String>,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub created_at_ms: Option<i64>,
+    pub tool_name: Option<String>,
+    pub tool_result: Option<String>,
+}
+
+/// Return every bubble for `session_id` in storage order. Empty vec
+/// if the session is absent or the DB can't be opened (tap treats
+/// empty + warning as "nothing to ingest today").
+pub fn read_bubbles(session_id: &str) -> Vec<CursorBubble> {
+    let db_path = match global_state_vscdb_path() {
+        Some(p) if p.exists() => p,
+        _ => return Vec::new(),
+    };
+
+    let conn = match crate::utils::open_db_readonly(&db_path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    // Range scan: `bubbleId:<session>:<uuid>` rows live between
+    // `bubbleId:<session>:` (inclusive) and `bubbleId:<session>;`
+    // (exclusive — `;` is the next ASCII char after `:`).
+    let prefix = format!("bubbleId:{session_id}:");
+    let prefix_end = format!("bubbleId:{session_id};");
+
+    let mut stmt = match conn.prepare(
+        "SELECT key,
+                json_extract(value, '$.type') AS btype,
+                json_extract(value, '$.text') AS btext,
+                json_extract(value, '$.tokenCount.inputTokens') AS inp,
+                json_extract(value, '$.tokenCount.outputTokens') AS outp,
+                json_extract(value, '$.createdAt') AS created,
+                json_extract(value, '$.thinking.text') AS thinking,
+                json_extract(value, '$.toolFormerData.name') AS tool_name,
+                json_extract(value, '$.toolFormerData.result') AS tool_result
+         FROM cursorDiskKV
+         WHERE key >= ?1 AND key < ?2
+         ORDER BY key ASC",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+
+    let rows = match stmt.query_map(rusqlite::params![&prefix, &prefix_end], |row| {
+        Ok(CursorBubble {
+            btype: row.get::<_, i64>(1).unwrap_or(0),
+            text: row.get::<_, Option<String>>(2).unwrap_or(None),
+            input_tokens: row.get::<_, i64>(3).unwrap_or(0),
+            output_tokens: row.get::<_, i64>(4).unwrap_or(0),
+            created_at_ms: row
+                .get::<_, Option<String>>(5)
+                .ok()
+                .flatten()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.timestamp_millis()),
+            thinking: row.get::<_, Option<String>>(6).unwrap_or(None),
+            tool_name: row.get::<_, Option<String>>(7).unwrap_or(None),
+            tool_result: row.get::<_, Option<String>>(8).unwrap_or(None),
+        })
+    }) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+
+    rows.flatten().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

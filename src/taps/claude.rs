@@ -85,6 +85,9 @@ impl TurnTap for ClaudeTurnTap {
                 }
                 Ok(total)
             }
+            TapArtifact::SelfLookup => Err(TapError::Other(
+                "claude tap does not support SelfLookup; pass a File artifact".into(),
+            )),
         }
     }
 }

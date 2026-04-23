@@ -19,8 +19,11 @@
 //! change.
 
 pub mod claude;
+pub mod codex;
+pub mod cursor;
+pub mod opencode;
 #[cfg(test)]
-mod memory_sink;
+pub(crate) mod memory_sink;
 
 use crate::config::Config;
 use crate::core::turn::Turn;
@@ -114,11 +117,20 @@ pub trait TurnTap {
 /// breaking the trait.
 #[derive(Debug, Clone)]
 pub enum TapArtifact<'a> {
+    /// Single file on disk (e.g. Claude JSONL, Codex JSONL, OpenCode JSONL).
     File(&'a std::path::Path),
+    /// Primary file plus a set of known subagent files (Claude's
+    /// `subagents/` convention). The tap emits explicit subagent
+    /// links for each.
     FileWithSubagents {
         primary: &'a std::path::Path,
         subagents: &'a [(String, std::path::PathBuf)],
     },
+    /// Tap looks up the native artifact by `session_id` alone. Used
+    /// for tools whose storage is a single global database shared
+    /// across sessions (Cursor's `state.vscdb`). The tap owns the
+    /// lookup policy; `session_id` is the complete identifier.
+    SelfLookup,
 }
 
 #[cfg(test)]
