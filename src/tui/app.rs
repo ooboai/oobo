@@ -71,6 +71,8 @@ struct ProjectPickerRow {
     anchors: i64,
     tokens: i64,
     ai_pct: i64,
+    /// Last tool that worked in the project (claude, cursor, codex, …).
+    last_agent: Option<String>,
 }
 
 fn project_picker_loop(
@@ -183,20 +185,114 @@ fn load_project_rows() -> Vec<ProjectPickerRow> {
         }
         let settings = db.get_project_settings(&p.id).unwrap_or_default();
         let stats = db.anchor_stats_for_project(&p.id).unwrap_or_default();
+
+        // Tokens across ALL sessions in the project (not just anchored ones).
+        let session_tokens = project_session_tokens(&db, &p.id);
+        let tokens = stats.tokens.max(session_tokens);
+
+        // Last activity across multiple sources.
+        let last_activity = project_last_activity(&db, &p.id, stats.last_activity);
+
+        // Last agent to work in the project.
+        let last_agent = project_last_agent(&db, &p.id);
+
         rows.push(ProjectPickerRow {
             id: p.id.clone(),
             name: p.name.clone(),
             path: p.path.clone(),
             remote: p.git_remote.clone(),
             enabled: !settings.ignored,
-            last_activity: stats.last_activity,
+            last_activity,
             anchors: stats.anchors,
-            tokens: stats.tokens,
+            tokens,
             ai_pct: stats.ai_pct,
+            last_agent,
         });
     }
-    rows.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    // Sort: projects with activity first (most recent), zeros sink to bottom
+    // alphabetically so it's stable.
+    rows.sort_by(|a, b| {
+        match (a.last_activity > 0, b.last_activity > 0) {
+            (true, true) => b.last_activity.cmp(&a.last_activity),
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (false, false) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        }
+    });
     rows
+}
+
+fn project_session_tokens(db: &Db, project_id: &str) -> i64 {
+    use rusqlite::params;
+    db.conn
+        .query_row(
+            "SELECT COALESCE(SUM(
+                COALESCE(st.input_tokens, 0)
+                + COALESCE(st.output_tokens, 0)
+                + COALESCE(st.cache_read_tokens, 0)
+                + COALESCE(st.cache_creation_tokens, 0)
+             ), 0)
+             FROM session_stats st
+             JOIN sessions s ON s.id = st.session_id AND s.source = st.source
+             WHERE s.project_id = ?1",
+            params![project_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+}
+
+fn project_last_activity(db: &Db, project_id: &str, seed: i64) -> i64 {
+    use rusqlite::params;
+    let mut best = seed;
+
+    if let Ok(ts) = db.conn.query_row(
+        "SELECT COALESCE(MAX(updated_at), 0) FROM sessions WHERE project_id = ?1",
+        params![project_id],
+        |r| r.get::<_, i64>(0),
+    ) {
+        if ts > best {
+            best = ts;
+        }
+    }
+
+    if let Ok(ts) = db.conn.query_row(
+        "SELECT COALESCE(MAX(a.committed_at), 0)
+         FROM anchors a
+         JOIN ai_commits c ON c.commit_hash = a.commit_hash
+         WHERE c.project_id = ?1",
+        params![project_id],
+        |r| r.get::<_, i64>(0),
+    ) {
+        if ts > best {
+            best = ts;
+        }
+    }
+
+    if let Ok(ts) = db.conn.query_row(
+        "SELECT COALESCE(MAX(timestamp), 0) FROM events WHERE project_id = ?1",
+        params![project_id],
+        |r| r.get::<_, i64>(0),
+    ) {
+        if ts > best {
+            best = ts;
+        }
+    }
+
+    best
+}
+
+fn project_last_agent(db: &Db, project_id: &str) -> Option<String> {
+    use rusqlite::params;
+    db.conn
+        .query_row(
+            "SELECT source FROM sessions
+             WHERE project_id = ?1
+             ORDER BY COALESCE(updated_at, created_at, 0) DESC
+             LIMIT 1",
+            params![project_id],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
 }
 
 fn is_stale_project_path(path: &str) -> bool {
@@ -294,16 +390,23 @@ fn draw_project_picker(
     frame.render_widget(Paragraph::new(header), layout[0]);
 
     // List
+    // Columns:
+    //   ● | name (flex)  path (flex, dim)  agent  when  anchors  tokens  AI%  on|off
     let inner_w = layout[1].width.saturating_sub(2) as usize;
-    let meta_w = 34usize; // "  12h   120 anchors   3.4k   42% AI  on"
+    // Fixed trailing metadata width — each column gets right-aligned space.
+    // agent(8) + when(6) + anchors(6+1) + tokens(7) + ai%(5) + enabled(4) + gaps(~10)
+    let meta_w = 50usize;
     let name_w = 22usize;
     let path_w = inner_w.saturating_sub(meta_w + name_w + 3).max(10);
+
+    // Text color shown inside highlighted row so it stays readable on blue bg.
+    let dim_normal = Style::default().fg(Color::DarkGray);
 
     let items: Vec<ListItem> = visible_projects(rows, filter)
         .map(|r| {
             let when = relative_time(r.last_activity);
             let tokens = super::format_tokens(r.tokens);
-            let enabled = if r.enabled { "on" } else { "off" };
+            let enabled_label = if r.enabled { "on" } else { "off" };
             let dot_style = if r.enabled {
                 Style::default().fg(Color::Green)
             } else {
@@ -314,21 +417,23 @@ fn draw_project_picker(
             let name = pad_or_truncate(&r.name, name_w);
             let path_display = display_path(&r.path);
             let path = pad_or_truncate(&path_display, path_w);
+            let agent_raw = r
+                .last_agent
+                .as_deref()
+                .map(short_agent_label)
+                .unwrap_or("-");
+            let agent = pad_or_truncate(agent_raw, 8);
 
             ListItem::new(Line::from(vec![
                 Span::styled(format!(" {dot} "), dot_style),
                 Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled(
-                    format!("  {path}"),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    format!(
-                        "  {when:>4}  {:>5} a  {tokens:>6}  {:>3}% AI  {enabled}",
-                        r.anchors, r.ai_pct
-                    ),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(format!("  {path}"), dim_normal),
+                Span::styled(format!("  {agent}"), Style::default().fg(Color::Cyan)),
+                Span::styled(format!("  {when:>5}"), dim_normal),
+                Span::styled(format!("  {:>4}a", r.anchors), dim_normal),
+                Span::styled(format!("  {tokens:>6}"), dim_normal),
+                Span::styled(format!("  {:>3}% AI", r.ai_pct), dim_normal),
+                Span::styled(format!("  {enabled_label}"), dim_normal),
             ]))
         })
         .collect();
@@ -336,10 +441,14 @@ fn draw_project_picker(
     let list = List::new(items)
         .block(Block::default().borders(Borders::NONE))
         .highlight_style(
+            // Blue background with white foreground reads well in both
+            // light and dark terminals; bold makes the selection pop.
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Blue)
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
-        );
+        )
+        .highlight_symbol("▸ ");
     frame.render_stateful_widget(list, layout[1], state);
 
     // Footer
@@ -372,6 +481,26 @@ fn display_path(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+fn short_agent_label(source: &str) -> &str {
+    let s = source.to_lowercase();
+    if s.contains("claude") {
+        "claude"
+    } else if s.contains("cursor") {
+        "cursor"
+    } else if s.contains("codex") {
+        "codex"
+    } else if s.contains("copilot") {
+        "copilot"
+    } else if s.contains("gemini") {
+        "gemini"
+    } else if s.contains("aider") {
+        "aider"
+    } else {
+        // Best-effort: show first 8 chars of whatever source label is.
+        source
+    }
 }
 
 struct ProjectTotals {
@@ -1821,9 +1950,11 @@ fn draw_anchor_list(
         .block(Block::default().borders(Borders::RIGHT))
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Blue)
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
-        );
+        )
+        .highlight_symbol("▸ ");
     let mut state = feed.list.clone();
     frame.render_stateful_widget(list, area, &mut state);
 }
@@ -2158,11 +2289,14 @@ fn draw_search(frame: &mut ratatui::Frame<'_>, _app: &App, state: &SearchState) 
             .collect();
         let mut ls = state.list.clone();
         frame.render_stateful_widget(
-            List::new(items).highlight_style(
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            List::new(items)
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::Blue)
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("▸ "),
             layout[2],
             &mut ls,
         );
@@ -2194,9 +2328,11 @@ fn draw_picker_overlay(frame: &mut ratatui::Frame<'_>, p: &PickerState) {
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Blue)
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
-        );
+        )
+        .highlight_symbol("▸ ");
     let mut ls = p.list.clone();
     frame.render_stateful_widget(list, rect, &mut ls);
 }
