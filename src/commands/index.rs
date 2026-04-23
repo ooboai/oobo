@@ -138,12 +138,6 @@ fn run_foreground(project: Option<String>, force: bool) -> Result<(), String> {
         String::new()
     };
 
-    let api_msg = if run_extras {
-        fetch_api_usage(&db)
-    } else {
-        String::new()
-    };
-
     let mut msg = if result.failed > 0 {
         format!(
             "{} indexed, {} failed (of {} total)",
@@ -160,9 +154,6 @@ fn run_foreground(project: Option<String>, force: bool) -> Result<(), String> {
     }
     if !git_msg.is_empty() {
         msg.push_str(&format!(" | git: {git_msg}"));
-    }
-    if !api_msg.is_empty() {
-        msg.push_str(&format!(" | api: {api_msg}"));
     }
     eprintln!("done: {msg}");
 
@@ -743,43 +734,6 @@ fn merge_native_stats(target: &mut Option<NativeStats>, new: &NativeStats) {
     if t.tool_call_count == 0 {
         t.tool_call_count = new.tool_call_count;
     }
-}
-
-fn fetch_api_usage(db: &Db) -> String {
-    let cfg = crate::config::Config::load_or_default();
-    let results = crate::api::fetch_all(&cfg);
-
-    if results.is_empty() {
-        return String::new();
-    }
-
-    let mut parts = Vec::new();
-    for r in &results {
-        match &r.error {
-            Some(e) => {
-                eprintln!("  {} API: {e}", r.source);
-                parts.push(format!("{}: error", r.source));
-            }
-            None => {
-                if r.buckets.is_empty() {
-                    parts.push(format!("{}: no data", r.source));
-                } else {
-                    match db.upsert_api_usage(&r.buckets) {
-                        Ok(n) => {
-                            eprintln!("  {} API: {n} buckets fetched", r.source);
-                            parts.push(format!("{}: {n} buckets", r.source));
-                        }
-                        Err(e) => {
-                            eprintln!("  {} API store error: {e}", r.source);
-                            parts.push(format!("{}: store error", r.source));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    parts.join(", ")
 }
 
 fn extract_native_stats(

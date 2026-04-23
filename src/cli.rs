@@ -305,8 +305,7 @@ pub enum Command {
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo auth login              Log in to oobo.dev\n  \
                        oobo auth status             Show auth state\n  \
-                       oobo auth anthropic <key>    Set Anthropic Admin API key\n  \
-                       oobo auth openai <key>       Set OpenAI API key\n  \
+                       oobo auth logout             Remove stored credentials\n  \
                        oobo auth set-remote <url>   Self-hosted server"
     )]
     Auth {
@@ -452,33 +451,6 @@ pub enum AuthAction {
         /// Server URL (e.g. https://oobo.mycompany.com)
         url: String,
     },
-    /// Set Anthropic Admin API key
-    Anthropic {
-        /// Admin API key (sk-ant-admin...)
-        key: String,
-    },
-    /// Set GitHub Copilot org PAT
-    Copilot {
-        /// Personal access token with manage_billing:copilot scope
-        token: String,
-    },
-    /// Set Windsurf/Codeium service key
-    Windsurf {
-        /// Service key with Analytics Read permission
-        key: String,
-    },
-    /// Set OpenAI API key
-    Openai {
-        /// OpenAI API key
-        key: String,
-    },
-    /// Set Google AI Studio API key (for Gemini usage data)
-    Google {
-        /// Google AI Studio API key
-        key: String,
-    },
-    /// Show configured tool API keys (legacy alias for `status`)
-    Show,
 }
 
 #[derive(Subcommand, Debug)]

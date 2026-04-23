@@ -197,28 +197,6 @@ fn print_plain(
             }
         }
 
-        if let Ok(api_totals) = db.api_usage_totals() {
-            if !api_totals.is_empty() {
-                println!();
-                println!("Remote API usage (last 30 days):");
-                for (source, summary) in &api_totals {
-                    if summary.has_data() {
-                        let label = match source.as_str() {
-                            "anthropic" => "Anthropic",
-                            "openai" => "OpenAI",
-                            "cursor" => "Cursor API",
-                            _ => source.as_str(),
-                        };
-                        let tokens = summary.total_tokens() as i64;
-                        println!(
-                            "  {:<12} {:>8} tokens",
-                            label,
-                            crate::tui::format_tokens(tokens),
-                        );
-                    }
-                }
-            }
-        }
     }
 
     Ok(())
@@ -315,23 +293,6 @@ fn print_json(
         }
     };
 
-    let mut api_usage = serde_json::Map::new();
-    if let Ok(totals) = db.api_usage_totals() {
-        for (source, summary) in totals {
-            if summary.has_data() {
-                api_usage.insert(
-                    source,
-                    serde_json::json!({
-                        "input_tokens": summary.input_tokens,
-                        "output_tokens": summary.output_tokens,
-                        "cache_read_tokens": summary.cache_read_tokens,
-                        "days": summary.days,
-                    }),
-                );
-            }
-        }
-    }
-
     let per_tool: Vec<serde_json::Value> = db
         .aggregate_stats_per_tool()
         .unwrap_or_default()
@@ -406,7 +367,6 @@ fn print_json(
         "output_tokens": stats.total_output_tokens,
         "total_tokens": stats.total_input_tokens + stats.total_output_tokens,
         "total_duration_secs": stats.total_duration_secs,
-        "api_usage": api_usage,
         "per_tool": per_tool,
         "per_model": per_model,
         "ai_code": ai_code,

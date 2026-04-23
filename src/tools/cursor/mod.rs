@@ -2,7 +2,6 @@ pub mod ai_tracking;
 pub mod composer;
 pub mod composer_data;
 pub mod transcript;
-pub mod usage_api;
 pub mod workspace;
 
 use std::path::PathBuf;

@@ -1,5 +1,4 @@
 pub mod ai_commits;
-pub mod api_usage;
 pub mod events;
 pub mod migrations;
 pub mod otel;

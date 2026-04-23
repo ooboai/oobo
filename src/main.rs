@@ -1,6 +1,5 @@
 mod alias;
 mod analytics;
-mod api;
 mod cli;
 mod commands;
 mod config;

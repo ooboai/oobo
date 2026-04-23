@@ -180,25 +180,6 @@ pub fn run() -> Result<(), String> {
         }
     }
 
-    if let Ok(api_totals) = db.api_usage_totals() {
-        if !api_totals.is_empty() {
-            eprintln!();
-            eprintln!("Remote API Usage (last 30 days):");
-            for (source, summary) in &api_totals {
-                if summary.has_data() {
-                    let label = match source.as_str() {
-                        "anthropic" => "Anthropic",
-                        "openai" => "OpenAI",
-                        _ => source.as_str(),
-                    };
-                    let tokens = summary.total_tokens() as i64;
-                    let tok_str = crate::tui::format_tokens(tokens);
-                    eprintln!("  {label}: {tok_str} tokens ({} days)", summary.days);
-                }
-            }
-        }
-    }
-
     eprintln!();
     eprintln!("API keys:");
     for (name, status) in &api_keys {
@@ -464,12 +445,5 @@ fn gather_cursor_daily_stats() -> Option<CursorDailyStats> {
 }
 
 fn gather_api_keys() -> Vec<(&'static str, bool)> {
-    let cfg = crate::config::Config::load_or_default();
-    vec![
-        ("Anthropic Admin API", !cfg.claude.api_key.is_empty()),
-        ("GitHub Copilot PAT", !cfg.copilot.api_key.is_empty()),
-        ("Windsurf service key", !cfg.windsurf.api_key.is_empty()),
-        ("OpenAI API key", !cfg.codex.api_key.is_empty()),
-        ("Google AI Studio key", !cfg.gemini.api_key.is_empty()),
-    ]
+    Vec::new()
 }

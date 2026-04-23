@@ -38,34 +38,6 @@ pub fn run(action: AuthAction) -> Result<(), String> {
             cfg.save()?;
             eprintln!("remote server set to: {url}");
         }
-        AuthAction::Anthropic { key } => {
-            cfg.claude.api_key = key;
-            cfg.save()?;
-            eprintln!("Anthropic Admin API key saved.");
-        }
-        AuthAction::Copilot { token } => {
-            cfg.copilot.api_key = token;
-            cfg.save()?;
-            eprintln!("GitHub Copilot PAT saved.");
-        }
-        AuthAction::Windsurf { key } => {
-            cfg.windsurf.api_key = key;
-            cfg.save()?;
-            eprintln!("Windsurf service key saved.");
-        }
-        AuthAction::Openai { key } => {
-            cfg.codex.api_key = key;
-            cfg.save()?;
-            eprintln!("OpenAI API key saved.");
-        }
-        AuthAction::Google { key } => {
-            cfg.gemini.api_key = key;
-            cfg.save()?;
-            eprintln!("Google AI Studio API key saved.");
-        }
-        AuthAction::Show => {
-            show_status(&cfg);
-        }
     }
 
     Ok(())
@@ -118,25 +90,6 @@ fn show_status(cfg: &Config) {
         eprintln!("auth:   not logged in");
     } else {
         eprintln!("auth:   {} (key set)", mask_key(&cfg.server.api_key));
-    }
-
-    eprintln!();
-    eprintln!("tool keys:");
-    let tools = [
-        ("Anthropic", &cfg.claude.api_key),
-        ("Copilot", &cfg.copilot.api_key),
-        ("Windsurf", &cfg.windsurf.api_key),
-        ("OpenAI", &cfg.codex.api_key),
-        ("Google", &cfg.gemini.api_key),
-        ("Cursor", &cfg.cursor.api_key),
-    ];
-
-    for (name, key) in &tools {
-        if key.is_empty() {
-            eprintln!("  {name:<12} (not set)");
-        } else {
-            eprintln!("  {name:<12} {}", mask_key(key));
-        }
     }
 }
 
