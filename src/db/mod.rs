@@ -36,7 +36,7 @@ impl Db {
             .map_err(|e| format!("cannot open database {}: {e}", db_path.display()))?;
 
         let db = Self { conn };
-        db.init()?;
+        db.init_with_path(Some(&db_path))?;
         Ok(db)
     }
 
@@ -45,17 +45,21 @@ impl Db {
         let conn =
             Connection::open_in_memory().map_err(|e| format!("cannot open in-memory db: {e}"))?;
         let db = Self { conn };
-        db.init()?;
+        db.init_with_path(None)?;
         Ok(db)
     }
 
-    fn init(&self) -> Result<(), String> {
+    fn init_with_path(&self, db_path: Option<&std::path::Path>) -> Result<(), String> {
         self.conn
             .execute_batch(
                 "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
             )
             .map_err(|e| format!("cannot set pragmas: {e}"))?;
-        migrations::run(&self.conn)?;
+        migrations::run_with_path(&self.conn, db_path)?;
+        // Migration v9 may have temporarily disabled FKs — restore them.
+        self.conn
+            .execute_batch("PRAGMA foreign_keys=ON;")
+            .map_err(|e| format!("cannot restore fk pragma: {e}"))?;
         Ok(())
     }
 

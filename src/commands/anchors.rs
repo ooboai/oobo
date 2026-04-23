@@ -210,8 +210,6 @@ fn load_in_repo(
 }
 
 fn load_cross_project(db: &Db, opts: &Options, since: Option<i64>) -> Result<Vec<Row>, String> {
-    use rusqlite::params;
-
     let mut sql = String::from(
         "SELECT p.name, a.commit_hash, a.message, a.committed_at
          FROM anchors a
