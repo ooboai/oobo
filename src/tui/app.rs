@@ -46,6 +46,352 @@ pub fn run(cfg: &Config) -> Result<i32, String> {
     result
 }
 
+/// Project-picker TUI for bare `oobo` run outside of a git repo.
+///
+/// Shows every tracked project with stats; pressing Enter drills into that
+/// project's feed (reusing the same App/event loop). Quitting the feed
+/// returns to the picker. `q`/`Esc` from the picker exits.
+pub fn run_projects(cfg: &Config) -> Result<i32, String> {
+    let mut terminal = super::init().map_err(|e| format!("tui init: {e}"))?;
+    let result = project_picker_loop(cfg, &mut terminal);
+    super::restore();
+    result
+}
+
+// ── Project picker ────────────────────────────────────────────────────
+
+#[derive(Clone)]
+struct ProjectPickerRow {
+    id: String,
+    name: String,
+    path: String,
+    remote: Option<String>,
+    enabled: bool,
+    last_activity: i64,
+    anchors: i64,
+    tokens: i64,
+    ai_pct: i64,
+}
+
+fn project_picker_loop(
+    cfg: &Config,
+    terminal: &mut ratatui::DefaultTerminal,
+) -> Result<i32, String> {
+    let mut rows = load_project_rows();
+    if rows.is_empty() {
+        // Nothing usable to show — bail so the caller's fallback can render.
+        return Err("no projects".into());
+    }
+
+    let mut state = ListState::default();
+    state.select(Some(0));
+    let mut filter = String::new();
+    let mut filter_open = false;
+
+    loop {
+        terminal
+            .draw(|frame| draw_project_picker(frame, &rows, &filter, filter_open, &mut state))
+            .map_err(|e| format!("tui draw: {e}"))?;
+
+        let Some(key) = super::next_key(Duration::from_millis(200))
+            .map_err(|e: io::Error| format!("key read: {e}"))?
+        else {
+            continue;
+        };
+
+        if filter_open {
+            match key.code {
+                KeyCode::Esc => {
+                    filter.clear();
+                    filter_open = false;
+                }
+                KeyCode::Enter => {
+                    filter_open = false;
+                }
+                KeyCode::Backspace => {
+                    filter.pop();
+                }
+                KeyCode::Char(c) => filter.push(c),
+                _ => {}
+            }
+            state.select(Some(0));
+            continue;
+        }
+
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => return Ok(0),
+            KeyCode::Char('/') => {
+                filter_open = true;
+                filter.clear();
+            }
+            KeyCode::Char('r') => {
+                rows = load_project_rows();
+                state.select(Some(0));
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let visible = visible_project_count(&rows, &filter);
+                if visible > 0 {
+                    let i = state.selected().unwrap_or(0);
+                    state.select(Some((i + 1).min(visible - 1)));
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let i = state.selected().unwrap_or(0);
+                state.select(Some(i.saturating_sub(1)));
+            }
+            KeyCode::Home => {
+                state.select(Some(0));
+            }
+            KeyCode::End => {
+                let visible = visible_project_count(&rows, &filter);
+                if visible > 0 {
+                    state.select(Some(visible - 1));
+                }
+            }
+            KeyCode::Enter => {
+                let selected = state.selected().unwrap_or(0);
+                let picked_path: Option<String> = visible_projects(&rows, &filter)
+                    .nth(selected)
+                    .map(|r| r.path.clone());
+                if let Some(path) = picked_path {
+                    // Suspend the picker, open the feed for this project,
+                    // then re-init and resume.
+                    super::restore();
+                    let res = open_feed_for_project(cfg, &path);
+                    *terminal = super::init().map_err(|e| format!("tui init: {e}"))?;
+                    if let Err(e) = res {
+                        eprintln!("oobo: could not open project: {e}");
+                    }
+                    // Refresh stats since anchors may have changed.
+                    rows = load_project_rows();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn load_project_rows() -> Vec<ProjectPickerRow> {
+    let Ok(db) = Db::open() else {
+        return Vec::new();
+    };
+    let projects = db.list_projects().unwrap_or_default();
+    let mut rows: Vec<ProjectPickerRow> = Vec::with_capacity(projects.len());
+    for p in &projects {
+        if is_stale_project_path(&p.path) {
+            continue;
+        }
+        let settings = db.get_project_settings(&p.id).unwrap_or_default();
+        let stats = db.anchor_stats_for_project(&p.id).unwrap_or_default();
+        rows.push(ProjectPickerRow {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            path: p.path.clone(),
+            remote: p.git_remote.clone(),
+            enabled: !settings.ignored,
+            last_activity: stats.last_activity,
+            anchors: stats.anchors,
+            tokens: stats.tokens,
+            ai_pct: stats.ai_pct,
+        });
+    }
+    rows.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
+    rows
+}
+
+fn is_stale_project_path(path: &str) -> bool {
+    if path.is_empty() {
+        return true;
+    }
+    let tmp_prefixes = [
+        "/tmp/",
+        "/var/folders/",
+        "/private/tmp/",
+        "/private/var/folders/",
+    ];
+    if tmp_prefixes.iter().any(|p| path.starts_with(p)) {
+        return true;
+    }
+    !std::path::Path::new(path).exists()
+}
+
+fn visible_projects<'a>(
+    rows: &'a [ProjectPickerRow],
+    filter: &'a str,
+) -> impl Iterator<Item = &'a ProjectPickerRow> {
+    let needle = filter.to_lowercase();
+    rows.iter().filter(move |r| {
+        if needle.is_empty() {
+            return true;
+        }
+        r.name.to_lowercase().contains(&needle)
+            || r.path.to_lowercase().contains(&needle)
+            || r.remote
+                .as_deref()
+                .map(|s| s.to_lowercase().contains(&needle))
+                .unwrap_or(false)
+    })
+}
+
+fn visible_project_count(rows: &[ProjectPickerRow], filter: &str) -> usize {
+    visible_projects(rows, filter).count()
+}
+
+fn open_feed_for_project(cfg: &Config, root: &str) -> Result<(), String> {
+    let mut app = App::load(cfg.clone(), root.to_string())?;
+    if !app.enabled {
+        // Still allow read-only browsing of disabled projects.
+        app.enabled = false;
+    }
+    let mut t = super::init().map_err(|e| format!("tui init: {e}"))?;
+    let res = event_loop(&mut t, &mut app);
+    super::restore();
+    res.map(|_| ())
+}
+
+fn draw_project_picker(
+    frame: &mut ratatui::Frame<'_>,
+    rows: &[ProjectPickerRow],
+    filter: &str,
+    filter_open: bool,
+    state: &mut ListState,
+) {
+    let area = frame.area();
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    // Header
+    let total = rows.len();
+    let filtered = visible_project_count(rows, filter);
+    let count_str = if filter.is_empty() {
+        format!("{total} projects")
+    } else {
+        format!("{filtered}/{total} projects")
+    };
+    let totals = project_totals(rows);
+    let header = Line::from(vec![
+        Span::styled(
+            " oobo · projects",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                "    {}  ·  {} anchors  ·  {} tok  ·  {}% AI ",
+                count_str,
+                totals.anchors,
+                super::format_tokens(totals.tokens),
+                totals.ai_pct
+            ),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(header), layout[0]);
+
+    // List
+    let inner_w = layout[1].width.saturating_sub(2) as usize;
+    let meta_w = 34usize; // "  12h   120 anchors   3.4k   42% AI  on"
+    let name_w = 22usize;
+    let path_w = inner_w.saturating_sub(meta_w + name_w + 3).max(10);
+
+    let items: Vec<ListItem> = visible_projects(rows, filter)
+        .map(|r| {
+            let when = relative_time(r.last_activity);
+            let tokens = super::format_tokens(r.tokens);
+            let enabled = if r.enabled { "on" } else { "off" };
+            let dot_style = if r.enabled {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            let dot = if r.enabled { "●" } else { "○" };
+
+            let name = pad_or_truncate(&r.name, name_w);
+            let path_display = display_path(&r.path);
+            let path = pad_or_truncate(&path_display, path_w);
+
+            ListItem::new(Line::from(vec![
+                Span::styled(format!(" {dot} "), dot_style),
+                Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("  {path}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!(
+                        "  {when:>4}  {:>5} a  {tokens:>6}  {:>3}% AI  {enabled}",
+                        r.anchors, r.ai_pct
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::NONE))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
+    frame.render_stateful_widget(list, layout[1], state);
+
+    // Footer
+    let footer = if filter_open {
+        Line::from(vec![
+            Span::styled(
+                " filter: ",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(filter.to_string()),
+            Span::styled("_", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "   (enter to apply · esc to clear)",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])
+    } else {
+        Line::from(Span::styled(
+            " ↑↓ nav · enter open · / filter · r reload · q quit ",
+            Style::default().fg(Color::DarkGray),
+        ))
+    };
+    frame.render_widget(Paragraph::new(footer), layout[2]);
+}
+
+fn display_path(path: &str) -> String {
+    if let Some(home) = std::env::var("HOME").ok() {
+        if let Some(rest) = path.strip_prefix(&home) {
+            return format!("~{rest}");
+        }
+    }
+    path.to_string()
+}
+
+struct ProjectTotals {
+    anchors: i64,
+    tokens: i64,
+    ai_pct: i64,
+}
+
+fn project_totals(rows: &[ProjectPickerRow]) -> ProjectTotals {
+    let anchors: i64 = rows.iter().map(|r| r.anchors).sum();
+    let tokens: i64 = rows.iter().map(|r| r.tokens).sum();
+    let weighted: i64 = rows.iter().map(|r| r.anchors * r.ai_pct).sum();
+    let ai_pct = if anchors == 0 { 0 } else { weighted / anchors };
+    ProjectTotals {
+        anchors,
+        tokens,
+        ai_pct,
+    }
+}
+
 // ── Data ──────────────────────────────────────────────────────────────
 
 #[derive(Clone)]

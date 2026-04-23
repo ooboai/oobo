@@ -46,6 +46,11 @@ fn cross_project(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
 
     let mut rows: Vec<ProjectStats> = Vec::with_capacity(projects.len());
     for p in &projects {
+        // Hide obviously stale/junk projects: temp-dir paths or paths
+        // that no longer exist on disk.
+        if is_stale_project_path(&p.path) {
+            continue;
+        }
         let settings = db.get_project_settings(&p.id).unwrap_or_default();
         let enabled = !settings.ignored;
         let stats = db.anchor_stats_for_project(&p.id).unwrap_or_default();
@@ -63,12 +68,39 @@ fn cross_project(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
     }
     rows.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
 
+    if rows.is_empty() {
+        emit_empty(mode);
+        return Ok(0);
+    }
+
     match mode {
         OutputMode::Json => emit_json(&rows, cfg),
         OutputMode::Agent => emit_agent(&rows),
-        OutputMode::Tui => emit_pretty(&rows),
+        OutputMode::Tui => {
+            // Launch the project-picker TUI; fallback to plain text if TUI fails.
+            match crate::tui::app::run_projects(cfg) {
+                Ok(_) => {}
+                Err(_) => emit_pretty(&rows),
+            }
+        }
     }
     Ok(0)
+}
+
+fn is_stale_project_path(path: &str) -> bool {
+    if path.is_empty() {
+        return true;
+    }
+    let tmp_prefixes = [
+        "/tmp/",
+        "/var/folders/",
+        "/private/tmp/",
+        "/private/var/folders/",
+    ];
+    if tmp_prefixes.iter().any(|p| path.starts_with(p)) {
+        return true;
+    }
+    !std::path::Path::new(path).exists()
 }
 
 struct ProjectStats {
