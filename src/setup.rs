@@ -87,19 +87,15 @@ fn run_repair(opts: &SetupOptions) -> Result<(), String> {
             Err(_) => "failed",
         };
 
-        // Orphan branch check is best-effort.
         let orphan_status = if crate::git::orphan::branch_exists(&p.path) {
             "ok"
-        } else {
-            // Try to recreate if non-interactive OR non-TTY.
-            if opts.non_interactive || !std::io::stdout().is_terminal() {
-                match crate::git::orphan::fetch_and_reconcile(&p.path) {
-                    Ok(_) => "rebuilt",
-                    Err(_) => "missing",
-                }
-            } else {
-                "missing (run again with --non-interactive to rebuild)"
+        } else if crate::git::orphan::remote_branch_exists(&p.path) {
+            match crate::git::orphan::fetch_and_reconcile(&p.path) {
+                Ok(_) => "rebuilt from remote",
+                Err(_) => "missing",
             }
+        } else {
+            "missing (no remote branch)"
         };
 
         match mode {

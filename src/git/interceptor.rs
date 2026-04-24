@@ -1137,9 +1137,9 @@ fn filter_by_recency(
 }
 
 /// Fallback session discovery: scan each enabled tool's native storage for
-/// recent sessions in this project. Used when `.git/oobo-sessions/` has no
-/// matching state files (e.g. hooks fired before `git init`, or hooks weren't
-/// installed for this project).
+/// recent sessions in this project. Used when the DB has no matching active
+/// sessions (e.g. hooks fired before `git init`, or hooks weren't installed
+/// for this project).
 ///
 /// Only returns sessions updated after `since_epoch` (the parent commit time)
 /// and within the last 2 hours — we don't want to link stale sessions.

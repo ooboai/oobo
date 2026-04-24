@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use std::path::Path;
 
-const LATEST_VERSION: i32 = 12;
+const LATEST_VERSION: i32 = 13;
 
 pub fn run(conn: &Connection) -> Result<(), String> {
     run_with_path(conn, None)
@@ -64,6 +64,9 @@ pub fn run_with_path(conn: &Connection, db_path: Option<&Path>) -> Result<(), St
     }
     if current < 12 {
         migrate_v12(conn)?;
+    }
+    if current < 13 {
+        migrate_v13(conn)?;
     }
 
     set_version(conn, LATEST_VERSION)?;
@@ -949,6 +952,140 @@ fn migrate_v12(conn: &Connection) -> Result<(), String> {
     .map_err(|e| format!("migration v12 (arm backfill flag): {e}"))?;
 
     Ok(())
+}
+
+/// v13 — Robust project identity + legacy drain.
+///
+/// 1. Adds `initial_commit_sha` and `historical_paths` columns to
+///    `projects`. Together with the existing `git_remote`, projects
+///    now survive folder renames even when there's no remote.
+///
+/// 2. Restructures `hook_sessions` into `active_sessions` with
+///    first-class `tool`, `started_at`, `parent_session_id` columns
+///    (no more opaque payload blob for key lookups).
+///
+/// 3. Arms a `drain_legacy_pending` flag so the next invocation walks
+///    all known projects and imports `.git/oobo-sessions/*.json` files
+///    into the DB, then deletes the marker files.
+fn migrate_v13(conn: &Connection) -> Result<(), String> {
+    // ── 1. projects: add initial_commit_sha + historical_paths ──
+    if !column_exists(conn, "projects", "initial_commit_sha")? {
+        conn.execute_batch("ALTER TABLE projects ADD COLUMN initial_commit_sha TEXT;")
+            .map_err(|e| format!("v13 projects.initial_commit_sha: {e}"))?;
+    }
+    if !column_exists(conn, "projects", "historical_paths")? {
+        conn.execute_batch(
+            "ALTER TABLE projects ADD COLUMN historical_paths TEXT NOT NULL DEFAULT '[]';",
+        )
+        .map_err(|e| format!("v13 projects.historical_paths: {e}"))?;
+    }
+
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_projects_initial_sha
+             ON projects(initial_commit_sha);",
+    )
+    .map_err(|e| format!("v13 idx initial_sha: {e}"))?;
+
+    // ── 2. active_sessions: replaces hook_sessions ──
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS active_sessions (
+            session_id        TEXT NOT NULL,
+            project_id        TEXT NOT NULL,
+            tool              TEXT NOT NULL,
+            started_at        INTEGER NOT NULL,
+            last_event_at     INTEGER NOT NULL,
+            state_json        TEXT NOT NULL,
+            parent_session_id TEXT,
+            PRIMARY KEY (project_id, session_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_active_sessions_project
+            ON active_sessions(project_id);
+        CREATE INDEX IF NOT EXISTS idx_active_sessions_updated
+            ON active_sessions(last_event_at);
+        ",
+    )
+    .map_err(|e| format!("v13 active_sessions: {e}"))?;
+
+    // Migrate existing hook_sessions rows into the new table.
+    let has_hook_sessions = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='hook_sessions'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if has_hook_sessions {
+        let mut stmt = conn
+            .prepare("SELECT project_id, session_id, payload, updated_at FROM hook_sessions")
+            .map_err(|e| format!("v13 read hook_sessions: {e}"))?;
+        let rows: Vec<(String, String, String, i64)> = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|e| format!("v13 iter hook_sessions: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for (pid, sid, payload, updated_at) in &rows {
+            let (tool, started_at, parent_sid) = extract_from_payload(payload);
+            conn.execute(
+                "INSERT OR IGNORE INTO active_sessions \
+                 (session_id, project_id, tool, started_at, last_event_at, \
+                  state_json, parent_session_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    sid,
+                    pid,
+                    tool,
+                    started_at,
+                    updated_at,
+                    payload,
+                    parent_sid,
+                ],
+            )
+            .map_err(|e| format!("v13 insert active_session: {e}"))?;
+        }
+    }
+
+    // ── 3. Ensure oobo_state exists + arm the legacy-drain flag ──
+    // v12 creates oobo_state, but users already at v12 before that code
+    // landed never got it. CREATE IF NOT EXISTS is safe either way.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS oobo_state (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );",
+    )
+    .map_err(|e| format!("v13 oobo_state ensure: {e}"))?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO oobo_state (key, value) VALUES ('drain_legacy_pending', '1')",
+        [],
+    )
+    .map_err(|e| format!("v13 arm drain flag: {e}"))?;
+
+    Ok(())
+}
+
+fn extract_from_payload(json: &str) -> (String, i64, Option<String>) {
+    let v: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+    let tool = v["agent"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
+    let started = v["started_at"].as_i64().unwrap_or(0);
+    let parent = v["parent_session_id"]
+        .as_str()
+        .map(|s| s.to_string());
+    (tool, started, parent)
 }
 
 /// True if `table` has a column named `col`. SQLite has no native

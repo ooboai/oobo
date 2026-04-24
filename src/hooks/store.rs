@@ -2,8 +2,9 @@
 //!
 //! Three backends, tried in order:
 //!
-//! 1. **SQLite `hook_sessions` table** — primary. One row per
-//!    `(project_id, session_id)`. Used whenever a project can be
+//! 1. **SQLite `active_sessions` table** — primary. One row per
+//!    `(project_id, session_id)` with first-class `tool`, `started_at`,
+//!    and `parent_session_id` columns. Used whenever a project can be
 //!    resolved from `project_root`.
 //! 2. **Buffer files** — `~/.oobo/tmp/hook-buffer/<sid>.json`. Fallback
 //!    when no project can be resolved (typical case: Cursor starts a
@@ -134,7 +135,7 @@ pub fn list_for_project(project_root: &str) -> Vec<ActiveSession> {
             };
             if let Ok(mut stmt) = db
                 .conn
-                .prepare("SELECT session_id, payload FROM hook_sessions WHERE project_id = ?1")
+                .prepare("SELECT session_id, state_json FROM active_sessions WHERE project_id = ?1")
             {
                 if let Ok(rows) = stmt.query_map([&pid], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -237,7 +238,7 @@ fn read_from_db(project_root: &str, session_id: &str) -> Option<ActiveSession> {
         let payload: String = db
             .conn
             .query_row(
-                "SELECT payload FROM hook_sessions \
+                "SELECT state_json FROM active_sessions \
                  WHERE project_id = ?1 AND session_id = ?2",
                 rusqlite::params![&pid, session_id],
                 |row| row.get(0),
@@ -255,7 +256,7 @@ fn db_exists(project_root: &str, session_id: &str) -> bool {
         };
         db.conn
             .query_row(
-                "SELECT 1 FROM hook_sessions \
+                "SELECT 1 FROM active_sessions \
                  WHERE project_id = ?1 AND session_id = ?2",
                 rusqlite::params![&pid, session_id],
                 |row| row.get::<_, i64>(0),
@@ -276,13 +277,24 @@ fn write_to_db(
     let payload = serde_json::to_string(state).map_err(|e| format!("serialize: {e}"))?;
     db.conn
         .execute(
-            "INSERT INTO hook_sessions (project_id, session_id, payload, updated_at) \
-             VALUES (?1, ?2, ?3, ?4) \
+            "INSERT INTO active_sessions \
+             (session_id, project_id, tool, started_at, last_event_at, state_json, parent_session_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
              ON CONFLICT(project_id, session_id) DO UPDATE SET \
-               payload = excluded.payload, updated_at = excluded.updated_at",
-            rusqlite::params![&pid, session_id, &payload, state.updated_at],
+               state_json = excluded.state_json, \
+               last_event_at = excluded.last_event_at, \
+               tool = excluded.tool",
+            rusqlite::params![
+                session_id,
+                &pid,
+                &state.agent,
+                state.started_at,
+                state.updated_at,
+                &payload,
+                Option::<&str>::None,
+            ],
         )
-        .map_err(|e| format!("upsert hook_session: {e}"))?;
+        .map_err(|e| format!("upsert active_session: {e}"))?;
     Ok(())
 }
 
@@ -293,10 +305,10 @@ fn delete_from_db(project_root: &str, session_id: &str) -> Result<(), String> {
     };
     db.conn
         .execute(
-            "DELETE FROM hook_sessions WHERE project_id = ?1 AND session_id = ?2",
+            "DELETE FROM active_sessions WHERE project_id = ?1 AND session_id = ?2",
             rusqlite::params![&pid, session_id],
         )
-        .map_err(|e| format!("delete hook_session: {e}"))?;
+        .map_err(|e| format!("delete active_session: {e}"))?;
     Ok(())
 }
 

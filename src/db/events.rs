@@ -135,6 +135,8 @@ mod tests {
             path: "/proj".into(),
             name: "proj".into(),
             git_remote: None,
+            initial_commit_sha: None,
+            historical_paths: Vec::new(),
             discovered_at: 1000,
             last_seen_at: 1000,
             last_scanned_at: 0,
