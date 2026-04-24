@@ -647,11 +647,11 @@ fn test_e2e_hook_lifecycle() {
     let conn = rusqlite::Connection::open(&db_path).unwrap();
     let payload: String = conn
         .query_row(
-            "SELECT payload FROM hook_sessions WHERE session_id = ?1",
+            "SELECT state_json FROM active_sessions WHERE session_id = ?1",
             rusqlite::params!["e2e-test"],
             |row| row.get(0),
         )
-        .expect("session row should exist in hook_sessions");
+        .expect("session row should exist in active_sessions");
     let state: serde_json::Value = serde_json::from_str(&payload).unwrap();
     assert_eq!(state["agent"], "cursor");
     assert_eq!(state["model"], "claude-opus-4");

@@ -143,4 +143,106 @@ mod tests {
             );
         }
     }
+
+    // ── Adapter contract tests ────────────────────────────────────────────
+    //
+    // Verify that every registered tool adheres to the minimum contract:
+    // identity methods return non-empty values, data methods return valid
+    // shapes (not panics), and enabled() works against a default config.
+
+    #[test]
+    fn test_contract_identity_fields() {
+        let reg = registry_with(true);
+        for tool in reg.all() {
+            let n = tool.name();
+            assert!(!n.is_empty(), "name() must be non-empty");
+            assert!(!tool.display_name().is_empty(), "{n}: display_name() empty");
+            assert!(!tool.config_key().is_empty(), "{n}: config_key() empty");
+            let cat = tool.category();
+            assert!(
+                cat == "ide" || cat == "cli",
+                "{n}: category() must be 'ide' or 'cli', got {cat:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_contract_enabled_default_config() {
+        let cfg = crate::config::Config::default();
+        let reg = registry_with(true);
+        for tool in reg.all() {
+            // Must not panic, even with a default config.
+            let _enabled = tool.enabled(&cfg);
+        }
+    }
+
+    #[test]
+    fn test_contract_sessions_do_not_panic() {
+        let reg = registry_with(true);
+        for tool in reg.all() {
+            // all_sessions may fail (no artifacts on disk) but must not panic.
+            let _ = tool.all_sessions();
+        }
+    }
+
+    #[test]
+    fn test_contract_sessions_for_nonexistent_project() {
+        let reg = registry_with(true);
+        for tool in reg.all() {
+            let result = tool.sessions_for_project("/nonexistent/path");
+            match result {
+                Ok(sessions) => assert!(
+                    sessions.is_empty(),
+                    "{}: sessions_for_project on nonexistent path should be empty",
+                    tool.name()
+                ),
+                Err(_) => {} // acceptable
+            }
+        }
+    }
+
+    #[test]
+    fn test_contract_transcript_methods_do_not_panic() {
+        let reg = registry_with(true);
+        let dummy = std::path::Path::new("/nonexistent/transcript.jsonl");
+        for tool in reg.all() {
+            let n = tool.name();
+            // find_transcript for nonexistent session — must not panic.
+            let _ = tool.find_transcript("/nonexistent", "nonexistent-session-id");
+            // parse_messages on a nonexistent path — must not panic.
+            let msgs = tool.parse_messages(dummy);
+            assert!(msgs.is_empty(), "{n}: parse_messages on bad path should be empty");
+            // count_messages on nonexistent path.
+            let count = tool.count_messages("/nonexistent", "nonexistent-session-id");
+            assert_eq!(count, 0, "{n}: count_messages on bad path should be 0");
+        }
+    }
+
+    #[test]
+    fn test_contract_extract_native_stats_does_not_panic() {
+        use crate::core::session::Session;
+        let reg = registry_with(true);
+        let dummy_session = Session {
+            session_id: "dummy".to_string(),
+            name: "dummy".to_string(),
+            mode: "agent".to_string(),
+            created_at: Some(0),
+            updated_at: Some(0),
+            project_path: "/nonexistent".to_string(),
+            workspace_dir: String::new(),
+            source: "dummy".to_string(),
+            parent_session_id: None,
+            subagent_type: None,
+        };
+        for tool in reg.all() {
+            let _ = tool.extract_native_stats(&dummy_session);
+        }
+    }
+
+    #[test]
+    fn test_first_class_tools_have_10_members() {
+        let reg = registry_with(false);
+        let count = reg.all().count();
+        assert_eq!(count, 10, "first-class tools should be exactly 10, got {count}");
+    }
 }
