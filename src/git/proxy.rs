@@ -21,16 +21,28 @@ pub fn run_git(cfg: &Config, args: &[&str]) -> Result<i32, String> {
 
 /// Run a git command and capture its stdout (for internal use, not user-facing).
 pub fn run_git_capture(cfg: &Config, args: &[&str]) -> Result<String, String> {
+    run_git_capture_in(cfg, args, None)
+}
+
+pub fn run_git_capture_in(
+    cfg: &Config,
+    args: &[&str],
+    dir: Option<&str>,
+) -> Result<String, String> {
     let git_path = cfg.git_path();
 
-    let output = Command::new(git_path)
-        .args(args)
+    let mut cmd = Command::new(git_path);
+    cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
+        .env_remove("GIT_QUARANTINE_PATH");
+    if let Some(d) = dir {
+        cmd.current_dir(d);
+    }
+    let output = cmd
         .output()
         .map_err(|e| format!("failed to run {git_path}: {e}"))?;
 

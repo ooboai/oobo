@@ -724,7 +724,7 @@ impl App {
         let db = Db::open()?;
         let settings = db.get_project_settings(&project_id).unwrap_or_default();
         let enabled = !settings.ignored;
-        let anchors = load_anchors(&cfg, &db, 500, TimeWindow::All)?;
+        let anchors = load_anchors(&cfg, &db, &root, 500, TimeWindow::All)?;
 
         let mut feed = FeedState {
             list: ListState::default(),
@@ -750,7 +750,7 @@ impl App {
 
     fn reload_anchors(&mut self) {
         if let Ok(db) = Db::open() {
-            if let Ok(rows) = load_anchors(&self.cfg, &db, 500, self.time_window) {
+            if let Ok(rows) = load_anchors(&self.cfg, &db, &self.root, 500, self.time_window) {
                 self.anchors = rows;
             }
             let settings = db.get_project_settings(&self.project_id).unwrap_or_default();
@@ -1554,19 +1554,21 @@ fn run_oobo_blame(root: &str, file: &str, sha: &str) -> Result<(), String> {
 fn load_anchors(
     cfg: &Config,
     db: &Db,
+    project_root: &str,
     limit: usize,
     window: TimeWindow,
 ) -> Result<Vec<AnchorRow>, String> {
     // Walk git log as source of truth (authoritative subject + timestamp),
     // then enrich each commit with AI session data from the DB.
     let n = limit.max(1);
-    let log = crate::git::proxy::run_git_capture(
+    let log = crate::git::proxy::run_git_capture_in(
         cfg,
         &[
             "log",
             &format!("-{}", n),
             "--format=%H|||%s|||%ct",
         ],
+        Some(project_root),
     )
     .unwrap_or_default();
 
@@ -1771,42 +1773,268 @@ fn load_transcript_lines(project_root: &str, s: &SessionLink) -> Vec<Line<'stati
         crate::session::parse_messages_for_session(project_root, &s.session_id, &s.source);
     if messages.is_empty() {
         return vec![
+            Line::from(""),
             Line::from(Span::styled(
-                "(transcript not available for this session)",
+                "  (transcript not available for this session)",
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(""),
             Line::from(Span::styled(
-                format!("session {} · {}", &s.session_id, s.source),
+                format!("  session {} · {}", &s.session_id, s.source),
                 Style::default().fg(Color::DarkGray),
             )),
         ];
     }
     let mut out: Vec<Line<'static>> = Vec::new();
-    for m in messages {
-        let role = role_label(&m.role);
-        let role_style = role_style(&m.role);
-        out.push(Line::from(vec![
-            Span::styled(
-                format!("[{role}] "),
-                role_style.add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(timestamp_short(m.timestamp_ms)),
-        ]));
-        for l in m.text.lines() {
-            out.push(Line::from(Span::raw(l.to_string())));
-        }
-        out.push(Line::from(""));
+    for m in &messages {
+        render_message(&mut out, m);
     }
     out
 }
 
+fn render_message(out: &mut Vec<Line<'static>>, m: &crate::core::message::Message) {
+    let role = role_label(&m.role);
+    let r_style = role_style(&m.role);
+
+    let ts = timestamp_short(m.timestamp_ms);
+    let ts_part = if ts.is_empty() {
+        String::new()
+    } else {
+        format!("  {ts}")
+    };
+
+    // ── Message header with separator bar ──
+    let separator: String = "─".repeat(60);
+    out.push(Line::from(Span::styled(
+        format!("  {separator}"),
+        Style::default().fg(Color::DarkGray),
+    )));
+    out.push(Line::from(vec![
+        Span::styled(
+            format!("  {role}"),
+            r_style.add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(ts_part, Style::default().fg(Color::DarkGray)),
+    ]));
+    out.push(Line::from(""));
+
+    // ── Body: markdown-aware rendering ──
+    let text = &m.text;
+    let body_style = match m.role.as_str() {
+        "tool" => Style::default().fg(Color::DarkGray),
+        _ => Style::default(),
+    };
+
+    let mut in_code_block = false;
+    let mut code_lang = String::new();
+
+    for raw_line in text.lines() {
+        // Toggle code fences
+        if raw_line.trim_start().starts_with("```") {
+            if in_code_block {
+                // Closing fence
+                out.push(Line::from(Span::styled(
+                    "  └───",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                in_code_block = false;
+                code_lang.clear();
+                continue;
+            } else {
+                // Opening fence — extract language tag
+                code_lang = raw_line
+                    .trim_start()
+                    .trim_start_matches('`')
+                    .trim()
+                    .to_string();
+                let label = if code_lang.is_empty() {
+                    "  ┌─── code".to_string()
+                } else {
+                    format!("  ┌─── {code_lang}")
+                };
+                out.push(Line::from(Span::styled(
+                    label,
+                    Style::default().fg(Color::DarkGray),
+                )));
+                in_code_block = true;
+                continue;
+            }
+        }
+
+        if in_code_block {
+            // Code lines: dim green on dark bg, indented with gutter
+            out.push(Line::from(vec![
+                Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    raw_line.to_string(),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]));
+            continue;
+        }
+
+        let trimmed = raw_line.trim();
+
+        // Empty lines
+        if trimmed.is_empty() {
+            out.push(Line::from(""));
+            continue;
+        }
+
+        // Markdown headings
+        if trimmed.starts_with("### ") {
+            out.push(Line::from(Span::styled(
+                format!("  {}", &trimmed[4..]),
+                body_style.fg(Color::White).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            )));
+            continue;
+        }
+        if trimmed.starts_with("## ") {
+            out.push(Line::from(Span::styled(
+                format!("  {}", &trimmed[3..]),
+                body_style.fg(Color::White).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            )));
+            continue;
+        }
+        if trimmed.starts_with("# ") {
+            out.push(Line::from(Span::styled(
+                format!("  {}", &trimmed[2..]),
+                body_style.fg(Color::White).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            )));
+            continue;
+        }
+
+        // Bullet lists
+        if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+            let indent = raw_line.len() - raw_line.trim_start().len();
+            let pad = " ".repeat(indent + 2);
+            out.push(Line::from(vec![
+                Span::raw(pad),
+                Span::styled("• ", body_style.fg(Color::Cyan)),
+                Span::styled(trimmed[2..].to_string(), body_style),
+            ]));
+            continue;
+        }
+
+        // Numbered lists
+        if let Some(rest) = strip_numbered_prefix(trimmed) {
+            out.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!("{}. ", trimmed.split('.').next().unwrap_or("1")),
+                    body_style.fg(Color::Cyan),
+                ),
+                Span::styled(rest.to_string(), body_style),
+            ]));
+            continue;
+        }
+
+        // Regular text with inline formatting
+        out.push(render_inline_markdown(raw_line, body_style));
+    }
+
+    // Close an unclosed code block
+    if in_code_block {
+        out.push(Line::from(Span::styled(
+            "  └───",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    out.push(Line::from(""));
+}
+
+/// Render a line of text with inline `code`, **bold**, and *italic* spans.
+fn render_inline_markdown(line: &str, base: Style) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push(Span::raw("  ")); // left margin
+
+    let chars: Vec<char> = line.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    let mut buf = String::new();
+
+    while i < len {
+        // Inline code: `...`
+        if chars[i] == '`' && !matches!(chars.get(i + 1), Some('`')) {
+            if !buf.is_empty() {
+                spans.push(Span::styled(buf.clone(), base));
+                buf.clear();
+            }
+            i += 1;
+            let mut code = String::new();
+            while i < len && chars[i] != '`' {
+                code.push(chars[i]);
+                i += 1;
+            }
+            if i < len {
+                i += 1; // skip closing `
+            }
+            spans.push(Span::styled(
+                code,
+                Style::default().fg(Color::Yellow),
+            ));
+            continue;
+        }
+
+        // Bold: **...**
+        if chars[i] == '*'
+            && chars.get(i + 1) == Some(&'*')
+            && i + 2 < len
+            && chars[i + 2] != '*'
+        {
+            if !buf.is_empty() {
+                spans.push(Span::styled(buf.clone(), base));
+                buf.clear();
+            }
+            i += 2;
+            let mut bold = String::new();
+            while i + 1 < len && !(chars[i] == '*' && chars[i + 1] == '*') {
+                bold.push(chars[i]);
+                i += 1;
+            }
+            if i + 1 < len {
+                i += 2; // skip **
+            }
+            spans.push(Span::styled(
+                bold,
+                base.add_modifier(Modifier::BOLD),
+            ));
+            continue;
+        }
+
+        buf.push(chars[i]);
+        i += 1;
+    }
+
+    if !buf.is_empty() {
+        spans.push(Span::styled(buf, base));
+    }
+
+    Line::from(spans)
+}
+
+/// Check if a line starts with "1. ", "2. ", etc. and return the rest.
+fn strip_numbered_prefix(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i > 0 && i < bytes.len() && bytes[i] == b'.' {
+        if i + 1 < bytes.len() && bytes[i + 1] == b' ' {
+            return Some(&s[i + 2..]);
+        }
+    }
+    None
+}
+
 fn role_label(role: &str) -> &'static str {
     match role {
-        "user" => "you",
-        "assistant" => "ai",
-        "system" => "sys",
-        "tool" => "tool",
+        "user" => "You",
+        "assistant" => "AI",
+        "system" => "System",
+        "tool" => "Tool",
         _ => "?",
     }
 }
@@ -2182,10 +2410,18 @@ fn draw_footer(
 
 fn draw_transcript(frame: &mut ratatui::Frame<'_>, _app: &App, ts: &TranscriptState) {
     let area = frame.area();
+
+    // Clear the entire area so the feed doesn't bleed through.
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Block::default().style(Style::default().bg(Color::Reset)),
+        area,
+    );
+
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
+            Constraint::Length(2),
             Constraint::Min(1),
             Constraint::Length(1),
         ])
@@ -2199,7 +2435,7 @@ fn draw_transcript(frame: &mut ratatui::Frame<'_>, _app: &App, ts: &TranscriptSt
     } else {
         String::new()
     };
-    let matches = if ts.match_lines.is_empty() {
+    let matches_str = if ts.match_lines.is_empty() {
         String::new()
     } else {
         format!(
@@ -2208,20 +2444,26 @@ fn draw_transcript(frame: &mut ratatui::Frame<'_>, _app: &App, ts: &TranscriptSt
             ts.match_lines.len()
         )
     };
-    let header = Line::from(vec![
-        Span::styled(
-            " transcript",
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(
-                "  {}  {}  {}{}{}",
-                short_sid, session.source, model, position, matches
+
+    let header_lines = vec![
+        Line::from(vec![
+            Span::styled(
+                " transcript",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
+            Span::styled(
+                format!("  {short_sid}  {}{model}{position}{matches_str}", session.source),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+        Line::from(Span::styled(
+            format!(" {}", "─".repeat(area.width.saturating_sub(2) as usize)),
             Style::default().fg(Color::DarkGray),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(header), layout[0]);
+        )),
+    ];
+    frame.render_widget(Paragraph::new(header_lines), layout[0]);
 
     // Highlight matching lines by colouring them.
     let rendered: Vec<Line<'static>> = ts
@@ -2250,11 +2492,22 @@ fn draw_transcript(frame: &mut ratatui::Frame<'_>, _app: &App, ts: &TranscriptSt
         .scroll((scroll, 0));
     frame.render_widget(body, layout[1]);
 
+    // Scroll indicator
+    let total_lines = ts.lines.len();
+    let visible_h = layout[1].height as usize;
+    let pct = if total_lines <= visible_h {
+        100
+    } else {
+        ((scroll as usize) * 100) / (total_lines.saturating_sub(visible_h)).max(1)
+    };
+
     let footer_content: Line<'static> = if ts.filter_open {
         Line::from(vec![
             Span::styled(
                 " /",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(ts.filter.clone()),
             Span::styled("_", Style::default().fg(Color::Yellow)),
@@ -2264,10 +2517,16 @@ fn draw_transcript(frame: &mut ratatui::Frame<'_>, _app: &App, ts: &TranscriptSt
             ),
         ])
     } else {
-        Line::from(Span::styled(
-            " ↑↓ scroll · pgup/pgdn page · g/G top/bot · [ / ] prev/next session · / find · n/N · esc back · q quit ",
-            Style::default().fg(Color::DarkGray),
-        ))
+        Line::from(vec![
+            Span::styled(
+                format!(" {pct}%"),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                "  ↑↓ scroll · pgup/pgdn · g/G top/bot · [ ] prev/next · / find · n/N next · esc back · q quit",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])
     };
     frame.render_widget(Paragraph::new(footer_content), layout[2]);
 }
