@@ -30,6 +30,7 @@ pub enum TurnRole {
 }
 
 impl TurnRole {
+    #[cfg(test)]
     pub fn as_str(self) -> &'static str {
         match self {
             TurnRole::User => "user",
@@ -39,6 +40,7 @@ impl TurnRole {
         }
     }
 
+    #[cfg(test)]
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "user" => Some(TurnRole::User),
@@ -68,6 +70,7 @@ pub struct Turn {
     pub source: String,
 
     /// 0-based monotonic index within the session.
+    #[allow(dead_code)]
     pub turn_index: i64,
 
     pub role: TurnRole,
@@ -135,8 +138,94 @@ pub struct TurnTokens {
     pub output: Option<i64>,
 }
 
+pub const TURN_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+
+/// A restorable point in an agent session.
+///
+/// `Turn` remains the normalized accounting row used for token/cost rollups.
+/// `TurnSnapshot` is the Git-backed memory object: worktree state, lineage, and
+/// full native memory captured at an agent turn boundary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TurnSnapshot {
+    pub schema_version: u32,
+    pub id: String,
+    pub project_id: String,
+    pub worktree_id: String,
+    pub session_id: String,
+    pub source: String,
+    pub turn_index: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restored_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    pub created_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub files: Vec<TurnFileSnapshot>,
+    #[serde(default)]
+    pub memory: TurnMemoryPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnFileSnapshot {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_blob: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_blob: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TurnMemoryPayload {
+    /// Tool-native transcript path when the tool exposes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<String>,
+    /// Full native transcript slice or session payload for this turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<serde_json::Value>,
+    /// Hook events observed while this turn was active.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hook_events: Vec<TurnHookEvent>,
+    /// Tool calls observed while this turn was active.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<TurnToolCall>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TurnHookEvent {
+    pub name: String,
+    pub observed_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TurnToolCall {
+    pub name: String,
+    pub observed_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<serde_json::Value>,
+    #[serde(default)]
+    pub failed: bool,
+}
+
 impl TurnTokens {
-    /// Total tokens actually billed on this call.
+    #[cfg(test)]
     pub fn billed(&self) -> i64 {
         self.input.unwrap_or(0)
             + self.cache_read.unwrap_or(0)
@@ -144,20 +233,17 @@ impl TurnTokens {
             + self.output.unwrap_or(0)
     }
 
-    /// Novel content produced: output + any new cache creation.
-    /// Useful for "how much did the agent actually produce on this
-    /// turn, independent of how big the context got."
+    #[cfg(test)]
     pub fn new_work(&self) -> i64 {
         self.output.unwrap_or(0) + self.cache_creation.unwrap_or(0)
     }
 
-    /// Size of the conversation this call saw: input + cache_read.
+    #[cfg(test)]
     pub fn context(&self) -> i64 {
         self.input.unwrap_or(0) + self.cache_read.unwrap_or(0)
     }
 
-    /// True if we have *any* per-call signal. Used by the tap layer to
-    /// decide whether to persist a row or skip it.
+    #[cfg(test)]
     pub fn has_any(&self) -> bool {
         self.input.is_some()
             || self.cache_read.is_some()
@@ -195,6 +281,59 @@ impl Turn {
         }
         format!("{h:016x}")
     }
+}
+
+impl TurnSnapshot {
+    pub fn new(
+        project_id: &str,
+        worktree_id: &str,
+        source: &str,
+        session_id: &str,
+        turn_index: i64,
+    ) -> Self {
+        Self {
+            schema_version: TURN_SNAPSHOT_SCHEMA_VERSION,
+            id: Self::stable_id(project_id, worktree_id, source, session_id, turn_index),
+            project_id: project_id.to_string(),
+            worktree_id: worktree_id.to_string(),
+            session_id: session_id.to_string(),
+            source: source.to_string(),
+            turn_index,
+            parent_id: None,
+            restored_from: None,
+            base_commit: None,
+            head_commit: None,
+            tree_hash: None,
+            branch: None,
+            created_at: chrono::Utc::now().timestamp(),
+            started_at: None,
+            ended_at: None,
+            model: None,
+            files: Vec::new(),
+            memory: TurnMemoryPayload::default(),
+        }
+    }
+
+    pub fn stable_id(
+        project_id: &str,
+        worktree_id: &str,
+        source: &str,
+        session_id: &str,
+        turn_index: i64,
+    ) -> String {
+        let input = format!("{project_id}|{worktree_id}|{source}|{session_id}|{turn_index}");
+        format!("t{:016x}", fnv1a64(input.as_bytes()))
+    }
+}
+
+pub fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let prime: u64 = 0x0000_0100_0000_01B3;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(prime);
+    }
+    h
 }
 
 #[cfg(test)]
@@ -257,6 +396,28 @@ mod tests {
 
         let d = Turn::deterministic_id("cursor", "sess-1", 0);
         assert_ne!(a, d, "different source → different id");
+    }
+
+    #[test]
+    fn snapshot_id_is_stable_and_scoped_to_worktree() {
+        let a = TurnSnapshot::stable_id("p:repo", "wt1", "cursor", "s1", 3);
+        let b = TurnSnapshot::stable_id("p:repo", "wt1", "cursor", "s1", 3);
+        let c = TurnSnapshot::stable_id("p:repo", "wt2", "cursor", "s1", 3);
+
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert!(a.starts_with('t'));
+    }
+
+    #[test]
+    fn snapshot_new_sets_schema_and_identity() {
+        let snapshot = TurnSnapshot::new("p:repo", "wt1", "claude", "session", 7);
+        assert_eq!(snapshot.schema_version, TURN_SNAPSHOT_SCHEMA_VERSION);
+        assert_eq!(snapshot.project_id, "p:repo");
+        assert_eq!(snapshot.worktree_id, "wt1");
+        assert_eq!(snapshot.source, "claude");
+        assert_eq!(snapshot.session_id, "session");
+        assert_eq!(snapshot.turn_index, 7);
     }
 
     #[test]

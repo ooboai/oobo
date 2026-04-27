@@ -2,7 +2,9 @@
 #[derive(Debug, Clone)]
 pub struct Session {
     pub session_id: String,
+    #[allow(dead_code)]
     pub name: String,
+    #[allow(dead_code)]
     pub mode: String,
     pub created_at: Option<i64>,
     pub updated_at: Option<i64>,
@@ -22,6 +24,7 @@ impl Session {
         self.updated_at.or(self.created_at).unwrap_or(0)
     }
 
+    #[cfg(test)]
     pub fn short_id(&self) -> &str {
         if self.session_id.len() >= 8 {
             &self.session_id[..8]
@@ -33,16 +36,9 @@ impl Session {
     pub fn is_subagent(&self) -> bool {
         self.parent_session_id.is_some()
     }
-
-    pub fn updated_at_iso(&self) -> String {
-        epoch_ms_to_iso(self.updated_at)
-    }
-
-    pub fn created_at_iso(&self) -> String {
-        epoch_ms_to_iso(self.created_at)
-    }
 }
 
+#[cfg(test)]
 fn epoch_ms_to_iso(ts: Option<i64>) -> String {
     match ts {
         Some(ts) => {

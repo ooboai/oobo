@@ -1,0 +1,10 @@
+[
+  {
+    "role": "user",
+    "text": "Fix the auth middleware regression"
+  },
+  {
+    "role": "assistant",
+    "text": "I found the token refresh branch skipping validate_token.\nI'll add a focused regression test."
+  }
+]

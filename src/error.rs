@@ -1,8 +1,5 @@
 #[derive(Debug, thiserror::Error)]
 pub enum OoboError {
-    #[error("database: {0}")]
-    Db(#[from] rusqlite::Error),
-
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 

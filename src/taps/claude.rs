@@ -41,7 +41,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{SubagentLink, Source, TapArtifact, TapError, TapSummary, TurnSink, TurnTap};
+use super::{Source, SubagentLink, TapArtifact, TapError, TapSummary, TurnSink, TurnTap};
 use crate::config::Config;
 use crate::core::turn::{Turn, TurnRole, TurnTokens};
 
@@ -109,7 +109,11 @@ fn ingest_one_file(
 
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    for (lineno, line) in reader.lines().enumerate().filter_map(|(i, r)| r.ok().map(|l| (i, l))) {
+    for (lineno, line) in reader
+        .lines()
+        .enumerate()
+        .filter_map(|(i, r)| r.ok().map(|l| (i, l)))
+    {
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -245,7 +249,13 @@ fn extract_assistant_metadata(
         Some(tool_names.join(","))
     };
 
-    (tokens, model, thinking_ms, tool_call_count, tool_names_joined)
+    (
+        tokens,
+        model,
+        thinking_ms,
+        tool_call_count,
+        tool_names_joined,
+    )
 }
 
 fn parse_timestamp(entry: &Value) -> Option<i64> {

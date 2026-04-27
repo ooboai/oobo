@@ -1,28 +1,28 @@
-# `oobo hooks` (hidden)
+# `anchor hooks` (hidden)
 
-Internal plumbing called by installed git hooks and AI-tool session hooks. NOT intended to be typed by users. Hidden from `oobo --help` output. Documented here because:
+Internal plumbing called by installed git hooks and AI-tool session hooks. NOT intended to be typed by users. Hidden from `anchor --help` output. Documented here because:
 
 1. It's a stable surface — installed hook scripts depend on these invocation shapes.
-2. Third-party tool adapters that want to integrate with oobo call this.
+2. Third-party tool adapters that want to integrate with anchor call this.
 3. Debugging issues often means running one of these manually.
 
 All `hooks` subcommands:
 - Exit `0` on success.
 - Print nothing on stdout by default (pure side effects).
-- Print warnings on stderr with prefix `oobo: warning: ...`; never fatal-error to avoid breaking user git/tool workflows.
+- Print warnings on stderr with prefix `anchor: warning: ...`; never fatal-error to avoid breaking user git/tool workflows.
 - Write to `~/.oobo/logs/hooks-debug.log` for diagnosability (appends only; bounded rotation in future).
-- Respect `OOBO_INTERCEPTED=1` to prevent re-entry when oobo calls git internally.
+- Respect `OOBO_INTERCEPTED=1` to prevent re-entry when anchor calls git internally.
 
 ---
 
-## `oobo hooks agent <event>`
+## `anchor hooks agent <event>`
 
 Called by AI-tool session hooks (Cursor's `agent-start`/`agent-stop`, Claude Code's `session-start`/`stop` hooks, etc.) when a session begins or ends. The tool passes a JSON payload on stdin describing the session.
 
 ### Signature
-`oobo hooks agent <event> [--tool <name>]`
+`anchor hooks agent <event> [--tool <name>]`
 
-- `<event>` — one of: `session-start`, `session-end`, `stop`. Unknown events are logged and ignored (exit `0` — never break the caller).
+- `<event>` — lifecycle event name. Stable installed events include `session-start`, `session-end`, `before-submit-prompt`, `after-tool-use`, `after-file-edit`, `tool-use-failure`, `subagent-start`, `subagent-stop`, `after-agent-thought`, `after-agent-response`, `pre-compact`, and `stop`. Unknown events warn and return `0` — never break the caller.
 - `--tool <name>` — the tool firing the hook: `cursor`, `claude`, `gemini`, `codex`, `aider`, `copilot`, `zed`, `continue`, `opencode`, `factory-droid`. Case-insensitive.
 - **stdin** — a JSON payload. Required shape:
 
@@ -41,7 +41,7 @@ Empty stdin is treated as `{}` (payload-free hook, reasonable for simple `stop` 
 
 ### Invocation: `session-start`
 
-`oobo hooks agent session-start --tool cursor <<< '{"session_id":"abc123","workspace":"/Users/teddy/dev/oobo-cli"}'`
+`anchor hooks agent session-start --tool cursor <<< '{"session_id":"abc123","workspace":"/Users/example/dev/oobo-cli"}'`
 
 **Behavior:**
 1. Resolve the project (by `workspace` path → `project_id` via the usual `remote_url` / `initial_commit_sha` / `primary_path` lookup).
@@ -56,7 +56,7 @@ Empty stdin is treated as `{}` (payload-free hook, reasonable for simple `stop` 
 
 ### Invocation: `session-end` / `stop`
 
-`oobo hooks agent stop --tool claude <<< '{"session_id":"abc123"}'`
+`anchor hooks agent stop --tool claude <<< '{"session_id":"abc123"}'`
 
 **Behavior:**
 1. Look up the `active_sessions` row by `(session_id, tool)`.
@@ -74,26 +74,26 @@ Empty stdin is treated as `{}` (payload-free hook, reasonable for simple `stop` 
 
 ### Invocation: unknown event
 
-`oobo hooks agent fart --tool cursor <<< '{}'`
+`anchor hooks agent fart --tool cursor <<< '{}'`
 
 **Behavior:** Log and return `0`. NEVER fail the caller, who is the user's AI tool.
 
 **stderr (optional warning):**
 ```
-oobo: warning: unknown agent event 'fart' (tool=cursor). ignored.
+anchor: warning: unknown agent event 'fart' (tool=cursor). ignored.
 ```
 
 **Exit code:** `0`.
 
 ### Invocation: malformed JSON on stdin
 
-`echo 'not json' | oobo hooks agent session-start --tool cursor`
+`echo 'not json' | anchor hooks agent session-start --tool cursor`
 
-**Behavior:** Log + warn; treat as `{}`. Exit `0`.
+**Behavior:** Log + warn; skip the event. Exit `0`.
 
 **stderr:**
 ```
-oobo: warning: could not parse agent payload as JSON. using empty payload.
+anchor: warning: malformed hook payload for event 'session-start': ...
 ```
 
 ### Agent env / non-TTY
@@ -102,17 +102,17 @@ No difference — this command has no TTY-aware behavior. Always silent stdout.
 
 ---
 
-## `oobo hooks post-commit`
+## `anchor hooks post-commit`
 
 Called by the `post-commit` git hook installed into each enabled repo.
 
 ### Signature
-`oobo hooks post-commit [git-passed-args-ignored...]`
+`anchor hooks post-commit [git-passed-args-ignored...]`
 
 Git's post-commit hook receives no args today, but we accept trailing args and ignore them (forward-compat).
 
 ### Behavior
-1. Early-exit if `OOBO_INTERCEPTED=1` is set (prevents re-entry when oobo's own commit interceptor calls git internally).
+1. Early-exit if `OOBO_INTERCEPTED=1` is set (prevents re-entry when anchor's own commit interceptor calls git internally).
 2. Locate the project root.
 3. Resolve / insert the project row.
 4. Call `crate::git::interceptor::on_write_op(&cfg, &["commit"])`:
@@ -141,12 +141,12 @@ Git's post-commit hook receives no args today, but we accept trailing args and i
 
 ---
 
-## `oobo hooks pre-push`
+## `anchor hooks pre-push`
 
 Called by the `pre-push` git hook installed in each enabled repo.
 
 ### Signature
-`oobo hooks pre-push [git-passed-args-ignored...]`
+`anchor hooks pre-push [git-passed-args-ignored...]`
 
 Git passes `<remote> <url>` plus refs on stdin, but we don't need them — we always push our own orphan branch when it exists.
 
@@ -168,48 +168,42 @@ Git passes `<remote> <url>` plus refs on stdin, but we don't need them — we al
 
 **stderr:**
 ```
-oobo: warning: could not push anchors: network unreachable. queued for retry.
+anchor: warning: could not push anchors: network unreachable. queued for retry.
 ```
 
 ---
 
-## `oobo hooks post-merge`  (new in v1.0)
+## `anchor hooks post-merge`
 
-Called by `post-merge` git hook. Fires after `git pull` / `git merge` completes.
+Called by `post-merge` git hook after `git pull` / `git merge` completes.
 
 ### Signature
-`oobo hooks post-merge [git-passed-args-ignored...]`
+`anchor hooks post-merge [git-passed-args-ignored...]`
 
 ### Behavior
-1. Fetch the remote's orphan branch (`git fetch origin oobo/anchors/v1:refs/remotes/origin/oobo/anchors/v1`).
-2. Hydrate any new anchors from the fetched tip into the local DB.
-3. Skip silently if no remote orphan branch exists.
+Fetch the remote orphan branch when needed and hydrate new anchors into the local DB.
 
-**Side effects:**
-- Network I/O: one fetch.
-- DB: new rows in `anchors` (idempotent UPSERT).
-
-**Exit code:** `0` regardless.
+**Exit code:** `0`. Hydration failures warn at most and never break the user's merge/pull workflow.
 
 ---
 
-## `oobo hooks post-rewrite`  (new in v1.0)
+## `anchor hooks post-rewrite`
 
-Called by `post-rewrite` hook. Fires after `git commit --amend`, `git rebase`. Receives on stdin a list of `old-sha new-sha` pairs.
+Called by `post-rewrite` hook after `git commit --amend` or `git rebase`.
 
 ### Signature
-`oobo hooks post-rewrite [rebase|amend]`
+`anchor hooks post-rewrite [git-passed-args-ignored...]`
+
+Git passes old/new commit pairs on stdin:
+
+```text
+<old-sha> <new-sha>
+```
 
 ### Behavior
-1. Read stdin, parse pairs.
-2. For each pair, update the anchor's `sha` from `old-sha` to `new-sha` in the DB (and in the orphan branch — scheduled for the next push).
-3. If the pair represents a deletion (rewrite drops a commit), mark the anchor as `orphaned` rather than deleting it — preserves the AI session memory even when the commit is gone.
+Best-effort remap of anchor SHAs from old to new commits, preserving AI session memory across history rewrites when the rewritten commit's tree can be matched.
 
-**Side effects:**
-- DB: anchor rows updated or marked orphaned.
-- Orphan branch: file renames queued for next push.
-
-**Exit code:** `0`.
+**Exit code:** `0`. Rewrite remapping failures warn at most and never break the user's amend/rebase workflow.
 
 ---
 
@@ -221,22 +215,22 @@ Called by `post-rewrite` hook. Fires after `git commit --amend`, `git rebase`. R
 Typical line format:
 
 ```
-2026-04-22T14:03:12Z event=session-start tool=Some("cursor") payload={"session_id":"abc","workspace":"/Users/teddy/dev/oobo-cli"}
+2026-04-22T14:03:12Z event=session-start tool=Some("cursor") payload={"session_id":"abc","workspace":"/Users/example/dev/oobo-cli"}
 2026-04-22T14:04:08Z post-commit sha=a1b2c3d4 project_id=0f5c linked_sessions=1
 2026-04-22T14:04:10Z pre-push pushed_orphan=oobo/anchors/v1 result=ok
 ```
 
 ### Manual hook replay (debugging)
 
-`OOBO_INTERCEPTED=0 oobo hooks post-commit` inside a repo — replays the hook logic for the current HEAD. Useful for diagnosing missed anchors.
+`OOBO_INTERCEPTED=0 anchor hooks post-commit` inside a repo — replays the hook logic for the current HEAD. Useful for diagnosing missed anchors.
 
 ---
 
 ## Invariants
 
-- Every `oobo hooks` subcommand exits `0` on success AND on non-fatal internal errors. Exit `!= 0` is reserved for hard bugs (e.g. unparseable clap args).
+- Every `anchor hooks` subcommand exits `0` on success AND on non-fatal internal errors. Exit `!= 0` is reserved for hard bugs (e.g. unparseable clap args).
 - None of the hook subcommands write to stdout by default. Stderr is limited to warnings.
 - `OOBO_INTERCEPTED=1` short-circuits the post-commit body (prevents re-entry).
 - The append-only log at `~/.oobo/logs/hooks-debug.log` is the canonical debug trail.
-- Changing any of these subcommand signatures is a breaking change for installed hook scripts across users' machines — requires `oobo setup --repair` to refresh.
-- `oobo hooks` with no subcommand → exit `2` with a clap error (but hidden from normal help).
+- Changing any of these subcommand signatures is a breaking change for installed hook scripts across users' machines — requires `anchor setup --repair` to refresh.
+- `anchor hooks` with no subcommand → exit `2` with a clap error (but hidden from normal help).

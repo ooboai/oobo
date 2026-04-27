@@ -193,15 +193,6 @@ pub mod transcript {
         }
     }
 
-    pub fn count_messages(project_path: &str, _session_id: &str) -> u32 {
-        let p = history_path(project_path);
-        if !p.exists() {
-            return 0;
-        }
-        let content = fs::read_to_string(&p).unwrap_or_default();
-        content.lines().filter(|l| l.starts_with("#### ")).count() as u32
-    }
-
     pub fn parse_messages(path: &Path) -> Vec<Message> {
         let content = fs::read_to_string(path).unwrap_or_default();
         let mut messages: Vec<Message> = Vec::new();
@@ -269,11 +260,6 @@ pub mod transcript {
 
         messages
     }
-
-    pub fn read_transcript(path: &Path, max_messages: u32) -> String {
-        let messages = parse_messages(path);
-        crate::utils::format_transcript(&messages, max_messages, "Assistant")
-    }
 }
 
 pub mod analytics {
@@ -295,9 +281,9 @@ pub mod analytics {
 
     struct AiderEvent {
         time_secs: i64,
-        model: Option<String>,
         prompt_tokens: u64,
         completion_tokens: u64,
+        #[allow(dead_code)]
         cost: f64,
     }
 
@@ -339,10 +325,6 @@ pub mod analytics {
 
             events.push(AiderEvent {
                 time_secs: time,
-                model: props
-                    .get("main_model")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
                 prompt_tokens: props
                     .get("prompt_tokens")
                     .and_then(|v| v.as_u64())
@@ -381,7 +363,6 @@ pub mod analytics {
             return None;
         }
 
-        let model = events.iter().rev().find_map(|e| e.model.clone());
         let input_tokens: u64 = events.iter().map(|e| e.prompt_tokens).sum();
         let output_tokens: u64 = events.iter().map(|e| e.completion_tokens).sum();
         let duration = if events.len() >= 2 {
@@ -397,7 +378,6 @@ pub mod analytics {
         };
 
         Some(NativeStats {
-            model,
             input_tokens: Some(input_tokens),
             output_tokens: Some(output_tokens),
             cache_read_tokens: None,
@@ -408,7 +388,7 @@ pub mod analytics {
         })
     }
 
-    /// Return global aggregated stats from the entire analytics log.
+    #[allow(dead_code)]
     pub fn global_stats() -> Option<(u64, u64, f64, usize)> {
         if !has_analytics_log() {
             return None;
@@ -423,7 +403,7 @@ pub mod analytics {
         Some((input, output, cost, events.len()))
     }
 
-    /// Check if the user's Aider config has analytics-log configured.
+    #[allow(dead_code)]
     pub fn is_aider_config_set() -> bool {
         let home = match dirs::home_dir() {
             Some(h) => h,
@@ -437,7 +417,7 @@ pub mod analytics {
         content.contains("analytics-log")
     }
 
-    /// Return the snippet to add to `~/.aider.conf.yml`.
+    #[allow(dead_code)]
     pub fn config_snippet() -> String {
         let path = analytics_log_path();
         format!("analytics-log: {}", path.display())

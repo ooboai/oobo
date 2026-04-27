@@ -229,25 +229,6 @@ pub mod transcript {
         None
     }
 
-    pub fn count_messages(project_path: &str, session_id: &str) -> u32 {
-        match find_transcript_path(project_path, session_id) {
-            Some(p) => {
-                let content = fs::read_to_string(&p).unwrap_or_default();
-                let data: serde_json::Value =
-                    if p.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                        replay_jsonl(&content).unwrap_or_default()
-                    } else {
-                        serde_json::from_str(&content).unwrap_or_default()
-                    };
-                data.get("requests")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.len() as u32 * 2)
-                    .unwrap_or(0)
-            }
-            None => 0,
-        }
-    }
-
     pub fn parse_messages(path: &Path) -> Vec<Message> {
         let content = fs::read_to_string(path).unwrap_or_default();
         let data: serde_json::Value = if path.extension().and_then(|e| e.to_str()) == Some("jsonl")
@@ -368,11 +349,6 @@ pub mod transcript {
     ) -> Option<crate::remote::payload::SessionStats> {
         let path = find_transcript_path(project_path, session_id)?;
         extract_stats(&path)
-    }
-
-    pub fn read_transcript(path: &Path, max_messages: u32) -> String {
-        let messages = parse_messages(path);
-        crate::utils::format_transcript(&messages, max_messages, "Assistant")
     }
 }
 

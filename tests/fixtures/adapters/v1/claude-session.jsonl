@@ -1,0 +1,2 @@
+{"type":"user","message":{"content":"Explain why cache invalidation fails"},"timestamp":"2026-04-22T10:00:00Z"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"The stale cache entry survives because the commit path updates metadata before deleting the key."}],"model":"claude-opus-4-5"},"timestamp":"2026-04-22T10:00:05Z"}

@@ -3,9 +3,9 @@ use std::path::PathBuf;
 
 use crate::cli::AliasAction;
 
-const ALIAS_MARKER: &str = "# oobo alias";
-const ALIAS_LINE_POSIX: &str = "alias git=oobo # oobo alias";
-const ALIAS_LINE_FISH: &str = "alias git oobo # oobo alias";
+const ALIAS_MARKER: &str = "# anchor alias";
+const ALIAS_LINE_POSIX: &str = "alias git=anchor # anchor alias";
+const ALIAS_LINE_FISH: &str = "alias git anchor # anchor alias";
 
 pub fn run(action: AliasAction) -> Result<(), String> {
     match action {
@@ -125,9 +125,9 @@ mod tests {
 
     #[test]
     fn test_alias_line_format() {
-        assert!(ALIAS_LINE_POSIX.contains("alias git=oobo"));
+        assert!(ALIAS_LINE_POSIX.contains("alias git=anchor"));
         assert!(ALIAS_LINE_POSIX.contains(ALIAS_MARKER));
-        assert!(ALIAS_LINE_FISH.contains("alias git oobo"));
+        assert!(ALIAS_LINE_FISH.contains("alias git anchor"));
         assert!(ALIAS_LINE_FISH.contains(ALIAS_MARKER));
         assert!(!ALIAS_LINE_FISH.contains('='));
     }
@@ -165,7 +165,7 @@ mod tests {
             ALIAS_LINE_POSIX
         };
         assert_eq!(line, ALIAS_LINE_FISH);
-        assert!(line.contains("alias git oobo"));
+        assert!(line.contains("alias git anchor"));
         assert!(!line.contains('='));
     }
 
@@ -178,7 +178,7 @@ mod tests {
             ALIAS_LINE_POSIX
         };
         assert_eq!(line, ALIAS_LINE_POSIX);
-        assert!(line.contains("alias git=oobo"));
+        assert!(line.contains("alias git=anchor"));
     }
 
     #[test]

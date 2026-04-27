@@ -44,7 +44,7 @@ pub fn path_to_slug(path: &str) -> String {
     path.trim_start_matches('/').replace('/', "-")
 }
 
-/// Get the project root for the current directory.
+#[allow(dead_code)]
 pub fn get_project_root() -> String {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     std::process::Command::new(git)
@@ -70,25 +70,40 @@ pub fn get_project_root() -> String {
 }
 
 /// Get all sessions for a given project root, sorted by most recent first.
+///
+/// Checks per-workspace legacy storage first, then falls back to the global
+/// `state.vscdb` where Cursor now stores individual composer records.
 pub fn sessions_for_project(project_root: &str) -> Result<Vec<Session>, String> {
     let ws_dirs = workspace::find_workspace_dirs_for_project(project_root)?;
     let mut sessions = Vec::new();
     for (ws_dir, folder_path) in &ws_dirs {
         sessions.extend(composer::extract_sessions(ws_dir, folder_path));
     }
+    dedup_sessions(&mut sessions);
     sessions.sort_by_key(|s| std::cmp::Reverse(s.sort_key()));
     Ok(sessions)
 }
 
 /// Get all sessions across all projects.
+///
+/// Merges legacy per-workspace data with the global DB to cover both old
+/// and new Cursor storage formats.
 pub fn all_sessions() -> Result<Vec<Session>, String> {
     let ws_dirs = workspace::find_all_workspace_dirs()?;
     let mut sessions = Vec::new();
     for (ws_dir, folder_path) in &ws_dirs {
         sessions.extend(composer::extract_sessions(ws_dir, folder_path));
     }
+    let global = composer::extract_all_sessions_global();
+    sessions.extend(global);
+    dedup_sessions(&mut sessions);
     sessions.sort_by_key(|s| std::cmp::Reverse(s.sort_key()));
     Ok(sessions)
+}
+
+fn dedup_sessions(sessions: &mut Vec<Session>) {
+    let mut seen = std::collections::HashSet::new();
+    sessions.retain(|s| seen.insert(s.session_id.clone()));
 }
 
 #[cfg(test)]

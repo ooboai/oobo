@@ -1,23 +1,23 @@
 [package]
-name = "oobo"
+name = "anchor"
 version = "1.0.0-rc.1"
 edition = "2021"
 authors = ["Oobo Contributors"]
 description = "Git decorator for humans and agents — captures AI sessions, tokens, costs, and code attribution alongside your commits"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/ooboai/oobo"
+repository = "https://github.com/ooboai/anchor"
 homepage = "https://oobo.ai"
 readme = "README.md"
 keywords = ["git", "ai", "developer-tools", "attribution", "cli"]
 categories = ["command-line-utilities", "development-tools"]
-documentation = "https://docs.rs/oobo"
+documentation = "https://docs.rs/anchor"
 
 [lib]
 name = "oobo"
 path = "src/lib.rs"
 
 [[bin]]
-name = "oobo"
+name = "anchor"
 path = "src/main.rs"
 
 [dependencies]
@@ -28,14 +28,11 @@ serde_json = "1"
 toml = "0.8"
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"], default-features = false }
 dirs = "6"
-dialoguer = "0.11"
 chrono = { version = "0.4", features = ["serde"] }
 url = "2"
-console = "0.15"
 ratatui = "0.30"
-crossterm = "0.28"
+crossterm = "0.29"
 tiktoken-rs = "0.6"
-libc = "0.2"
 thiserror = "2"
 regex = "1"
 tempfile = "3"
@@ -44,8 +41,7 @@ tempfile = "3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
-assert_cmd = "2"
-predicates = "3"
+proptest = "1.11.0"
 
 [profile.release]
 opt-level = "z"

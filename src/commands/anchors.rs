@@ -7,7 +7,8 @@
 use crate::cli::OutputMode;
 use crate::config::Config;
 use crate::core::anchor::Anchor;
-use crate::db::Db;
+use crate::core::turn::TurnSnapshot;
+use std::collections::HashMap;
 
 /// User-facing filters for `anchors` list mode.
 #[derive(Debug, Default, Clone)]
@@ -24,15 +25,20 @@ pub struct Options {
 
 /// `oobo anchors` — list recent anchors.
 pub fn run_list(cfg: &Config, opts: Options, mode: OutputMode) -> Result<i32, String> {
-    let db = Db::open()?;
-
     let in_repo = crate::git::proxy::project_root(cfg).is_some();
 
     if in_repo && opts.project.is_some() {
-        eprintln!(
-            "error: --project is not allowed inside a repo (current project is implied)"
-        );
+        eprintln!("error: --project is not allowed inside a repo (current project is implied)");
         return Ok(2);
+    }
+
+    if in_repo
+        && mode == OutputMode::Tui
+        && opts.limit == 50
+        && opts.since.is_none()
+        && opts.tool.is_none()
+    {
+        return crate::tui::app::run(cfg);
     }
 
     let since_epoch = match opts.since.as_deref() {
@@ -47,34 +53,14 @@ pub fn run_list(cfg: &Config, opts: Options, mode: OutputMode) -> Result<i32, St
     };
 
     let rows = if in_repo {
-        load_in_repo(cfg, &db, &opts, since_epoch)?
+        load_in_repo(cfg, &opts, since_epoch)?
     } else {
-        load_cross_project(&db, &opts, since_epoch)?
+        eprintln!("anchor: cross-project listing requires being inside a git repository.");
+        Vec::new()
     };
 
-    // Disabled-project guard (in-repo only).
-    if in_repo {
-        if let Some(root) = crate::git::proxy::project_root(cfg) {
-            if let Ok(pid) = project_id_from_root(&db, &root) {
-                let s = db.get_project_settings(&pid).unwrap_or_default();
-                if s.ignored {
-                    match mode {
-                        OutputMode::Tui => {
-                            println!("oobo is disabled for this project. run: oobo enable");
-                        }
-                        OutputMode::Agent => println!("disabled"),
-                        OutputMode::Json => {
-                            crate::utils::print_json(&serde_json::Value::Array(vec![]));
-                        }
-                    }
-                    return Ok(0);
-                }
-            }
-        }
-    }
-
     match mode {
-        OutputMode::Json => emit_list_json(cfg, &db, &rows, in_repo),
+        OutputMode::Json => emit_list_json(cfg, &rows, in_repo),
         OutputMode::Agent => emit_list_agent(&rows, in_repo),
         OutputMode::Tui => emit_list_pretty(&rows, in_repo),
     }
@@ -87,9 +73,10 @@ pub fn run_list(cfg: &Config, opts: Options, mode: OutputMode) -> Result<i32, St
 
 /// `oobo anchors show <sha>` — drill-down on one anchor.
 pub fn run_show(cfg: &Config, sha: &str, mode: OutputMode) -> Result<i32, String> {
-    let db = Db::open()?;
+    let root = crate::git::proxy::project_root(cfg)
+        .ok_or_else(|| "not inside a git repository".to_string())?;
 
-    let matches = resolve_sha(&db, cfg, sha)?;
+    let matches = resolve_sha(&root, sha)?;
     match matches.len() {
         0 => {
             eprintln!("error: no anchor found for '{sha}'");
@@ -105,13 +92,13 @@ pub fn run_show(cfg: &Config, sha: &str, mode: OutputMode) -> Result<i32, String
         }
     }
     let commit_hash = matches[0].0.clone();
-    let anchor = load_anchor(&db, &commit_hash)
+    let anchor = load_anchor(&root, &commit_hash)
         .ok_or_else(|| format!("anchor row missing for {commit_hash}"))?;
 
-    let sessions = load_sessions(&db, &commit_hash);
+    let sessions = load_sessions(&root, &commit_hash);
 
     match mode {
-        OutputMode::Json => emit_show_json(&anchor, &sessions),
+        OutputMode::Json => emit_show_json(cfg, &anchor, &sessions),
         OutputMode::Agent => emit_show_agent(&anchor, &sessions),
         OutputMode::Tui => emit_show_pretty(&anchor, &sessions),
     }
@@ -124,14 +111,43 @@ pub fn run_show(cfg: &Config, sha: &str, mode: OutputMode) -> Result<i32, String
 
 #[derive(Debug, Clone)]
 struct Row {
+    kind: RowKind,
     project_name: String,
-    sha: String,
+    id: String,
     subject: String,
     timestamp: i64,
     tool: Option<String>,
     tokens: i64,
     session_count: usize,
     ai_pct: Option<i64>,
+    files: usize,
+    tool_calls: usize,
+    session_id: Option<String>,
+    turn_index: Option<i64>,
+    parent_anchor: Option<String>,
+    restored_from: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowKind {
+    Anchor,
+    ShadowAnchor,
+}
+
+impl RowKind {
+    fn agent_label(self) -> &'static str {
+        match self {
+            RowKind::Anchor => "anchor",
+            RowKind::ShadowAnchor => "shadow",
+        }
+    }
+
+    fn json_label(self) -> &'static str {
+        match self {
+            RowKind::Anchor => "anchor",
+            RowKind::ShadowAnchor => "shadow_anchor",
+        }
+    }
 }
 
 // ------------------------------------------------------------------
@@ -140,29 +156,33 @@ struct Row {
 
 fn load_in_repo(
     cfg: &Config,
-    db: &Db,
     opts: &Options,
     since: Option<i64>,
 ) -> Result<Vec<Row>, String> {
-    // Walk recent git log, enrich from DB.
     let n = opts.limit.max(1);
     let log = crate::git::proxy::run_git_capture(
         cfg,
         &[
             "log",
-            &format!("-{}", n * 4), // over-fetch; filters may drop rows
+            &format!("-{}", n * 4),
             "--format=%H|||%s|||%ct",
         ],
     )
     .unwrap_or_default();
 
-    let project_name = crate::git::proxy::project_root(cfg)
-        .and_then(|p| {
-            std::path::Path::new(&p)
-                .file_name()
-                .and_then(|s| s.to_str().map(|s| s.to_string()))
-        })
+    let root = crate::git::proxy::project_root(cfg).unwrap_or_default();
+
+    let project_name = std::path::Path::new(&root)
+        .file_name()
+        .and_then(|s| s.to_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "-".to_string());
+
+    let (all_anchors, all_links) =
+        crate::git::anchor_cache::load_anchors_cached(&root);
+    let anchor_map: HashMap<String, &Anchor> = all_anchors
+        .iter()
+        .map(|a| (a.commit_hash.clone(), a))
+        .collect();
 
     let mut out: Vec<Row> = Vec::new();
     for line in log.lines() {
@@ -180,181 +200,225 @@ fn load_in_repo(
             }
         }
 
-        let (tool, tokens, count) = load_session_summary(db, &sha);
+        let (tool, tokens, count) = if let Some(_anchor) = anchor_map.get(&sha) {
+            let links = all_links.get(&sha).cloned().unwrap_or_default();
+            summarize_session_links(&links)
+        } else {
+            (None, 0, 0)
+        };
 
         if let Some(t) = opts.tool.as_deref() {
             let want = t.to_lowercase();
-            let has = tool.as_deref().map(|x| x.to_lowercase()).unwrap_or_default();
+            let has = tool
+                .as_deref()
+                .map(|x| x.to_lowercase())
+                .unwrap_or_default();
             if has != want {
                 continue;
             }
         }
 
-        let ai_pct = load_ai_pct(db, &sha);
+        let ai_pct = anchor_map
+            .get(&sha)
+            .and_then(|a| a.ai_percentage)
+            .map(|p| p.round() as i64);
 
         out.push(Row {
+            kind: RowKind::Anchor,
             project_name: project_name.clone(),
-            sha,
+            id: sha,
             subject,
             timestamp: ts,
             tool,
             tokens,
             session_count: count,
             ai_pct,
+            files: 0,
+            tool_calls: 0,
+            session_id: None,
+            turn_index: None,
+            parent_anchor: None,
+            restored_from: None,
         });
-        if out.len() >= opts.limit {
-            break;
-        }
     }
+    if !root.is_empty() {
+        let parents = build_shadow_parents_from_cached(&all_anchors);
+        out.extend(load_turn_rows(&root, &project_name, opts, since, &parents));
+    }
+    sort_memory_rows(&mut out);
+    out.truncate(opts.limit);
     Ok(out)
 }
 
-fn load_cross_project(db: &Db, opts: &Options, since: Option<i64>) -> Result<Vec<Row>, String> {
-    let mut sql = String::from(
-        "SELECT p.name, a.commit_hash, a.message, a.committed_at
-         FROM anchors a
-         JOIN ai_commits c ON c.commit_hash = a.commit_hash
-         JOIN projects p   ON p.id          = c.project_id",
-    );
-    let mut where_: Vec<String> = Vec::new();
-    let mut args: Vec<rusqlite::types::Value> = Vec::new();
+fn load_turn_rows(
+    project_root: &str,
+    project_name: &str,
+    opts: &Options,
+    since: Option<i64>,
+    parents: &HashMap<String, String>,
+) -> Vec<Row> {
+    crate::git::turns::list_turn_snapshots(project_root)
+        .into_iter()
+        .filter_map(|turn| turn_to_row(turn, project_name, opts, since, parents))
+        .collect()
+}
 
-    if let Some(proj) = opts.project.as_deref() {
-        where_.push(format!(
-            "(p.name = ?{n} OR p.path = ?{n})",
-            n = args.len() + 1
-        ));
-        args.push(rusqlite::types::Value::Text(proj.to_string()));
-    }
+fn turn_to_row(
+    turn: TurnSnapshot,
+    project_name: &str,
+    opts: &Options,
+    since: Option<i64>,
+    parents: &HashMap<String, String>,
+) -> Option<Row> {
+    let ts = turn.ended_at.or(turn.started_at).unwrap_or(turn.created_at);
     if let Some(s) = since {
-        where_.push(format!("a.committed_at >= ?{n}", n = args.len() + 1));
-        args.push(s.into());
+        if ts < s {
+            return None;
+        }
     }
-    if !where_.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&where_.join(" AND "));
+    if let Some(t) = opts.tool.as_deref() {
+        if !turn.source.eq_ignore_ascii_case(t) {
+            return None;
+        }
     }
-    sql.push_str(" ORDER BY a.committed_at DESC LIMIT ?");
-    args.push((opts.limit.max(1) as i64).into());
+    Some(Row {
+        kind: RowKind::ShadowAnchor,
+        project_name: project_name.to_string(),
+        id: turn.id.clone(),
+        subject: turn_subject(&turn),
+        timestamp: ts,
+        tool: Some(turn.source.clone()),
+        tokens: 0,
+        session_count: 1,
+        ai_pct: None,
+        files: turn_file_count(&turn),
+        tool_calls: turn.memory.tool_calls.len(),
+        session_id: Some(turn.session_id.clone()),
+        turn_index: Some(turn.turn_index),
+        parent_anchor: parents.get(&turn.id).cloned(),
+        restored_from: turn.restored_from.clone(),
+    })
+}
 
-    let mut stmt = db
-        .conn
-        .prepare(&sql)
-        .map_err(|e| format!("prepare anchors: {e}"))?;
-    let rows_iter = stmt
-        .query_map(params_from_iter(&args), |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<i64>>(3)?,
-            ))
-        })
-        .map_err(|e| format!("query anchors: {e}"))?;
-
-    let mut out: Vec<Row> = Vec::new();
-    for r in rows_iter.flatten() {
-        let (project_name, sha, msg, ts) = r;
-        let (tool, tokens, count) = load_session_summary(db, &sha);
-        if let Some(t) = opts.tool.as_deref() {
-            let want = t.to_lowercase();
-            let has = tool.as_deref().map(|x| x.to_lowercase()).unwrap_or_default();
-            if has != want {
-                continue;
+fn turn_subject(turn: &TurnSnapshot) -> String {
+    for event in &turn.memory.hook_events {
+        let Some(payload) = event.payload.as_ref() else {
+            continue;
+        };
+        for key in ["prompt", "message", "text", "input"] {
+            if let Some(value) = payload.get(key).and_then(|v| v.as_str()) {
+                let value = value.lines().next().unwrap_or(value).trim();
+                if !value.is_empty() {
+                    return value.to_string();
+                }
             }
         }
-        out.push(Row {
-            project_name,
-            sha,
-            subject: msg.unwrap_or_default(),
-            timestamp: ts.unwrap_or(0),
-            tool,
-            tokens,
-            session_count: count,
-            ai_pct: None,
-        });
     }
-    Ok(out)
+    format!("anchor #{}", turn.turn_index)
 }
 
-/// Primary tool + total tokens + session count for a commit.
-///
-/// Prefers the v11 canonical view (`v_anchor_totals`) which stores
-/// per-commit DELTA tokens from `anchor_contributions`. Falls back
-/// to the legacy cumulative `anchor_sessions` table only when no
-/// v11 data exists for this commit (backfill gap).
-fn load_session_summary(db: &Db, commit_hash: &str) -> (Option<String>, i64, usize) {
-    if let Ok((sessions, billed)) = db.conn.query_row(
-        "SELECT contributing_sessions, billed_tokens \
-         FROM v_anchor_totals WHERE commit_hash = ?1",
-        [commit_hash],
-        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
-    ) {
-        if sessions > 0 {
-            let tool: Option<String> = db
-                .conn
-                .query_row(
-                    "SELECT source FROM anchor_contributions \
-                     WHERE commit_hash = ?1 AND is_subagent = 0 \
-                     ORDER BY COALESCE(output_tokens,0) DESC LIMIT 1",
-                    [commit_hash],
-                    |r| r.get::<_, String>(0),
-                )
-                .ok();
-            return (tool, billed, sessions as usize);
+fn turn_file_count(turn: &TurnSnapshot) -> usize {
+    let mut files = std::collections::HashSet::new();
+    for call in &turn.memory.tool_calls {
+        if let Some(input) = call.input.as_ref() {
+            collect_file_paths_from_value(input, &mut files);
         }
     }
+    for event in &turn.memory.hook_events {
+        if let Some(payload) = event.payload.as_ref() {
+            collect_file_paths_from_value(payload, &mut files);
+        }
+    }
+    if files.is_empty() {
+        turn.files.len()
+    } else {
+        files.len()
+    }
+}
 
-    let mut stmt = match db.conn.prepare(
-        "SELECT agent,
-                COALESCE(input_tokens,0)+COALESCE(output_tokens,0)+
-                COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_tokens,0) AS t
-         FROM anchor_sessions WHERE commit_hash = ?1",
-    ) {
-        Ok(s) => s,
-        Err(_) => return (None, 0, 0),
-    };
-    let Ok(rows) = stmt.query_map([commit_hash], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-    }) else {
+fn collect_file_paths_from_value(
+    value: &serde_json::Value,
+    files: &mut std::collections::HashSet<String>,
+) {
+    for key in ["file_path", "path"] {
+        if let Some(path) = value.get(key).and_then(|v| v.as_str()) {
+            push_counted_file(path, files);
+        }
+    }
+    for key in ["modified_files", "files", "file_paths"] {
+        if let Some(items) = value.get(key).and_then(|v| v.as_array()) {
+            for item in items {
+                if let Some(path) = item.as_str() {
+                    push_counted_file(path, files);
+                }
+            }
+        }
+    }
+    if let Some(input) = value.get("tool_input") {
+        collect_file_paths_from_value(input, files);
+    }
+}
+
+fn push_counted_file(path: &str, files: &mut std::collections::HashSet<String>) {
+    if path.is_empty() || path == "." || path.ends_with('/') {
+        return;
+    }
+    files.insert(path.to_string());
+}
+
+fn build_shadow_parents_from_cached(
+    all_anchors: &[Anchor],
+) -> HashMap<String, String> {
+    let mut parents = HashMap::new();
+    for anchor in all_anchors {
+        for turn in &anchor.turns {
+            parents
+                .entry(turn.id.clone())
+                .or_insert_with(|| anchor.commit_hash.clone());
+        }
+    }
+    parents
+}
+
+fn sort_memory_rows(rows: &mut [Row]) {
+    rows.sort_by(|a, b| {
+        if a.parent_anchor.as_deref() == Some(b.id.as_str()) {
+            return std::cmp::Ordering::Greater;
+        }
+        if b.parent_anchor.as_deref() == Some(a.id.as_str()) {
+            return std::cmp::Ordering::Less;
+        }
+        if a.parent_anchor.is_some() && a.parent_anchor == b.parent_anchor {
+            return a
+                .turn_index
+                .cmp(&b.turn_index)
+                .then_with(|| a.id.cmp(&b.id));
+        }
+        b.timestamp.cmp(&a.timestamp).then_with(|| b.id.cmp(&a.id))
+    });
+}
+
+fn summarize_session_links(
+    links: &[crate::core::anchor::SessionLink],
+) -> (Option<String>, i64, usize) {
+    if links.is_empty() {
         return (None, 0, 0);
-    };
-
-    let mut total: i64 = 0;
-    let mut first_tool: Option<String> = None;
-    let mut count: usize = 0;
-    for r in rows.flatten() {
-        if first_tool.is_none() {
-            first_tool = Some(r.0);
-        }
-        total += r.1;
-        count += 1;
     }
-    (first_tool, total, count)
+    let tool = Some(links[0].agent.clone());
+    let total: i64 = links
+        .iter()
+        .map(|l| {
+            l.input_tokens.unwrap_or(0) as i64
+                + l.output_tokens.unwrap_or(0) as i64
+                + l.cache_read_tokens.unwrap_or(0) as i64
+                + l.cache_creation_tokens.unwrap_or(0) as i64
+        })
+        .sum();
+    (tool, total, links.len())
 }
 
-fn load_ai_pct(db: &Db, commit_hash: &str) -> Option<i64> {
-    db.conn
-        .query_row(
-            "SELECT ai_percentage FROM ai_commits WHERE commit_hash = ?1",
-            [commit_hash],
-            |r| r.get::<_, Option<f64>>(0),
-        )
-        .ok()
-        .flatten()
-        .map(|p| p.round() as i64)
-}
-
-fn load_anchor(db: &Db, commit_hash: &str) -> Option<Anchor> {
-    let raw: String = db
-        .conn
-        .query_row(
-            "SELECT raw_json FROM anchors WHERE commit_hash = ?1",
-            [commit_hash],
-            |row| row.get(0),
-        )
-        .ok()?;
-    serde_json::from_str(&raw).ok()
+fn load_anchor(project_root: &str, commit_hash: &str) -> Option<Anchor> {
+    crate::git::orphan::read_anchor(project_root, commit_hash)
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -369,70 +433,37 @@ struct SessionInfo {
     total: i64,
 }
 
-fn load_sessions(db: &Db, commit_hash: &str) -> Vec<SessionInfo> {
-    let mut stmt = match db.conn.prepare(
-        "SELECT session_id, agent, model,
-                COALESCE(input_tokens,0),
-                COALESCE(output_tokens,0),
-                COALESCE(cache_read_tokens,0),
-                COALESCE(cache_creation_tokens,0)
-         FROM anchor_sessions WHERE commit_hash = ?1",
-    ) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    let rows = stmt
-        .query_map([commit_hash], |r| {
-            Ok(SessionInfo {
-                id: r.get(0)?,
-                tool: r.get(1)?,
-                model: r.get(2)?,
-                input: r.get(3)?,
-                output: r.get(4)?,
-                cache_read: r.get(5)?,
-                cache_write: r.get(6)?,
-                total: 0,
-            })
-        })
-        .ok();
-    let mut out: Vec<SessionInfo> = Vec::new();
-    if let Some(rs) = rows {
-        for s in rs.flatten() {
-            let total = s.input + s.output + s.cache_read + s.cache_write;
-            out.push(SessionInfo { total, ..s });
+fn load_sessions(project_root: &str, commit_hash: &str) -> Vec<SessionInfo> {
+    let links = crate::git::orphan::read_session_links(project_root, commit_hash);
+    links.iter().map(|l| {
+        let input = l.input_tokens.unwrap_or(0) as i64;
+        let output = l.output_tokens.unwrap_or(0) as i64;
+        let cache_read = l.cache_read_tokens.unwrap_or(0) as i64;
+        let cache_write = l.cache_creation_tokens.unwrap_or(0) as i64;
+        let total = input + output + cache_read + cache_write;
+        SessionInfo {
+            id: l.session_id.clone(),
+            tool: l.agent.clone(),
+            model: l.model.clone(),
+            input, output, cache_read, cache_write, total,
         }
-    }
-    out
+    }).collect()
 }
 
 // ------------------------------------------------------------------
 // SHA resolution
 // ------------------------------------------------------------------
 
-fn resolve_sha(db: &Db, _cfg: &Config, prefix: &str) -> Result<Vec<(String, String)>, String> {
-    let like = format!("{prefix}%");
-    let mut stmt = db
-        .conn
-        .prepare("SELECT commit_hash, COALESCE(message,'') FROM anchors WHERE commit_hash LIKE ?1 LIMIT 8")
-        .map_err(|e| format!("prepare resolve: {e}"))?;
-    let rows = stmt
-        .query_map([&like], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-        .map_err(|e| format!("query resolve: {e}"))?;
-    let mut out: Vec<(String, String)> = Vec::new();
-    for r in rows.flatten() {
-        out.push(r);
-    }
-    Ok(out)
-}
-
-fn project_id_from_root(db: &Db, root: &str) -> Result<String, String> {
-    db.conn
-        .query_row(
-            "SELECT id FROM projects WHERE path = ?1 LIMIT 1",
-            [root],
-            |r| r.get::<_, String>(0),
-        )
-        .map_err(|e| format!("project not found: {e}"))
+fn resolve_sha(project_root: &str, prefix: &str) -> Result<Vec<(String, String)>, String> {
+    let hashes = crate::git::orphan::list_anchor_hashes(project_root);
+    let matches: Vec<(String, String)> = hashes.into_iter()
+        .filter(|h| h.starts_with(prefix))
+        .filter_map(|h| {
+            let anchor = crate::git::orphan::read_anchor(project_root, &h)?;
+            Some((h, anchor.message))
+        })
+        .collect();
+    Ok(matches)
 }
 
 // ------------------------------------------------------------------
@@ -441,7 +472,7 @@ fn project_id_from_root(db: &Db, root: &str) -> Result<String, String> {
 
 fn emit_list_agent(rows: &[Row], in_repo: bool) {
     for r in rows {
-        let sha7 = short_sha(&r.sha);
+        let id = short_id(&r.id);
         let rel = relative_time(r.timestamp);
         let subject = truncate_fixed(&r.subject, 40);
         let tool = r.tool.as_deref().unwrap_or("-");
@@ -450,43 +481,76 @@ fn emit_list_agent(rows: &[Row], in_repo: bool) {
         } else {
             "-".to_string()
         };
-        let count = if r.session_count > 0 {
-            format!("{}s", r.session_count)
-        } else {
-            "-".to_string()
+        let count = match r.kind {
+            RowKind::Anchor if r.session_count > 0 => format!("{}s", r.session_count),
+            RowKind::ShadowAnchor => format!("{}f/{}t", r.files, r.tool_calls),
+            RowKind::Anchor => "-".to_string(),
         };
+        let kind = r.kind.agent_label();
         if in_repo {
-            println!(
-                "{sha7} {rel:<4} {subject:<40} {tool:<7} {tokens:<4} {count}",
-            );
+            println!("{kind:<6} {id:<10} {rel:<4} {subject:<40} {tool:<8} {tokens:<4} {count}",);
         } else {
             let proj = truncate_fixed(&r.project_name, 14);
-            println!(
-                "{proj:<14} {sha7} {rel:<4} {subject:<40} {tool:<7} {tokens:<4} {count}",
-            );
+            println!("{proj:<14} {kind:<6} {id:<10} {rel:<4} {subject:<40} {tool:<8} {tokens:<4} {count}",);
         }
     }
 }
 
 fn emit_list_pretty(rows: &[Row], in_repo: bool) {
     if rows.is_empty() {
-        println!("No anchors yet. Commit through oobo to start anchoring sessions.");
+        println!("No anchors yet. Commit through anchor to start anchoring sessions.");
         return;
     }
-    for r in rows {
-        let sha7 = short_sha(&r.sha);
+    println!("\x1b[1manchor memory\x1b[0m");
+    println!("\x1b[2manchors are committed memory; local anchors are restorable points\x1b[0m");
+    println!();
+    for (idx, r) in rows.iter().enumerate() {
+        let id = short_id(&r.id);
         let rel = relative_time(r.timestamp);
-        let subject = truncate_fixed(&r.subject, 40);
+        let subject = truncate_display(&r.subject, 72);
         let tool = r.tool.as_deref().unwrap_or("-");
         let tokens = if r.tokens > 0 {
             human_tokens(r.tokens)
         } else {
             "-".to_string()
         };
-        let sessions = match r.session_count {
-            0 => "(local only)".to_string(),
-            1 => "1 session".to_string(),
-            n => format!("{n} sessions"),
+        let (dot, kind, id_color, meta) = match r.kind {
+            RowKind::Anchor => {
+                let sessions = match r.session_count {
+                    0 => "no linked sessions".to_string(),
+                    1 => "1 session".to_string(),
+                    n => format!("{n} sessions"),
+                };
+                (
+                    "\x1b[32m●\x1b[0m",
+                    "\x1b[32manchor\x1b[0m",
+                    "\x1b[33m",
+                    format!("{tool} · {tokens} · {sessions}"),
+                )
+            }
+            RowKind::ShadowAnchor => {
+                let idx = r
+                    .turn_index
+                    .map(|i| format!("snapshot {i}"))
+                    .unwrap_or_else(|| "snapshot".to_string());
+                let parent = r
+                    .parent_anchor
+                    .as_deref()
+                    .map(|sha| format!(" · anchored under {}", short_sha(sha)))
+                    .unwrap_or_default();
+                (
+                    "\x1b[2m○\x1b[0m",
+                    "\x1b[2manchor\x1b[0m",
+                    "\x1b[2m",
+                    format!(
+                        "{tool} · {idx} · {} file{} · {} tool{}{parent}",
+                        r.files,
+                        plural(r.files),
+                        r.tool_calls,
+                        plural(r.tool_calls)
+                    ),
+                )
+            }
         };
         let ai_pct = r
             .ai_pct
@@ -494,23 +558,29 @@ fn emit_list_pretty(rows: &[Row], in_repo: bool) {
             .unwrap_or_default();
         if in_repo {
             println!(
-                "  \x1b[33m{sha7}\x1b[0m  \x1b[2m{rel:<4}\x1b[0m  {subject:<40}  \x1b[36m{tool}\x1b[0m · {tokens} · {sessions}{ai_pct}",
+                " {dot} \x1b[2m{rel:<5}\x1b[0m {kind:<20} {id_color}{id:<10}\x1b[0m  \x1b[1m{subject}\x1b[0m",
             );
+            println!("   \x1b[2m{meta}{ai_pct}\x1b[0m");
         } else {
             let proj = truncate_fixed(&r.project_name, 16);
             println!(
-                "  \x1b[34m{proj:<16}\x1b[0m  \x1b[33m{sha7}\x1b[0m  \x1b[2m{rel:<4}\x1b[0m  {subject:<40}  \x1b[36m{tool}\x1b[0m · {tokens} · {sessions}{ai_pct}",
+                " {dot} \x1b[34m{proj:<16}\x1b[0m \x1b[2m{rel:<5}\x1b[0m {kind:<20} {id_color}{id:<10}\x1b[0m  \x1b[1m{subject}\x1b[0m",
             );
+            println!("   \x1b[2m{meta}{ai_pct}\x1b[0m");
+        }
+        if idx + 1 < rows.len() {
+            println!("   \x1b[2m│\x1b[0m");
         }
     }
 }
 
-fn emit_list_json(_cfg: &Config, _db: &Db, rows: &[Row], in_repo: bool) {
+fn emit_list_json(_cfg: &Config, rows: &[Row], in_repo: bool) {
     let arr: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
             let mut obj = serde_json::json!({
-                "sha": r.sha,
+                "type": r.kind.json_label(),
+                "id": r.id,
                 "timestamp": chrono::DateTime::from_timestamp(r.timestamp, 0)
                     .map(|t| t.to_rfc3339())
                     .unwrap_or_default(),
@@ -520,9 +590,31 @@ fn emit_list_json(_cfg: &Config, _db: &Db, rows: &[Row], in_repo: bool) {
                 "sessions_count": r.session_count,
                 "ai_pct": r.ai_pct,
             });
-            // `project` is only meaningful in cross-project listings.
             if !in_repo {
                 obj["project"] = serde_json::Value::String(r.project_name.clone());
+            }
+            match r.kind {
+                RowKind::Anchor => {
+                    obj["sha"] = serde_json::Value::String(r.id.clone());
+                }
+                RowKind::ShadowAnchor => {
+                    obj["turn_id"] = serde_json::Value::String(r.id.clone());
+                    obj["shadow_anchor_id"] = serde_json::Value::String(r.id.clone());
+                    obj["files"] = serde_json::Value::Number(r.files.into());
+                    obj["tool_calls"] = serde_json::Value::Number(r.tool_calls.into());
+                    if let Some(session_id) = &r.session_id {
+                        obj["session_id"] = serde_json::Value::String(session_id.clone());
+                    }
+                    if let Some(turn_index) = r.turn_index {
+                        obj["turn_index"] = serde_json::Value::Number(turn_index.into());
+                    }
+                    if let Some(parent) = &r.parent_anchor {
+                        obj["parent_anchor"] = serde_json::Value::String(parent.clone());
+                    }
+                    if let Some(restored_from) = &r.restored_from {
+                        obj["restored_from"] = serde_json::Value::String(restored_from.clone());
+                    }
+                }
             }
             obj
         })
@@ -573,7 +665,10 @@ fn emit_show_pretty(anchor: &Anchor, sessions: &[SessionInfo]) {
     let rel = relative_time(anchor.committed_at);
     println!("\x1b[1m{sha7}\x1b[0m — {subj}", subj = anchor.message);
     if !anchor.author.is_empty() {
-        println!("\x1b[2m{author}  ·  {rel} ago\x1b[0m", author = anchor.author);
+        println!(
+            "\x1b[2m{author}  ·  {rel} ago\x1b[0m",
+            author = anchor.author
+        );
     }
     println!("─────────────────────────────────────────────────────────");
     let total: i64 = sessions.iter().map(|s| s.total).sum();
@@ -615,10 +710,11 @@ fn emit_show_pretty(anchor: &Anchor, sessions: &[SessionInfo]) {
     }
 }
 
-fn emit_show_json(anchor: &Anchor, sessions: &[SessionInfo]) {
+fn emit_show_json(cfg: &Config, anchor: &Anchor, sessions: &[SessionInfo]) {
     let ts = chrono::DateTime::from_timestamp(anchor.committed_at, 0)
         .map(|t| t.to_rfc3339())
         .unwrap_or_default();
+    let parents = load_parent_hashes(cfg, &anchor.commit_hash);
     let sess_json: Vec<serde_json::Value> = sessions
         .iter()
         .map(|s| {
@@ -643,7 +739,7 @@ fn emit_show_json(anchor: &Anchor, sessions: &[SessionInfo]) {
     let cache_write: i64 = sessions.iter().map(|s| s.cache_write).sum();
     let json = serde_json::json!({
         "sha": anchor.commit_hash,
-        "parents": Vec::<String>::new(),
+        "parents": parents,
         "timestamp": ts,
         "author": { "raw": anchor.author },
         "subject": anchor.message,
@@ -661,6 +757,7 @@ fn emit_show_json(anchor: &Anchor, sessions: &[SessionInfo]) {
             "ai_pct": anchor.ai_percentage,
         },
         "sessions": sess_json,
+        "shadow_anchors": anchor.turns,
         "files_changed": anchor.files_changed,
     });
     crate::utils::print_json(&json);
@@ -678,6 +775,14 @@ fn short_sha(sha: &str) -> String {
     }
 }
 
+fn short_id(id: &str) -> String {
+    if id.starts_with('t') {
+        id.chars().take(10).collect()
+    } else {
+        short_sha(id)
+    }
+}
+
 fn truncate_fixed(s: &str, n: usize) -> String {
     let mut t: String = s.chars().take(n).collect();
     while t.chars().count() < n {
@@ -686,67 +791,53 @@ fn truncate_fixed(s: &str, n: usize) -> String {
     t
 }
 
-fn human_tokens(n: i64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{}k", n / 1000)
+fn truncate_display(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
     } else {
-        n.to_string()
+        let mut t: String = s.chars().take(n.saturating_sub(3)).collect();
+        t.push_str("...");
+        t
     }
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 {
+        ""
+    } else {
+        "s"
+    }
+}
+
+fn human_tokens(n: i64) -> String {
+    crate::utils::human_tokens(n)
 }
 
 fn relative_time(ts: i64) -> String {
-    if ts <= 0 {
-        return "-".to_string();
-    }
-    let now = chrono::Utc::now().timestamp();
-    let d = (now - ts).max(0);
-    if d < 60 {
-        format!("{d}s")
-    } else if d < 3600 {
-        format!("{}m", d / 60)
-    } else if d < 86400 {
-        format!("{}h", d / 3600)
-    } else if d < 7 * 86400 {
-        format!("{}d", d / 86400)
-    } else if d < 30 * 86400 {
-        format!("{}w", d / (7 * 86400))
-    } else if d < 365 * 86400 {
-        format!("{}mo", d / (30 * 86400))
-    } else {
-        format!("{}y", d / (365 * 86400))
-    }
+    crate::utils::relative_time(ts)
 }
 
-/// Accept durations (`24h`, `7d`, `30m`, `1mo`, `1y`) or ISO-8601 timestamps.
 fn parse_since(raw: &str) -> Result<i64, String> {
-    if let Ok(dt) = raw.parse::<chrono::DateTime<chrono::Utc>>() {
-        return Ok(dt.timestamp());
-    }
-    let digits: String = raw.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if digits.is_empty() {
-        return Err("expected number + suffix (s/m/h/d/w/mo/y) or ISO-8601".into());
-    }
-    let n: i64 = digits.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
-    let suffix = &raw[digits.len()..];
-    let seconds: i64 = match suffix {
-        "s" => n,
-        "m" => n * 60,
-        "h" => n * 3600,
-        "d" => n * 86400,
-        "w" => n * 7 * 86400,
-        "mo" => n * 30 * 86400,
-        "y" => n * 365 * 86400,
-        other => return Err(format!("unknown suffix '{other}'")),
-    };
-    Ok(chrono::Utc::now().timestamp() - seconds)
+    crate::utils::parse_since(raw)
 }
 
-fn params_from_iter<'a>(
-    vals: &'a [rusqlite::types::Value],
-) -> impl rusqlite::Params + 'a {
-    rusqlite::params_from_iter(vals.iter())
+fn load_parent_hashes(cfg: &Config, commit_hash: &str) -> Vec<String> {
+    let root = crate::git::proxy::project_root(cfg);
+    let Some(root) = root else { return Vec::new() };
+    crate::git::proxy::run_git_capture_in(
+        cfg,
+        &["rev-list", "--parents", "-n", "1", commit_hash],
+        Some(&root),
+    )
+    .map(|line| parse_parent_hashes(&line))
+    .unwrap_or_default()
+}
+
+fn parse_parent_hashes(line: &str) -> Vec<String> {
+    line.split_whitespace()
+        .skip(1)
+        .map(|s| s.to_string())
+        .collect()
 }
 
 // ------------------------------------------------------------------
@@ -789,6 +880,12 @@ mod tests {
     fn test_short_sha() {
         assert_eq!(short_sha("a1b2c3d4e5"), "a1b2c3d");
         assert_eq!(short_sha("abc"), "abc");
+    }
+
+    #[test]
+    fn test_parse_parent_hashes_from_rev_list_line() {
+        let parents = parse_parent_hashes("abc123 def456 789abc");
+        assert_eq!(parents, vec!["def456".to_string(), "789abc".to_string()]);
     }
 
     #[test]

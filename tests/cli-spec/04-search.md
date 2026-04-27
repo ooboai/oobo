@@ -1,14 +1,14 @@
-# `oobo search`
+# `anchor search`
 
-Find any past session across all projects. Local-always, remote-when-key-configured. Searches transcripts, intents, commit subjects, file paths, and tool names.
+Find any past session across all projects. Search is local-first and reads the local anchor DB. When an API key is configured, remote results are fetched from the backend and merged by score.
 
 Positional arg:
 - `<query>` — free-text query. Multi-word queries are treated as AND across terms by default. Quoted substrings match literally.
 
 Flags:
-- `--local` — local DB only (default when no API key configured).
+- `--local` — local DB only (default when no API key is configured).
 - `--remote` — remote server only (requires `settings set key <...>`).
-- `--both` — local + remote merged (default when API key configured).
+- `--both` — local + remote merged (default when API key is configured).
 - `--since <duration|iso>` — time window.
 - `--project <name>` — scope to one project.
 - `--tool <name>` — scope to one tool.
@@ -19,7 +19,7 @@ Flags:
 ## Basic search — TTY / pretty
 
 ### Invocation
-`oobo search "auth middleware"`
+`anchor search "auth middleware"`
 
 **Behavior:** Colored, paged hit list. Each hit shows: project, tool, relative time, short intent, and a snippet with the query term highlighted.
 
@@ -41,7 +41,7 @@ oobo-cli · cursor · 3h     extract payment adapter
 ## Agent mode
 
 ### Invocation
-`oobo search "auth middleware" --agent`
+`anchor search "auth middleware" --agent`
 
 **Behavior:** One line per hit. Columns:
 
@@ -72,7 +72,7 @@ my-app    d4e5f6g gemini 31k 4h   add rate limiter: per-endpoint limits for /api
 ## JSON mode
 
 ### Invocation
-`oobo search "auth middleware" --json`
+`anchor search "auth middleware" --json`
 
 **Example output:**
 ```json
@@ -105,54 +105,54 @@ my-app    d4e5f6g gemini 31k 4h   add rate limiter: per-endpoint limits for /api
 ## Local-only / remote-only / both
 
 ### Default with no API key
-`oobo search "foo"`
+`anchor search "foo"`
 
 **Behavior:** Implicit `--local`. `sources` in JSON = `["local"]`.
 
 ### Default with API key
-`oobo search "foo"` (after `oobo settings set key sk_...`)
+`anchor search "foo"` (after `anchor settings set key sk_...`)
 
-**Behavior:** Implicit `--both`. Local hits first, then remote-only hits merged by descending `score`. `sources = ["local", "remote"]`.
+**Behavior:** Implicit `--both`. Local hits and remote hits are merged by descending `score`. `sources = ["local", "remote"]` when the remote call succeeds.
 
 ### Explicit local only
-`oobo search "foo" --local`
+`anchor search "foo" --local`
 
-**Behavior:** Skip the remote call even if API key is configured. Useful for air-gapped or offline work.
+**Behavior:** Skip the remote call even if an API key is configured.
 
 ### Explicit remote only
-`oobo search "foo" --remote`
+`anchor search "foo" --remote`
 
-**Behavior:** Skip local search. If no API key is configured → exit `2` with `error: --remote requires an API key. run: oobo settings set key <...>`.
+**Behavior:** Skip local search. If no API key is configured → exit `2` with `error: --remote requires an API key. run: anchor settings set key <...>`.
 
 ### `--both` without an API key
-`oobo search "foo" --both`
+`anchor search "foo" --both`
 
-**Behavior:** Exit `2` with `error: --both requires an API key. run: oobo settings set key <...>`.
+**Behavior:** Exit `2` with `error: --both requires an API key. run: anchor settings set key <...>`.
 
 ---
 
 ## Filters
 
 ### `--project <name>`
-`oobo search "foo" --project oobo-cli --agent`
+`anchor search "foo" --project oobo-cli --agent`
 
 **Behavior:** Restrict hits to that project. Resolution: exact name, then fuzzy match (Levenshtein ≤ 2). Ambiguous match → exit `2` with listing.
 
 ### `--tool <name>`
-`oobo search "foo" --tool claude --agent`
+`anchor search "foo" --tool claude --agent`
 
 ### `--since 7d`
-`oobo search "foo" --since 7d --agent`
+`anchor search "foo" --since 7d --agent`
 
 ### `--limit N`
-`oobo search "foo" --limit 5 --agent`
+`anchor search "foo" --limit 5 --agent`
 
 ---
 
 ## Empty / no-result cases
 
 ### Zero hits
-`oobo search "completely nonexistent phrase" --agent`
+`anchor search "completely nonexistent phrase" --agent`
 
 **Behavior:** Emit nothing to stdout, exit `0`.
 
@@ -163,7 +163,7 @@ my-app    d4e5f6g gemini 31k 4h   add rate limiter: per-endpoint limits for /api
 (empty, with a final newline)
 
 ### Zero hits, pretty mode
-`oobo search "completely nonexistent phrase"`
+`anchor search "completely nonexistent phrase"`
 
 **Example output:**
 ```
@@ -182,31 +182,31 @@ no results for "completely nonexistent phrase"
 ## Error cases
 
 ### Remote failure with `--both`
-`oobo search "foo" --both` (API key set, but remote returns 5xx or times out)
+`anchor search "foo" --both` (API key set, but remote returns 5xx or times out)
 
 **Behavior:** Emit local results with a warning prefix; never fail the whole command on remote failure.
 
 **Example output (pretty, with warning on stderr):**
 ```
-stderr: warning: remote search failed: timeout after 5s. showing local results only.
+stderr: warning: remote search failed: request: operation timed out. showing local results only.
 stdout: [local hits...]
 ```
 
 **Exit code:** `0`.
 
 ### Remote failure with `--remote` only
-`oobo search "foo" --remote`
+`anchor search "foo" --remote`
 
 **Behavior:** Hard fail.
 
 **Example output (stderr):**
 ```
-error: remote search failed: timeout after 5s
+error: remote search failed: request: operation timed out
 ```
 **Exit code:** `1`.
 
 ### Empty query
-`oobo search ""`
+`anchor search ""`
 
 **Example output (stderr):**
 ```
@@ -215,7 +215,7 @@ error: query cannot be empty
 **Exit code:** `2`.
 
 ### Missing query
-`oobo search`
+`anchor search`
 
 **Behavior:** Clap's required-arg error.
 
@@ -224,7 +224,7 @@ error: query cannot be empty
 error: the following required arguments were not provided:
   <query>
 
-Usage: oobo search <query> [OPTIONS]
+Usage: anchor search <query> [OPTIONS]
 ```
 **Exit code:** `2`.
 

@@ -12,27 +12,28 @@ output modes, and a flagship `anchors` experience.
 
 ### Added
 
-- **`oobo anchors show <sha>`** drill-down (pretty / agent / json). Accepts unambiguous SHA prefixes.
-- **`oobo anchors` filters**: `--since <24h|7d|ISO>`, `--tool`, `--project` (outside-repo only).
-- **`oobo blame`** is now a strict superset of `git blame`. Every `git blame` flag is forwarded; an AI-attribution column is overlaid for pretty/agent mode. `--no-ai`, `--porcelain`, `--line-porcelain`, `--incremental` bypass the overlay.
-- **`oobo search`** promoted to a top-level verb. Local DB search with `--since`, `--project`, `--tool`, `--limit`.
-- **`oobo settings`** declarative KV config with positional grammar: `oobo settings [scope] [verb] <key> [value]`. Scope defaults to `default`, verb defaults to `get`. Keys: `key`, `remote`, `transparency`, `tools.experimental`, `setup.scan_roots`.
-- **`oobo enable` / `oobo disable`** per-project tracking toggles (idempotent).
-- **`oobo alias install` / `oobo alias uninstall`** manage the `alias git=oobo` shell alias.
-- **`oobo setup`** rebuilt as a composable entry point: `--non-interactive`, `--reindex`, `--uninstall-alias`, `--repair`.
-- **Auto-indexing**: view commands (`anchors`, `blame`, `search`, bare `oobo`) kick a fire-and-forget rescan when `last_scanned_at` is older than 5 minutes. Opt out with `OOBO_NO_AUTO_INDEX=1`.
+- **`anchor anchors show <sha>`** drill-down (pretty / agent / json). Accepts unambiguous SHA prefixes.
+- **`anchor anchors` filters**: `--since <24h|7d|ISO>`, `--tool`, `--project` (outside-repo only).
+- **`anchor blame`** is now a strict superset of `git blame`. Every `git blame` flag is forwarded; an AI-attribution column is overlaid for pretty/agent mode. `--no-ai`, `--porcelain`, `--line-porcelain`, `--incremental` bypass the overlay.
+- **`anchor search`** promoted to a top-level verb. Local search (orphan branch) with `--since`, `--project`, `--tool`, `--limit`.
+- **`anchor settings`** declarative KV config with positional grammar: `anchor settings [scope] [verb] <key> [value]`. Scope defaults to `default`, verb defaults to `get`. Keys: `key`, `remote`, `transparency`, `tools.experimental`, `setup.scan_roots`.
+- **`anchor enable` / `anchor disable`** per-project tracking toggles (idempotent).
+- **`anchor alias install` / `anchor alias uninstall`** manage the `alias git=anchor` shell alias.
+- **`anchor setup`** rebuilt as a composable entry point: `--non-interactive`, `--reindex`, `--uninstall-alias`, `--repair`.
+- **Zero-config tool detection**: AI tools are auto-detected at commit time — no indexing, no scanning, no database.
 - **Legacy command hint system**: removed 0.1.x verbs now print a hint and, in a TTY, offer to run the replacement. Scheduled for removal in 1.1.
 - **Agent auto-detection**: `--agent` auto-activates when stdout is not a TTY or any of `CURSOR_AGENT`, `CLAUDECODE`, `AIDER`, `CONTINUE_SESSION`, `CONTINUE_IDE`, `AICOMMITS` is set.
-- **Four-quadrant bare `oobo`** behavior (in-repo/outside × pretty/structured).
+- **Four-quadrant bare `anchor`** behavior (in-repo/outside × pretty/structured).
 - **Stable project-identity helpers** (`src/project.rs`): canonicalizes git remote URLs so SSH and HTTPS forms collapse to the same key.
 - **`tests/cli-spec/`** — behavioral contract for every 1.0 command.
 
 ### Changed
 
+- **Cloud ingest pipeline removed**: there is no `POST /anchors/ingest` or outbox/sync system. Team sync is Git-first (orphan branch `oobo/anchors/v1`). `anchor settings set key` / `OOBO_SECRET_KEY` are used exclusively for remote search.
 - **Output modes** are three mutually exclusive modes: pretty (TTY), agent (`--agent`, token-efficient plain text for LLMs), json (`--json`).
-- **`oobo anchors --json`** now emits a flat JSON array (no envelope).
+- **`anchor anchors --json`** now emits a flat JSON array (no envelope).
 - **Default anchors limit** raised from 10 → 50.
-- Help output regrouped into Anchor / Recall / Settings / Lifecycle / Git passthrough sections.
+- Help output regrouped into Views / Actions / Wizard + Config / Lifecycle / Git Passthrough sections.
 
 ### Removed
 
@@ -41,11 +42,13 @@ output modes, and a flagship `anchors` experience.
 
 ### Migration notes (0.1.x → 1.0.0)
 
-- `oobo scan` → `oobo setup --reindex` (or just wait; view commands auto-index).
-- `oobo ignore` / `oobo unignore` → `oobo disable` / `oobo enable`.
-- `oobo sync` / `oobo auth` → `oobo settings set key <...>`.
-- `oobo share`, `oobo export` → `oobo anchors show <sha> --json`.
-- `oobo sessions` → inside `oobo anchors show <sha>` or `oobo search`.
+- `anchor scan` → removed. Tool detection is automatic on every commit.
+- `anchor ignore` / `anchor unignore` → `anchor disable` / `anchor enable`.
+- `anchor sync` / `anchor auth` → removed. For remote search, set an API key: `anchor settings set key <...>`.
+- `anchor share`, `anchor export` → `anchor anchors show <sha> --json`.
+- `anchor sessions` → inside `anchor anchors show <sha>` or `anchor search`.
+
+Historical entries below describe 0.1.x behavior and may mention commands removed from the current 1.0 CLI.
 
 ## [0.1.15] - 2026-04-08
 
@@ -67,8 +70,8 @@ output modes, and a flagship `anchors` experience.
 ### Added
 
 - **Per-line AI/human code attribution** — every commit anchor now records which specific line ranges were written by AI vs. human. Uses a three-point diff (pre-agent → agent snapshot → committed) to compute precise line-level attribution in committed-file coordinates. Data is stored in `line_attributions` on each `FileChange` entry in the anchor JSON.
-- **`oobo blame` command** — new command that displays per-line AI attribution for any file at any commit. Shows colorized output with line numbers, author labels (ai/human), and agent names. Supports `--json` and `--agent` output modes. File path input is normalized (handles `./`, absolute paths) for reliable matching.
-- **Post-rewrite anchor re-keying** — when `git rebase` or `git cherry-pick` rewrites commit history, oobo now automatically copies all anchor data (metadata, session links, transcripts, timeline) from old SHAs to new SHAs by matching tree hashes. Preserves attribution through simple rebases where file content doesn't change.
+- **`anchor blame` command** — new command that displays per-line AI attribution for any file at any commit. Shows colorized output with line numbers, author labels (ai/human), and agent names. Supports `--json` and `--agent` output modes. File path input is normalized (handles `./`, absolute paths) for reliable matching.
+- **Post-rewrite anchor re-keying** — when `git rebase` or `git cherry-pick` rewrites commit history, anchor now automatically copies all anchor data (metadata, session links, transcripts, timeline) from old SHAs to new SHAs by matching tree hashes. Preserves attribution through simple rebases where file content doesn't change.
 - **Modular skill file** — `SKILL.md` restructured into a concise quick-reference with detailed reference docs split into `references/COMMANDS.md`, `references/API_SURFACE.md`, `references/JSON_SCHEMA.md`, and `references/TRUST.md`. Reduces token cost for agents that only need the command table.
 
 ### Fixed
@@ -77,14 +80,14 @@ output modes, and a flagship `anchors` experience.
 - **Developer card: AI streak over-counted past idle gaps** — `compute_ai_streak` no longer counts disconnected old AI days that appear after a tail of idle days. Idle days at the end correctly break the streak.
 - **Developer card: SVG stat text misaligned with Unicode** — stat label/value width calculation now uses per-character Unicode width instead of byte length, fixing layout for CJK characters and emoji.
 - **Developer card: earliest session date in wrong timezone** — `earliest_session` now formats dates in the user's local timezone instead of UTC.
-- **Developer card: `--json` included SVG unconditionally** — `oobo card --json` no longer embeds the full SVG string unless writing to a file, reducing payload size for programmatic consumers.
-- **Multi-session snapshot collision silent** — when multiple AI sessions provide file snapshots for the same file, oobo now logs a warning to stderr instead of silently using the last writer's data.
+- **Developer card: `--json` included SVG unconditionally** — `anchor card --json` no longer embeds the full SVG string unless writing to a file, reducing payload size for programmatic consumers.
+- **Multi-session snapshot collision silent** — when multiple AI sessions provide file snapshots for the same file, anchor now logs a warning to stderr instead of silently using the last writer's data.
 
 ## [0.1.13] - 2026-03-25
 
 ### Fixed
 
-- **Session stats never refreshed for active sessions** — once a session was indexed, its token counts, duration, and file stats were never recomputed even if the user kept chatting. All code paths (`oobo sessions`, `oobo index`, `oobo scan`) now detect stale stats by comparing `updated_at` against `computed_at` and re-index automatically.
+- **Session stats never refreshed for active sessions** — once a session was indexed, its token counts, duration, and file stats were never recomputed even if the user kept chatting. All code paths (`anchor sessions`, `anchor index`, `anchor scan`) now detect stale stats by comparing `updated_at` against `computed_at` and re-index automatically.
 - **TUI and inline indexers only processed sessions with no stats** — sessions with outdated stats were silently skipped. Both the inline indexer (agent/JSON mode, capped at 20) and the TUI background indexer (capped at 100) now also re-index stale sessions.
 - **Stale stats reload discarded fresh data** — after re-indexing, `stats_map.entry().or_insert()` would keep the old entry; changed to `insert()` so refreshed stats actually replace stale ones.
 
@@ -98,11 +101,11 @@ output modes, and a flagship `anchors` experience.
 
 ### Fixed
 
-- **Privacy: absolute path leakage in public metadata** — `bash_commands` on the orphan branch and remote payload contained raw absolute paths (e.g. `/Users/teddy/dev/projects/...`), leaking usernames and directory structures on public repos. All publicly-visible fields now run through `sanitize_for_public()` which strips project root paths, replaces home directory with `~/`, and redacts secrets via gitleaks.
+- **Privacy: absolute path leakage in public metadata** — `bash_commands` on the orphan branch and remote payload contained raw absolute paths (e.g. `/Users/<user>/dev/projects/...`), leaking usernames and directory structures on public repos. All publicly-visible fields now run through `sanitize_for_public()` which strips project root paths, replaces home directory with `~/`, and redacts secrets via gitleaks.
 - **`files_touched` absolute path leakage** — `file_snapshots` keys from subagent `modified_files` could carry absolute paths into `SessionLink.files_touched`. Now sanitized with `sanitize_path()` before serialization.
 - **`file_interactions` absolute path leakage** — multi-agent file interaction paths are now sanitized before writing to the orphan branch or remote payload.
 - **Subagent `modified_files` not relativized** — `subagent-stop` hook events pushed file paths directly into `snapshot_session_files` without `make_relative()`, unlike `after-tool-use` which already did. Now consistent.
-- **Shared session path leakage** — `oobo share` now uses `sanitize_for_public()` (redact + strip paths) instead of just `redact()` on message text, preventing absolute paths from appearing in uploaded shared sessions.
+- **Shared session path leakage** — `anchor share` now uses `sanitize_for_public()` (redact + strip paths) instead of just `redact()` on message text, preventing absolute paths from appearing in uploaded shared sessions.
 - **Token estimation missing on anchors** — `SessionLink` objects sent to the backend had `input_tokens: null` / `output_tokens: null` whenever native token counts weren't available (common for Cursor sessions). Anchors now include tiktoken-estimated token counts as a fallback, marked `is_estimated: true`. Estimates use the correct BPE encoding per model family (cl100k for Claude, o200k for GPT-4o/o1/o3).
 - **Token estimation undercounting by 20–60%** — `count_input_tokens` only counted `user` role messages, missing `system` prompts, `tool` results, and `function` outputs. All input-side roles are now counted.
 - **Inconsistent native token predicate** — `compute_session_stats` treated `Some(0)` as native data while the interceptor treated it as missing. Both paths now use `> 0` to decide whether native tokens are present, falling through to tiktoken when the tool reported zero.
@@ -117,13 +120,13 @@ output modes, and a flagship `anchors` experience.
 
 ### Added
 
-- **Compact `--agent` output mode** — `--agent` now produces compact, pipe-delimited text instead of JSON. Lists print a schema header (`# field | field | ...`) then one record per line. Single-object commands print `key: value` pairs. Designed for minimal token cost when agents read oobo output.
+- **Compact `--agent` output mode** — `--agent` now produces compact, pipe-delimited text instead of JSON. Lists print a schema header (`# field | field | ...`) then one record per line. Single-object commands print `key: value` pairs. Designed for minimal token cost when agents read anchor output.
 - **`--json` flag** — new global flag for full structured JSON output, replacing the previous `--agent` JSON behavior. Use `--json` for scripts or when the full object graph (messages, file attribution) is needed.
-- **Multi-tool skill discovery** — `oobo setup` and `oobo update` now install the `SKILL.md` symlink in `~/.agents/skills/oobo/`, `~/.claude/skills/oobo/`, `~/.codex/skills/oobo/`, `~/.cursor/skills/oobo/`, and `~/.gemini/skills/oobo/`, ensuring all major AI coding tools already installed on the system discover the skill automatically.
-- **Post-update migrations** — `oobo update` now runs post-update tasks automatically after installing a new version: refreshes the skill file, applies pending DB migrations, and re-installs agent hooks.
+- **Multi-tool skill discovery** — `anchor setup` and `anchor update` now install the `SKILL.md` symlink in `~/.agents/skills/oobo/`, `~/.claude/skills/oobo/`, `~/.codex/skills/oobo/`, `~/.cursor/skills/oobo/`, and `~/.gemini/skills/oobo/`, ensuring all major AI coding tools already installed on the system discover the skill automatically.
+- **Post-update migrations** — `anchor update` now runs post-update tasks automatically after installing a new version: refreshes the skill file, applies pending DB migrations, and re-installs agent hooks.
 - **Subagent session hierarchy tracking** — parent-child relationships between agent sessions and their spawned subagents are now detected and displayed. Cursor (`subagentInfo`), Claude Code (`subagents/agent-*.jsonl`), Gemini CLI (`parentSessionId`), and OpenCode (`parent_id`) are all supported. Subagent sessions appear nested under their parent in the TUI with `└─ [type]` prefix, and `parent_session_id`/`subagent_type` fields are included in JSON output. Subagent transcripts are written to the orphan branch under `subagents/` within the parent session directory.
-- **Multi-agent file interaction tracking** — when multiple AI sessions touch the same files in a project, oobo now detects and records these interactions. `read_files` are tracked via `after-tool-use` hooks for Read, Grep, Search, Glob, and similar tools. At commit time, `file_interactions` (with per-session Writer/Reader/Both roles) and `peer_session_ids` are computed and stored on anchors. The TUI shows interaction hints inline, and `peer_session_ids` appears in all `--json` output paths (list, show, search). A `timeline.json` file is generated on the orphan branch for commits with file interactions.
-- **`detect_interactions()` shared algorithm** — centralized file interaction detection in `core/anchor.rs`, used by the interceptor (commit time), `oobo sessions` CLI (display time), and the TUI, eliminating DRY violations
+- **Multi-agent file interaction tracking** — when multiple AI sessions touch the same files in a project, anchor now detects and records these interactions. `read_files` are tracked via `after-tool-use` hooks for Read, Grep, Search, Glob, and similar tools. At commit time, `file_interactions` (with per-session Writer/Reader/Both roles) and `peer_session_ids` are computed and stored on anchors. The TUI shows interaction hints inline, and `peer_session_ids` appears in all `--json` output paths (list, show, search). A `timeline.json` file is generated on the orphan branch for commits with file interactions.
+- **`detect_interactions()` shared algorithm** — centralized file interaction detection in `core/anchor.rs`, used by the interceptor (commit time), `anchor sessions` CLI (display time), and the TUI, eliminating DRY violations
 - **`get_file_sets()`** — single-read function that returns both `edited_files` and `read_files` from session state, halving I/O for interaction detection
 - **DB migration v8** — added `parent_session_id` and `subagent_type` columns to the `anchor_sessions` table
 
@@ -156,9 +159,9 @@ output modes, and a flagship `anchors` experience.
 
 ### Added
 
-- **Proactive session indexing** — session stats (tokens, model, duration) are computed automatically at session-end and commit time, eliminating the need to run `oobo scan` before `oobo sessions` shows data
-- **Background indexing in TUI** — `oobo sessions` shows the table immediately with `...` placeholders for unindexed sessions, filling them in the background as stats are computed
-- **Inline indexing for JSON/search** — `oobo sessions --json` and `oobo sessions search` index up to 20 unindexed sessions inline so output is complete
+- **Proactive session indexing** — session stats (tokens, model, duration) are computed automatically at session-end and commit time, eliminating the need to run `anchor scan` before `anchor sessions` shows data
+- **Background indexing in TUI** — `anchor sessions` shows the table immediately with `...` placeholders for unindexed sessions, filling them in the background as stats are computed
+- **Inline indexing for JSON/search** — `anchor sessions --json` and `anchor sessions search` index up to 20 unindexed sessions inline so output is complete
 - **Model enrichment from hook state** — session model info recorded by hooks is now used during scanning and indexing, fixing the "model missing" issue for Cursor sessions
 - **`normalize_source()` helper** — centralized agent-to-source mapping in `core/tool.rs`, replacing duplicated inline conditionals
 - **`read_session()` / `read_session_model()`** — new functions in `hooks/state.rs` for reading session state files
@@ -174,7 +177,7 @@ output modes, and a flagship `anchors` experience.
 
 ### Changed
 
-- **Proactive indexing errors are now logged** — `eprintln!("oobo: warning: ...")` at session-end, commit-time, and inline indexing call sites (TUI background thread stays silent to avoid corrupting the terminal)
+- **Proactive indexing errors are now logged** — `eprintln!("anchor: warning: ...")` at session-end, commit-time, and inline indexing call sites (TUI background thread stays silent to avoid corrupting the terminal)
 
 ## [0.1.8] - 2026-03-17
 
@@ -218,14 +221,14 @@ output modes, and a flagship `anchors` experience.
 ### Changed
 
 - **Remote API endpoints** — added `/anchors/share` for session sharing (auth optional, anonymous shares supported). Renamed from `/api/v1/shares`.
-- **Share output** — `oobo share --out` now produces markdown by default; use `.json` extension for JSON output
+- **Share output** — `anchor share --out` now produces markdown by default; use `.json` extension for JSON output
 - **Default remote** — `api.oobo.ai` is now the documented default server (free accounts)
-- **Self-hosting docs** — only `/anchors/ingest` is required; verify, health, and share are optional
+- **Self-hosting docs** — only `/anchors/ingest` is required for commit sync; `/anchors/search` and `/anchors/health` are optional capabilities
 
 ### Added
 
 - Markdown renderer for shared sessions (source, model, stats header + conversation)
-- Extension-based output format detection in `oobo share --out` (`.json` → JSON, anything else → markdown)
+- Extension-based output format detection in `anchor share --out` (`.json` → JSON, anything else → markdown)
 - Comprehensive CHANGELOG entries for all releases v0.1.0–v0.1.5
 - Self-hosting section in README with endpoint table and backend implementation guide
 - Updated mintlify documentation
@@ -290,14 +293,14 @@ output modes, and a flagship `anchors` experience.
 
 ### Fixed
 
-- **Non-TTY setup panic** — `oobo setup` in agent/CI environments no longer panics on `ratatui::init`; uses `try_init` with default config fallback
+- **Non-TTY setup panic** — `anchor setup` in agent/CI environments no longer panics on `ratatui::init`; uses `try_init` with default config fallback
 - **Anchor token persistence** — `insert_anchor_session` now persists `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `duration_secs`, `tool_calls`, and `is_subagent`
 - **Push sync 422** — skip `send_event` on push (no anchor to send), preventing 422 from ingestion API
-- `oobo inspect --fix` returns `Fail` (not `Warn`) for missing agent hooks so the fix function actually runs
+- `anchor inspect --fix` returns `Fail` (not `Warn`) for missing agent hooks so the fix function actually runs
 
 ### Changed
 
-- Install script rewritten with tiered PATH strategy — symlink to `/usr/local/bin` (root) or `~/.local/bin` (user), auto-detect shell rc, auto-run `oobo setup`
+- Install script rewritten with tiered PATH strategy — symlink to `/usr/local/bin` (root) or `~/.local/bin` (user), auto-detect shell rc, auto-run `anchor setup`
 - README expanded with all missing command docs (sessions export, sync, transparency, auth, ignore/unignore, projects, anchors, share, card, index)
 
 ## [0.1.2] - 2026-03-12
@@ -318,13 +321,13 @@ output modes, and a flagship `anchors` experience.
 
 - **Double sync** — `OOBO_INTERCEPTED` env var set before `run_git` so post-commit hook skips redundant `on_write_op`
 - **Offline resilience** — 2s connect timeout on sync HTTP client (was blocking full 10s on offline commits)
-- **Live session stats** — extract token stats at commit time from tool data files (Cursor `state.vscdb`, Claude transcripts, Gemini session JSON) instead of requiring prior `oobo index`
+- **Live session stats** — extract token stats at commit time from tool data files (Cursor `state.vscdb`, Claude transcripts, Gemini session JSON) instead of requiring prior `anchor index`
 
 ## [0.1.0] - 2026-03-09
 
 ### Added
 
-- **Transparent git decorator** — use `oobo` as a drop-in replacement for `git`, or install as a shell alias
+- **Transparent git decorator** — use `anchor` as a drop-in replacement for `git`, or install as a shell alias
 - **AI session discovery** across 10 tools: Cursor, Claude Code, Gemini CLI, OpenCode, Aider, GitHub Copilot, Windsurf, Codex, Zed, and Trae
 - **Anchor system** — automatically links AI sessions to git commits with code attribution data
 - **Orphan branch storage** (`oobo/anchors/v1`) — metadata travels with the repository, no external dependencies
@@ -332,8 +335,8 @@ output modes, and a flagship `anchors` experience.
 - **Token counting** via tiktoken with character-estimation fallback
 - **AI code attribution** — detects which lines were written with AI assistance
 - **Secret redaction** using gitleaks patterns and regex fallback before sharing
-- **Interactive TUI** for dashboard, sessions, projects, and stats (`oobo dash`, `oobo sessions`, `oobo projects`, `oobo stats`)
-- **Session sharing** (`oobo share`) with redaction and optional upload
+- **Interactive TUI** for dashboard, sessions, projects, and stats (`anchor dash`, `anchor sessions`, `anchor projects`, `anchor stats`)
+- **Session sharing** (`anchor share`) with redaction and optional upload
 - **API usage tracking** for Anthropic and OpenAI accounts
 - **Agent lifecycle hooks** for Cursor, Claude Code, Gemini CLI, and OpenCode
 - **Per-project git hooks** (post-commit, pre-push) for automatic anchor creation
@@ -344,19 +347,19 @@ output modes, and a flagship `anchors` experience.
 - **CI/CD pipeline**: multi-platform testing (Ubuntu, macOS, Debian, Alpine) and 6-target release builds
 - **Dual license**: Apache 2.0 and MIT
 
-[0.1.15]: https://github.com/ooboai/oobo/compare/v0.1.14...v0.1.15
-[0.1.14]: https://github.com/ooboai/oobo/compare/v0.1.13...v0.1.14
-[0.1.13]: https://github.com/ooboai/oobo/compare/v0.1.12...v0.1.13
-[0.1.12]: https://github.com/ooboai/oobo/compare/v0.1.11...v0.1.12
-[0.1.11]: https://github.com/ooboai/oobo/compare/v0.1.10...v0.1.11
-[0.1.10]: https://github.com/ooboai/oobo/compare/v0.1.9...v0.1.10
-[0.1.9]: https://github.com/ooboai/oobo/compare/v0.1.8...v0.1.9
-[0.1.8]: https://github.com/ooboai/oobo/compare/v0.1.7...v0.1.8
-[0.1.7]: https://github.com/ooboai/oobo/compare/v0.1.6...v0.1.7
-[0.1.6]: https://github.com/ooboai/oobo/compare/v0.1.5...v0.1.6
-[0.1.5]: https://github.com/ooboai/oobo/compare/v0.1.4...v0.1.5
-[0.1.4]: https://github.com/ooboai/oobo/compare/v0.1.3...v0.1.4
-[0.1.3]: https://github.com/ooboai/oobo/compare/v0.1.2...v0.1.3
-[0.1.2]: https://github.com/ooboai/oobo/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/ooboai/oobo/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/ooboai/oobo/releases/tag/v0.1.0
+[0.1.15]: https://github.com/ooboai/anchor/compare/v0.1.14...v0.1.15
+[0.1.14]: https://github.com/ooboai/anchor/compare/v0.1.13...v0.1.14
+[0.1.13]: https://github.com/ooboai/anchor/compare/v0.1.12...v0.1.13
+[0.1.12]: https://github.com/ooboai/anchor/compare/v0.1.11...v0.1.12
+[0.1.11]: https://github.com/ooboai/anchor/compare/v0.1.10...v0.1.11
+[0.1.10]: https://github.com/ooboai/anchor/compare/v0.1.9...v0.1.10
+[0.1.9]: https://github.com/ooboai/anchor/compare/v0.1.8...v0.1.9
+[0.1.8]: https://github.com/ooboai/anchor/compare/v0.1.7...v0.1.8
+[0.1.7]: https://github.com/ooboai/anchor/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/ooboai/anchor/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/ooboai/anchor/compare/v0.1.4...v0.1.5
+[0.1.4]: https://github.com/ooboai/anchor/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/ooboai/anchor/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/ooboai/anchor/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/ooboai/anchor/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/ooboai/anchor/releases/tag/v0.1.0

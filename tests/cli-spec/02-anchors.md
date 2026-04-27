@@ -1,6 +1,8 @@
-# `oobo anchors`
+# `anchor anchors`
 
-See the memory: a list of commits enriched with their AI sessions, token usage, and attribution. Alias: `oobo a`. This is the flagship view. `oobo anchors show <sha>` is the drill-down.
+See the memory: committed anchors plus local restorable working memory for the
+current repo. Alias: `anchor a`. This is the flagship view. `anchor anchors show
+<sha>` is the drill-down for committed anchors.
 
 Positional arg is a subcommand (`show`) or nothing.
 
@@ -16,18 +18,23 @@ Common flags:
 ## List — TTY / pretty mode
 
 ### Invocation
-`oobo anchors`
+`anchor anchors`
 
 **Context:** inside an enabled repo with anchors.
 
-**Behavior:** Pretty table with colors. Columns: relative time, subject, tools, tokens, session count. Most recent first. Pager on stdout if result count > terminal height.
+**Behavior:** Full-screen interactive memory timeline. Inside a repo, committed
+anchors and working memory are shown together. Anchors represent committed
+memory; working memory rows are uncommitted restorable points. Outside a repo, only
+committed anchors are listed across tracked projects.
 
 **Example output (shape):**
 ```
-  2m    fix auth middleware             claude · 12k · 1 session
-  18m   add rate limiter                gemini · 31k · 2 sessions
-  1h    wip                             (local only)
-  3h    extract payment adapter         cursor · 28k · 1 session
+anchor / my-project  memory
+branch main  tree clean  anchors origin
+3 committed  1 working   window all   tracking on
+
+› ╰ · 2m   adjust auth prompt handling              2f  1t #4
+  │ ● 18m  add rate limiter                         31k  2s
 ```
 
 **Exit code:** `0`.
@@ -37,25 +44,26 @@ Common flags:
 ## List — agent mode
 
 ### Invocation
-`oobo anchors --agent`
+`anchor anchors --agent`
 
-**Behavior:** Fixed-column, one line per anchor. Columns, in order:
+**Behavior:** Fixed-column, one line per memory item. Inside a repo this can
+include both `anchor` and `shadow` rows. `shadow` is the stable machine label
+for local working memory. Columns, in order:
 
-1. Short SHA (7 chars).
-2. Relative time (`2m`, `18m`, `1h`, `3h`, `2d`, `3w`, `4mo`, `1y`).
-3. Commit subject (truncated to 40 chars, no ellipsis, padded with spaces).
-4. Primary tool name (or `-` if none).
-5. Total tokens in human-readable form (`12k`, `1.2M`).
-6. Session count suffix (`1s`, `3s`, or `-` if zero).
+1. Type (`anchor` or `shadow`).
+2. Short id (commit SHA or shadow anchor id).
+3. Relative time (`2m`, `18m`, `1h`, `3h`, `2d`, `3w`, `4mo`, `1y`).
+4. Subject/prompt (truncated to 40 chars, no ellipsis, padded with spaces).
+5. Primary tool name (or `-` if none).
+6. Total tokens for committed anchors, or `-` for working memory.
+7. Session count suffix for committed anchors (`1s`, `3s`) or file/tool summary for working memory (`1f/2t`).
 
 Columns separated by **one or more spaces**. Never tab-separated. No header, no totals.
 
 **Example output:**
 ```
-a1b2c3d 2m   fix auth middleware                      claude 12k  1s
-d4e5f6g 18m  add rate limiter                         gemini 31k  2s
-7a8b9c0 1h   wip                                      -      -    -
-e1f2d3c 3h   extract payment adapter                  cursor 28k  1s
+shadow tfa4069dfa 2m   adjust auth prompt handling              composer -    1f/1t
+anchor a1b2c3d    18m  add rate limiter                         gemini   31k  2s
 ```
 
 **Exit code:** `0`.
@@ -65,12 +73,18 @@ e1f2d3c 3h   extract payment adapter                  cursor 28k  1s
 ## List — JSON mode
 
 ### Invocation
-`oobo anchors --json`
+`anchor anchors --json`
 
-**Behavior:** Emit a flat JSON array of anchors (no envelope). Per-anchor shape:
+**Behavior:** Emit a flat JSON array (no envelope). Each item has `"type":
+"anchor"` or `"shadow_anchor"`. Anchor items include committed-anchor fields;
+shadow anchor items include local snapshot/session metadata and are present only
+inside a repo.
+Per-anchor shape:
 
 ```json
 {
+  "type": "anchor",
+  "id": "a1b2c3d4e5f6...",
   "sha": "a1b2c3d4e5f6...",
   "parents": ["..."],
   "timestamp": "{timestamp}",
@@ -90,7 +104,28 @@ e1f2d3c 3h   extract payment adapter                  cursor 28k  1s
       "tokens": { /* same shape */ }
     }
   ],
-  "attribution": { "ai_lines": 42, "human_lines": 18, "ai_pct": 70 }
+  "attribution": { "ai_lines": 42, "human_lines": 18, "ai_pct": 70 },
+}
+```
+
+Per-working-memory shape:
+
+```json
+{
+  "type": "shadow_anchor",
+  "id": "tfa4069dfa3f775d4",
+  "shadow_anchor_id": "tfa4069dfa3f775d4",
+  "turn_id": "tfa4069dfa3f775d4",
+  "session_id": "{uuid}",
+  "turn_index": 1,
+  "parent_anchor": "a1b2c3d4e5f6...",
+  "timestamp": "{timestamp}",
+  "subject": "adjust auth prompt handling",
+  "tools": ["composer"],
+  "tokens": { "total": 0 },
+  "sessions_count": 1,
+  "files": 1,
+  "tool_calls": 1
 }
 ```
 
@@ -101,7 +136,7 @@ e1f2d3c 3h   extract payment adapter                  cursor 28k  1s
 ## Filters
 
 ### `--limit N`
-`oobo anchors --agent --limit 3`
+`anchor anchors --agent --limit 3`
 
 **Behavior:** Emit at most N rows. `N = 0` → empty output, exit `0` (not an error).
 
@@ -113,32 +148,32 @@ d4e5f6g 18m  add rate limiter                         gemini 31k  2s
 ```
 
 ### `--since <duration>`
-`oobo anchors --agent --since 24h`
+`anchor anchors --agent --since 24h`
 
 **Behavior:** Only anchors with `timestamp >= now() - 24h`. Accepts `s`, `m`, `h`, `d`, `w`, `mo`, `y` suffixes. Invalid duration → exit `2` with error on stderr.
 
 ### `--since <ISO-8601>`
-`oobo anchors --agent --since 2026-04-01T00:00:00Z`
+`anchor anchors --agent --since 2026-04-01T00:00:00Z`
 
 **Behavior:** Parse with chrono. Invalid ISO string → exit `2`.
 
 ### `--tool <name>`
-`oobo anchors --agent --tool claude`
+`anchor anchors --agent --tool claude`
 
 **Behavior:** Only anchors whose `tools` array contains the given tool. Case-insensitive exact match.
 
 ### Combined filters
-`oobo anchors --agent --tool claude --since 7d --limit 10`
+`anchor anchors --agent --tool claude --since 7d --limit 10`
 
 **Behavior:** AND semantics. Filters compose.
 
 ### `--project` outside a repo
-`oobo anchors --agent --project oobo-cli`
+`anchor anchors --agent --project oobo-cli`
 
 **Behavior:** From anywhere (not inside a repo), show anchors for the named project. Resolved by project name first, then by path. Ambiguous name → exit `2` with `error: multiple projects match 'oobo-cli'` and a listing.
 
 ### `--project` inside a repo
-`oobo anchors --project other-project`
+`anchor anchors --project other-project`
 
 **Behavior:** ERROR. Inside a repo the project is implied; `--project` is rejected.
 
@@ -153,7 +188,7 @@ error: --project is not allowed inside a repo (current project is '$PROJECT_NAME
 ## Drill-down — `anchors show <sha>`
 
 ### Invocation
-`oobo anchors show a1b2c3d`
+`anchor anchors show a1b2c3d`
 
 **Behavior:** Show ONE anchor in depth. Pretty mode prints a paged document with sections: commit metadata, the commit diff (abbreviated by default), linked sessions (one collapsible block each), tokens + cost breakdown, per-line attribution.
 
@@ -184,7 +219,7 @@ DIFF
 
 **Exit code:** `0` on clean quit.
 
-### `oobo anchors show <sha> --agent`
+### `anchor anchors show <sha> --agent`
 
 **Behavior:** Flat, minimal. One section per line with `key: value` shape. Transcript is NOT inlined in agent mode — the session ID is emitted so the agent can fetch it separately if needed.
 
@@ -204,7 +239,7 @@ sessions:
 
 **Exit code:** `0`.
 
-### `oobo anchors show <sha> --json`
+### `anchor anchors show <sha> --json`
 
 **Behavior:** Full anchor object (same shape as list entries but with full `body`, full transcript per session, and any extra fields like `diff_summary`, `files_changed`, `hunks`).
 
@@ -215,7 +250,7 @@ sessions:
 ## Error cases
 
 ### Unknown SHA
-`oobo anchors show nothere`
+`anchor anchors show nothere`
 
 **Example output (stderr):**
 ```
@@ -224,7 +259,7 @@ error: no anchor found for 'nothere'
 **Exit code:** `1`.
 
 ### Ambiguous SHA prefix
-`oobo anchors show a1`
+`anchor anchors show a1`
 
 **Example output (stderr):**
 ```
@@ -235,7 +270,7 @@ error: '' matches multiple anchors:
 **Exit code:** `1`.
 
 ### Outside a repo without `--project`
-`oobo anchors` (from `$HOME`)
+`anchor anchors` (from `$HOME`)
 
 **Behavior:** Aggregate across all tracked projects. Each row carries a leading `project` column (agent/pretty) or a `"project"` string field (json). The envelope keys are NOT added in this mode — output stays a flat array in `--json`.
 
@@ -246,11 +281,11 @@ my-app     d4e5f6g 18m  add rate limiter           gemini 31k  2s
 ```
 
 ### Disabled project
-`oobo anchors` inside a repo where `oobo = off`.
+`anchor anchors` inside a repo where `.oobo/config` has `[project].enabled = false`.
 
 **Example output (pretty):**
 ```
-oobo is disabled for this project. run: oobo enable
+anchor is disabled for this project. run: anchor enable
 ```
 **Exit code:** `0`.
 
@@ -258,7 +293,7 @@ oobo is disabled for this project. run: oobo enable
 
 ## Invariants
 
-- Bare `oobo --agent` inside a repo ≡ `oobo anchors --agent --limit 50` byte-for-byte.
+- Bare `anchor --agent` inside a repo ≡ `anchor anchors --agent --limit 50` byte-for-byte.
 - The `sha` column in `--agent` output is always 7 chars.
 - The `--agent` output never contains ANSI escape codes.
 - The `--json` output is always valid per `jq '.'`.

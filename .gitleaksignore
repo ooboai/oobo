@@ -1,0 +1,4 @@
+# Historical false positives from test fixtures. The current worktree is clean;
+# these fingerprints avoid rewriting published Git history for fake literals.
+0216189627ce7cc73ac30cb523d4d0a587a7a3e0:src/commands/settings.rs:generic-api-key:702
+c06fa5448ef9c16f36bfb8de003965184f572587:src/redact/mod.rs:jwt:284

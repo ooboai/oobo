@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::process::{Command, Stdio};
 
@@ -22,7 +22,7 @@ pub(super) fn write_anchor(
     project_root: &str,
     anchor: &Anchor,
     session_links: &[SessionLink],
-    transcripts: &[super::interceptor::CollectedTranscript],
+    transcripts: &[super::transcripts::CollectedTranscript],
 ) -> Result<(), String> {
     ensure_branch(project_root)?;
 
@@ -206,62 +206,6 @@ pub fn read_session_links(project_root: &str, commit_hash: &str) -> Vec<SessionL
     links
 }
 
-/// Hydrate the local SQLite database from anchors on the orphan branch.
-/// Skips anchors that already exist in the DB. Returns the number of
-/// new anchors imported.
-pub fn hydrate_from_branch(project_root: &str, db: &crate::db::Db) -> Result<usize, String> {
-    if !branch_exists(project_root) {
-        return Ok(0);
-    }
-
-    let hashes = list_anchor_hashes(project_root);
-    let mut imported = 0;
-
-    for hash in &hashes {
-        if db.anchor_exists(hash)? {
-            continue;
-        }
-
-        let anchor = match read_anchor(project_root, hash) {
-            Some(a) => a,
-            None => continue,
-        };
-
-        let raw_json =
-            serde_json::to_string(&anchor).map_err(|e| format!("serialize anchor: {e}"))?;
-        db.insert_anchor(&anchor.commit_hash, &raw_json)?;
-
-        let session_links = read_session_links(project_root, hash);
-        for link in &session_links {
-            let lt = match link.link_type {
-                crate::core::anchor::LinkType::Explicit => "explicit",
-                crate::core::anchor::LinkType::Inferred => "inferred",
-            };
-            db.insert_anchor_session(
-                &anchor.commit_hash,
-                &link.session_id,
-                &link.agent,
-                link.model.as_deref(),
-                lt,
-                link.files_touched.as_deref(),
-                link.input_tokens,
-                link.output_tokens,
-                link.cache_read_tokens,
-                link.cache_creation_tokens,
-                link.duration_secs,
-                link.tool_calls,
-                link.is_subagent,
-                link.parent_session_id.as_deref(),
-                link.subagent_type.as_deref(),
-            )?;
-        }
-
-        imported += 1;
-    }
-
-    Ok(imported)
-}
-
 /// Re-key anchors after a history rewrite (rebase, cherry-pick).
 ///
 /// `pre_rewrite_commits` is a list of (old_commit_hash, tree_hash) captured
@@ -340,13 +284,6 @@ pub fn rekey_anchors(
                 }
             }
 
-            if let Ok(ref db) = crate::db::Db::open() {
-                if let Some(mut anchor) = read_anchor(project_root, old_hash) {
-                    anchor.commit_hash = new_hash.to_string();
-                    let raw = serde_json::to_string(&anchor).unwrap_or_default();
-                    let _ = db.insert_anchor(new_hash, &raw);
-                }
-            }
         }
     }
 
@@ -355,6 +292,39 @@ pub fn rekey_anchors(
     }
 
     Ok(())
+}
+
+pub fn parse_rewrite_pairs(payload: &str) -> Vec<(String, String)> {
+    payload
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let old_hash = parts.next()?;
+            let new_hash = parts.next()?;
+            Some((old_hash.to_string(), new_hash.to_string()))
+        })
+        .collect()
+}
+
+pub fn rekey_anchors_from_rewrite_pairs(
+    project_root: &str,
+    pairs: &[(String, String)],
+) -> Result<(), String> {
+    if pairs.is_empty() {
+        return Ok(());
+    }
+
+    let mut pre_rewrite_commits = Vec::new();
+    for (old_hash, _) in pairs {
+        let tree =
+            git_in(project_root, &["show", "-s", "--format=%T", old_hash]).unwrap_or_default();
+        let tree = tree.trim();
+        if !tree.is_empty() {
+            pre_rewrite_commits.push((old_hash.clone(), tree.to_string()));
+        }
+    }
+
+    rekey_anchors(project_root, &pre_rewrite_commits)
 }
 
 fn current_branch_commits(project_root: &str) -> Vec<(String, String)> {
@@ -377,8 +347,166 @@ pub fn branch_exists(project_root: &str) -> bool {
     git_in(project_root, &["rev-parse", "--verify", BRANCH]).is_ok()
 }
 
+/// Get the current tip commit hash of the orphan branch.
+pub fn branch_tip(project_root: &str) -> Option<String> {
+    git_in(project_root, &["rev-parse", BRANCH]).ok()
+}
+
+/// Bulk-read ALL anchors and their session links from the orphan branch
+/// using a single `git cat-file --batch` process for maximum speed.
+pub fn read_all_anchors(project_root: &str) -> (Vec<Anchor>, HashMap<String, Vec<SessionLink>>) {
+    let mut anchors = Vec::new();
+    let mut links_map: HashMap<String, Vec<SessionLink>> = HashMap::new();
+
+    if !branch_exists(project_root) {
+        return (anchors, links_map);
+    }
+
+    let tree = match git_in(project_root, &["ls-tree", "-r", "--name-only", BRANCH]) {
+        Ok(t) => t,
+        Err(_) => return (anchors, links_map),
+    };
+
+    let mut anchor_paths: Vec<(String, String)> = Vec::new();
+    let mut session_paths: Vec<(String, String)> = Vec::new();
+
+    for line in tree.lines() {
+        let parts: Vec<&str> = line.split('/').collect();
+        if parts.len() == 3 && parts[2] == "metadata.json" {
+            let hash = format!("{}{}", parts[0], parts[1]);
+            anchor_paths.push((hash, format!("{}:{}", BRANCH, line)));
+        } else if parts.len() == 4 && parts[3] == "metadata.json" && parts[2].parse::<u32>().is_ok()
+        {
+            let hash = format!("{}{}", parts[0], parts[1]);
+            session_paths.push((hash, format!("{}:{}", BRANCH, line)));
+        }
+    }
+
+    let all_refs: Vec<&str> = anchor_paths
+        .iter()
+        .map(|(_, r)| r.as_str())
+        .chain(session_paths.iter().map(|(_, r)| r.as_str()))
+        .collect();
+
+    let contents = batch_cat_file(project_root, &all_refs);
+
+    for (i, (hash, _)) in anchor_paths.iter().enumerate() {
+        if let Some(content) = contents.get(i).and_then(|c| c.as_ref()) {
+            if let Ok(anchor) = serde_json::from_str::<Anchor>(content) {
+                anchors.push(anchor);
+                links_map.entry(hash.clone()).or_default();
+            }
+        }
+    }
+
+    let offset = anchor_paths.len();
+    for (i, (hash, _)) in session_paths.iter().enumerate() {
+        if let Some(content) = contents.get(offset + i).and_then(|c| c.as_ref()) {
+            if let Ok(link) = serde_json::from_str::<SessionLink>(content) {
+                links_map.entry(hash.clone()).or_default().push(link);
+            }
+        }
+    }
+
+    (anchors, links_map)
+}
+
+/// Read multiple git objects in a single `git cat-file --batch` process.
+/// Returns a Vec parallel to `refs` — `Some(content)` for successful reads,
+/// `None` for missing objects.
+///
+/// Stdin writes and stdout reads run on separate threads to avoid pipe
+/// buffer deadlocks when the number of refs is large.
+fn batch_cat_file(project_root: &str, refs: &[&str]) -> Vec<Option<String>> {
+    use std::io::{BufRead, BufReader, Write};
+
+    if refs.is_empty() {
+        return Vec::new();
+    }
+
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+    let mut child = match Command::new(git)
+        .args(["cat-file", "--batch"])
+        .current_dir(project_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return vec![None; refs.len()],
+    };
+
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+
+    let refs_owned: Vec<String> = refs.iter().map(|r| r.to_string()).collect();
+    let n = refs.len();
+
+    let writer = std::thread::spawn(move || {
+        for r in &refs_owned {
+            if writeln!(stdin, "{r}").is_err() {
+                break;
+            }
+        }
+        drop(stdin);
+    });
+
+    let mut results = Vec::with_capacity(n);
+    let mut reader = BufReader::new(stdout);
+    let mut header = String::new();
+
+    for _ in 0..n {
+        header.clear();
+        if reader.read_line(&mut header).is_err() {
+            results.push(None);
+            continue;
+        }
+
+        let trimmed = header.trim();
+        if trimmed.ends_with("missing") || trimmed.is_empty() {
+            results.push(None);
+            continue;
+        }
+
+        let size: usize = trimmed
+            .rsplit(' ')
+            .next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        let mut buf = vec![0u8; size + 1];
+        if std::io::Read::read_exact(&mut reader, &mut buf).is_err() {
+            results.push(None);
+            continue;
+        }
+
+        let content = String::from_utf8_lossy(&buf[..size]).to_string();
+        results.push(Some(content));
+    }
+
+    let _ = writer.join();
+    let _ = child.wait();
+
+    while results.len() < n {
+        results.push(None);
+    }
+
+    results
+}
+
+fn anchor_remote(project_root: &str) -> String {
+    crate::project_config::anchor_remote(project_root).unwrap_or_else(|| "origin".to_string())
+}
+
 pub fn remote_branch_exists(project_root: &str) -> bool {
-    git_in(project_root, &["ls-remote", "--heads", "origin", BRANCH])
+    let remote = anchor_remote(project_root);
+    if validate_anchor_remote(project_root, &remote).is_err() {
+        return false;
+    }
+    git_in(project_root, &["ls-remote", "--heads", &remote, BRANCH])
         .map(|out| !out.trim().is_empty())
         .unwrap_or(false)
 }
@@ -387,13 +515,17 @@ pub fn remote_branch_exists(project_root: &str) -> bool {
 /// workflows and each attempt requires a network round-trip.
 const MAX_PUSH_ATTEMPTS: u32 = 5;
 
-/// Push the orphan branch to origin with retry on contention.
+/// Push the orphan branch to the configured anchor remote with retry on
+/// contention. Defaults to `origin`; `.oobo/config [anchors].remote` can point
+/// at another Git remote name or Git URL.
 pub fn push(project_root: &str) -> Result<(), String> {
+    let remote = anchor_remote(project_root);
+    validate_anchor_remote(project_root, &remote)?;
     retry_pending_pushes(project_root);
 
     let mut last_err = String::new();
     for attempt in 0..MAX_PUSH_ATTEMPTS {
-        match git_in(project_root, &["push", "--no-verify", "origin", BRANCH]) {
+        match git_in(project_root, &["push", "--no-verify", &remote, BRANCH]) {
             Ok(_) => {
                 clear_pending_push(project_root);
                 return Ok(());
@@ -401,7 +533,7 @@ pub fn push(project_root: &str) -> Result<(), String> {
             Err(e) if e.contains("non-fast-forward") || e.contains("rejected") => {
                 last_err = e;
                 if attempt < MAX_PUSH_ATTEMPTS - 1 {
-                    if let Err(re) = reconcile_with_remote(project_root) {
+                    if let Err(re) = reconcile_with_remote(project_root, &remote) {
                         last_err = format!("{last_err}; reconcile failed: {re}");
                     }
                     jitter_sleep(attempt);
@@ -417,12 +549,16 @@ pub fn push(project_root: &str) -> Result<(), String> {
 }
 
 pub fn retry_pending_pushes(project_root: &str) {
+    let remote = anchor_remote(project_root);
+    if validate_anchor_remote(project_root, &remote).is_err() {
+        return;
+    }
     let path = pending_push_path(project_root);
     if !path.exists() {
         return;
     }
-    let _ = reconcile_with_remote(project_root);
-    if git_in(project_root, &["push", "--no-verify", "origin", BRANCH]).is_ok() {
+    let _ = reconcile_with_remote(project_root, &remote);
+    if git_in(project_root, &["push", "--no-verify", &remote, BRANCH]).is_ok() {
         let _ = fs::remove_file(&path);
     }
 }
@@ -460,21 +596,24 @@ fn rand_jitter_ms(max: u64) -> u64 {
     nanos.wrapping_mul(pid.wrapping_add(7)) % max
 }
 
-/// Fetch the orphan branch from origin and reconcile diverged branches.
+/// Fetch the orphan branch from the configured anchor remote and reconcile
+/// diverged branches.
 /// Working tree and HEAD are never touched.
 pub fn fetch_and_reconcile(project_root: &str) -> Result<(), String> {
-    reconcile_with_remote(project_root).map_err(|e| format!("fetch/reconcile failed: {e}"))
+    let remote = anchor_remote(project_root);
+    validate_anchor_remote(project_root, &remote)?;
+    reconcile_with_remote(project_root, &remote).map_err(|e| format!("fetch/reconcile failed: {e}"))
 }
 
 const NULL_OID: &str = "0000000000000000000000000000000000000000";
 
 /// Fetch into a PID-namespaced temp ref to avoid FETCH_HEAD races and
 /// force-fetch data loss.
-fn reconcile_with_remote(project_root: &str) -> Result<(), String> {
+fn reconcile_with_remote(project_root: &str, remote: &str) -> Result<(), String> {
     let fetch_ref = format!("refs/oobo/fetch-tmp/{}", std::process::id());
     let refspec = format!("+{BRANCH}:{fetch_ref}");
 
-    let fetch_result = git_in(project_root, &["fetch", "origin", &refspec]);
+    let fetch_result = git_in(project_root, &["fetch", remote, &refspec]);
 
     let cleanup = |pr: &str| {
         let _ = git_in(pr, &["update-ref", "-d", &fetch_ref]);
@@ -496,6 +635,29 @@ fn reconcile_with_remote(project_root: &str) -> Result<(), String> {
     let result = reconcile_local_with(project_root, &remote_tip);
     cleanup(project_root);
     result
+}
+
+fn validate_anchor_remote(project_root: &str, remote: &str) -> Result<(), String> {
+    if !looks_like_remote_name(remote) {
+        return Ok(());
+    }
+    git_in(project_root, &["remote", "get-url", remote])
+        .map(|_| ())
+        .map_err(|_| {
+            format!(
+                "anchor remote '{remote}' is not configured. Run `git remote add {remote} <url>` \
+                 or set `[anchors].remote` to a full Git URL in .oobo/config."
+            )
+        })
+}
+
+fn looks_like_remote_name(remote: &str) -> bool {
+    !remote.is_empty()
+        && !remote.contains('/')
+        && !remote.contains('\\')
+        && !remote.contains(':')
+        && !remote.contains('@')
+        && !remote.contains("://")
 }
 
 fn reconcile_local_with(project_root: &str, remote_tip: &str) -> Result<(), String> {
@@ -563,7 +725,7 @@ fn replay_local_files(project_root: &str, local_tip: &str, remote_tip: &str) -> 
             match git_in(project_root, &["show", &format!("{local_tip}:{path}")]) {
                 Ok(content) => entries.push((path.to_string(), content)),
                 Err(e) => {
-                    eprintln!("oobo: warning: could not read {path} from local anchors: {e}");
+                    eprintln!("anchor: warning: could not read {path} from local anchors: {e}");
                     skipped += 1;
                 }
             }
@@ -571,7 +733,7 @@ fn replay_local_files(project_root: &str, local_tip: &str, remote_tip: &str) -> 
     }
 
     if skipped > 0 {
-        eprintln!("oobo: warning: {skipped} local anchor file(s) could not be replayed");
+        eprintln!("anchor: warning: {skipped} local anchor file(s) could not be replayed");
     }
 
     let target = if entries.is_empty() {
@@ -581,7 +743,7 @@ fn replay_local_files(project_root: &str, local_tip: &str, remote_tip: &str) -> 
             project_root,
             remote_tip,
             &entries,
-            "oobo: replay local anchors after reconcile",
+            "anchor: replay local anchors after reconcile",
         )?
     };
 
@@ -615,7 +777,7 @@ fn ensure_branch(project_root: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    let readme_content = "# Oobo Anchors\n\nThis branch contains anchor metadata managed by oobo.\nDo not edit manually.\n";
+    let readme_content = "# Anchors\n\nThis branch contains anchor metadata managed by anchor.\nDo not edit manually.\n";
     let blob = git_stdin_in(
         project_root,
         &["hash-object", "-w", "--stdin"],
@@ -736,7 +898,7 @@ fn try_write_to_branch(project_root: &str, entries: &[(String, String)]) -> Resu
         &parent,
         entries,
         &format!(
-            "oobo: add anchor for {}",
+            "anchor: add anchor for {}",
             entries.first().map(|(p, _)| p.as_str()).unwrap_or("?")
         ),
     )?;
@@ -889,8 +1051,26 @@ mod tests {
         assert_eq!(rest, "");
     }
 
+    #[test]
+    fn parse_rewrite_pairs_ignores_malformed_lines() {
+        let pairs = parse_rewrite_pairs(
+            "old1 new1\n\
+             malformed\n\
+             old2 new2 extra\n\
+             \n",
+        );
+        assert_eq!(
+            pairs,
+            vec![
+                ("old1".to_string(), "new1".to_string()),
+                ("old2".to_string(), "new2".to_string()),
+            ]
+        );
+    }
+
     fn make_test_anchor(commit_hash: &str) -> Anchor {
         Anchor {
+            anchor_schema_version: crate::core::anchor::ANCHOR_SCHEMA_VERSION,
             oobo_version: "0.1.0".into(),
             commit_hash: commit_hash.into(),
             branch: "main".into(),
@@ -942,6 +1122,7 @@ mod tests {
             reasoning: None,
             transparency_mode: TransparencyMode::Off,
             file_interactions: None,
+            turns: Vec::new(),
         }
     }
 
@@ -1026,6 +1207,80 @@ mod tests {
     }
 
     #[test]
+    fn test_push_uses_project_anchor_remote() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let anchor_remote = tmp.path().join("anchor-remote.git");
+        let repo_str = repo.to_str().unwrap();
+        let remote_str = anchor_remote.to_str().unwrap();
+
+        let init = std::process::Command::new("git")
+            .args(["init", repo_str])
+            .output();
+        if init.is_err() || !init.unwrap().status.success() {
+            eprintln!("skipping test: git not available");
+            return;
+        }
+
+        let _ = std::process::Command::new("git")
+            .args(["-C", repo_str, "config", "user.name", "Test"])
+            .output();
+        let _ = std::process::Command::new("git")
+            .args(["-C", repo_str, "config", "user.email", "test@test.com"])
+            .output();
+
+        let init_remote = std::process::Command::new("git")
+            .args(["init", "--bare", remote_str])
+            .output()
+            .unwrap();
+        assert!(
+            init_remote.status.success(),
+            "bare remote init failed: {}",
+            String::from_utf8_lossy(&init_remote.stderr)
+        );
+
+        let mut cfg = crate::project_config::ProjectConfig::for_project("p:test");
+        cfg.anchors.remote = remote_str.to_string();
+        cfg.save(repo_str).unwrap();
+
+        ensure_branch(repo_str).unwrap();
+        push(repo_str).unwrap();
+
+        let ls = std::process::Command::new("git")
+            .args([
+                "--git-dir",
+                remote_str,
+                "show-ref",
+                "refs/heads/oobo/anchors/v1",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            ls.status.success(),
+            "configured anchor remote did not receive branch: {}",
+            String::from_utf8_lossy(&ls.stderr)
+        );
+    }
+
+    #[test]
+    fn test_named_anchor_remote_must_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let repo_str = repo.to_str().unwrap();
+
+        let init = std::process::Command::new("git")
+            .args(["init", repo_str])
+            .output();
+        if init.is_err() || !init.unwrap().status.success() {
+            eprintln!("skipping test: git not available");
+            return;
+        }
+
+        let err = validate_anchor_remote(repo_str, "oobo").unwrap_err();
+        assert!(err.contains("anchor remote 'oobo' is not configured"));
+    }
+
+    #[test]
     fn test_read_anchor_nonexistent_branch() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().to_str().unwrap();
@@ -1058,24 +1313,23 @@ mod tests {
 
     #[test]
     fn test_strip_absolute_paths_project_root() {
-        let root = "/Users/teddy/dev/projects/trender";
-        let input =
-            r#"{"tool_call":{"params":{"path":"/Users/teddy/dev/projects/trender/backdate.sh"}}}"#;
+        let root = "/Users/example/dev/projects/trender";
+        let input = r#"{"tool_call":{"params":{"path":"/Users/example/dev/projects/trender/backdate.sh"}}}"#;
         let result = strip_absolute_paths(input, root);
         assert_eq!(result, r#"{"tool_call":{"params":{"path":"backdate.sh"}}}"#);
     }
 
     #[test]
     fn test_strip_absolute_paths_nested() {
-        let root = "/Users/teddy/dev/projects/myapp";
-        let input = r#"{"path":"/Users/teddy/dev/projects/myapp/src/lib.rs"}"#;
+        let root = "/Users/example/dev/projects/myapp";
+        let input = r#"{"path":"/Users/example/dev/projects/myapp/src/lib.rs"}"#;
         let result = strip_absolute_paths(input, root);
         assert_eq!(result, r#"{"path":"src/lib.rs"}"#);
     }
 
     #[test]
     fn test_strip_absolute_paths_home_fallback() {
-        let root = "/Users/teddy/dev/projects/myapp";
+        let root = "/Users/example/dev/projects/myapp";
         let home = dirs::home_dir().unwrap();
         let home_str = home.to_string_lossy();
         let input = format!(r#"{{"path":"{home_str}/.config/something"}}"#);
@@ -1085,7 +1339,7 @@ mod tests {
 
     #[test]
     fn test_strip_absolute_paths_no_change_for_relative() {
-        let root = "/Users/teddy/dev/projects/myapp";
+        let root = "/Users/example/dev/projects/myapp";
         let input = r#"{"path":"src/main.rs"}"#;
         let result = strip_absolute_paths(input, root);
         assert_eq!(result, r#"{"path":"src/main.rs"}"#);

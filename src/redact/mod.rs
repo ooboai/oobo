@@ -8,7 +8,7 @@ const REDACT_PLACEHOLDER: &str = "[REDACTED]";
 /// falling back to a basic pattern-based approach.
 pub fn redact(text: &str) -> String {
     if let Some(redacted) = redact_with_gitleaks(text) {
-        return redacted;
+        return redact_basic(&redacted);
     }
     redact_basic(text)
 }
@@ -89,32 +89,37 @@ pub fn gitleaks_available() -> bool {
 /// Returns redacted text or None if gitleaks is not available.
 fn redact_with_gitleaks(text: &str) -> Option<String> {
     let tmp_dir = std::env::temp_dir();
-    let tmp_path = tmp_dir.join(format!(
-        "oobo-redact-{}-{}.txt",
+    let suffix = format!(
+        "{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .subsec_nanos()
-    ));
+    );
+    let tmp_path = tmp_dir.join(format!("oobo-redact-{suffix}.txt",));
+    let report_path = tmp_dir.join(format!("oobo-redact-{suffix}.json"));
     std::fs::write(&tmp_path, text).ok()?;
 
-    let result = redact_with_gitleaks_inner(text, &tmp_path);
+    let result = redact_with_gitleaks_inner(text, &tmp_path, &report_path);
     let _ = std::fs::remove_file(&tmp_path);
+    let _ = std::fs::remove_file(&report_path);
     result
 }
 
-fn redact_with_gitleaks_inner(text: &str, tmp_path: &std::path::Path) -> Option<String> {
+fn redact_with_gitleaks_inner(
+    text: &str,
+    tmp_path: &std::path::Path,
+    report_path: &std::path::Path,
+) -> Option<String> {
     let output = Command::new("gitleaks")
         .args([
-            "detect",
-            "--no-git",
-            "--source",
+            "dir",
             tmp_path.to_str()?,
             "--report-format",
             "json",
             "--report-path",
-            "/dev/stdout",
+            report_path.to_str()?,
             "--exit-code",
             "0",
         ])
@@ -127,8 +132,8 @@ fn redact_with_gitleaks_inner(text: &str, tmp_path: &std::path::Path) -> Option<
         return None;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let findings: Vec<GitleaksFinding> = serde_json::from_str(&stdout).ok()?;
+    let report = std::fs::read_to_string(report_path).ok()?;
+    let findings: Vec<GitleaksFinding> = serde_json::from_str(&report).ok()?;
 
     if findings.is_empty() {
         return Some(text.to_string());
@@ -367,8 +372,14 @@ mod tests {
 
     #[test]
     fn test_redact_jsonl_with_bearer_in_curl() {
-        let transcript = r#"{"role":"assistant","message":{"content":"curl -H 'Authorization Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk' https://api.example.com"}}"#;
-        let redacted = redact(transcript);
+        let token = format!(
+            "{}.{}.{}",
+            "eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "abcdefghijk"
+        );
+        let transcript = format!(
+            r#"{{"role":"assistant","message":{{"content":"curl -H 'Authorization Bearer {token}' https://api.example.com"}}}}"#
+        );
+        let redacted = redact(&transcript);
         assert!(
             !redacted.contains("eyJhbGciOiJIUzI1NiJ9"),
             "bearer token in curl command should be redacted"
@@ -431,13 +442,11 @@ mod tests {
             return;
         }
 
-        let aws_key = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
+        let secret = format!("{}abcdefghij1234567890", "sk_live_");
         let transcript = format!(
             "{}\n{}\n{}",
             r#"{{"role":"user","message":{{"content":"check my aws config"}}}}"#,
-            format_args!(
-                r#"{{"role":"assistant","message":{{"content":"Found key: {aws_key}"}}}}"#
-            ),
+            format_args!(r#"{{"role":"assistant","message":{{"content":"Found key: {secret}"}}}}"#),
             r#"{"role":"user","message":{"content":"please rotate that"}}"#,
         );
         let result = redact_with_gitleaks(&transcript);
@@ -447,8 +456,8 @@ mod tests {
         );
         let redacted = result.unwrap();
         assert!(
-            !redacted.contains(&aws_key),
-            "gitleaks should redact AWS key"
+            !redacted.contains(&secret),
+            "gitleaks should redact multi-line secret"
         );
     }
 
@@ -456,15 +465,15 @@ mod tests {
 
     #[test]
     fn test_strip_absolute_paths_project_root() {
-        let root = "/Users/teddy/dev/projects/trender";
-        let input = "cd /Users/teddy/dev/projects/trender/src && cargo build";
+        let root = "/Users/example/dev/projects/trender";
+        let input = "cd /Users/example/dev/projects/trender/src && cargo build";
         let result = strip_absolute_paths(input, root);
         assert_eq!(result, "cd src && cargo build");
     }
 
     #[test]
     fn test_strip_absolute_paths_home_fallback() {
-        let root = "/Users/teddy/dev/projects/myapp";
+        let root = "/Users/example/dev/projects/myapp";
         let home = dirs::home_dir().unwrap();
         let home_str = home.to_string_lossy();
         let input = format!("ls {home_str}/.config/something");
@@ -474,7 +483,7 @@ mod tests {
 
     #[test]
     fn test_strip_absolute_paths_no_change_for_relative() {
-        let root = "/Users/teddy/dev/projects/myapp";
+        let root = "/Users/example/dev/projects/myapp";
         let input = "cargo test --release";
         let result = strip_absolute_paths(input, root);
         assert_eq!(result, "cargo test --release");
@@ -491,14 +500,14 @@ mod tests {
 
     #[test]
     fn test_sanitize_path_absolute_under_project() {
-        let root = "/Users/teddy/dev/projects/myapp";
-        let path = "/Users/teddy/dev/projects/myapp/src/lib.rs";
+        let root = "/Users/example/dev/projects/myapp";
+        let path = "/Users/example/dev/projects/myapp/src/lib.rs";
         assert_eq!(sanitize_path(path, root), "src/lib.rs");
     }
 
     #[test]
     fn test_sanitize_path_relative_passthrough() {
-        let root = "/Users/teddy/dev/projects/myapp";
+        let root = "/Users/example/dev/projects/myapp";
         let path = "src/lib.rs";
         assert_eq!(sanitize_path(path, root), "src/lib.rs");
     }
@@ -517,7 +526,7 @@ mod tests {
     fn test_sanitize_path_unrelated_absolute() {
         #[cfg(unix)]
         {
-            let root = "/Users/teddy/dev/projects/myapp";
+            let root = "/Users/example/dev/projects/myapp";
             let path = "/etc/hosts";
             assert_eq!(sanitize_path(path, root), "/etc/hosts");
         }
@@ -534,11 +543,11 @@ mod tests {
     #[test]
     fn test_sanitize_for_public_strips_paths_and_secrets() {
         let sk = format!("{}abcdefghij1234567890", "sk_live_");
-        let root = "/Users/teddy/dev/projects/myapp";
+        let root = "/Users/example/dev/projects/myapp";
         let input = format!("cd {root}/src && export TOKEN={sk}");
         let result = sanitize_for_public(&input, root);
         assert!(
-            !result.contains("/Users/teddy"),
+            !result.contains("/Users/example"),
             "absolute path should be stripped"
         );
         assert!(!result.contains(&sk), "secret should be redacted");
@@ -547,7 +556,7 @@ mod tests {
 
     #[test]
     fn test_sanitize_for_public_clean_text() {
-        let root = "/Users/teddy/dev/projects/myapp";
+        let root = "/Users/example/dev/projects/myapp";
         let input = "cargo build --release";
         let result = sanitize_for_public(input, root);
         assert_eq!(result, input);

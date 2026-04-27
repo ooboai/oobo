@@ -49,9 +49,8 @@ fn passthrough(cfg: &Config, args: &[String]) -> Result<i32, String> {
 }
 
 fn is_machine_output(args: &[String]) -> bool {
-    args.iter().any(|a| {
-        a == "--porcelain" || a == "--line-porcelain" || a == "--incremental"
-    })
+    args.iter()
+        .any(|a| a == "--porcelain" || a == "--line-porcelain" || a == "--incremental")
 }
 
 /// Scan passed args for the first positional that looks like a file path.
@@ -61,14 +60,17 @@ fn detect_file_and_commit(args: &[String]) -> Result<(String, Option<String>), S
     let mut iter = args.iter().peekable();
     while let Some(a) = iter.next() {
         if a == "--" {
-            while let Some(rest) = iter.next() {
+            for rest in iter.by_ref() {
                 positionals.push(rest.clone());
             }
             break;
         }
         if a.starts_with('-') {
             // Flags that take a value on the next token.
-            if matches!(a.as_str(), "-L" | "--abbrev" | "--date" | "--since" | "--until") {
+            if matches!(
+                a.as_str(),
+                "-L" | "--abbrev" | "--date" | "--since" | "--until"
+            ) {
                 iter.next();
             }
             continue;
@@ -120,14 +122,14 @@ fn emit_json(cfg: &Config, file: &str, commit: Option<&str>) -> Result<i32, Stri
             let n = (i + 1) as u32;
             let entry = line_map.get(&n);
             let (ai_val, agent) = match entry {
-                Some((FileAttribution::Ai, a)) => {
-                    (serde_json::Value::String(a.clone().unwrap_or_else(|| "ai".into()))
-                        , a.clone())
-                }
-                Some((FileAttribution::Mixed, a)) => {
-                    (serde_json::Value::String(a.clone().unwrap_or_else(|| "mixed".into()))
-                        , a.clone())
-                }
+                Some((FileAttribution::Ai, a)) => (
+                    serde_json::Value::String(a.clone().unwrap_or_else(|| "ai".into())),
+                    a.clone(),
+                ),
+                Some((FileAttribution::Mixed, a)) => (
+                    serde_json::Value::String(a.clone().unwrap_or_else(|| "mixed".into())),
+                    a.clone(),
+                ),
                 Some((FileAttribution::Human, _)) | None => (serde_json::Value::Null, None),
             };
             let _ = agent;
@@ -184,9 +186,7 @@ fn emit_agent(
     for (i, line_text) in lines.iter().enumerate() {
         let n = (i + 1) as u32;
         let attr = match line_map.get(&n) {
-            Some((FileAttribution::Ai, agent)) => {
-                agent.clone().unwrap_or_else(|| "ai".into())
-            }
+            Some((FileAttribution::Ai, agent)) => agent.clone().unwrap_or_else(|| "ai".into()),
             Some((FileAttribution::Mixed, agent)) => {
                 agent.clone().unwrap_or_else(|| "mixed".into())
             }

@@ -278,19 +278,6 @@ pub mod transcript {
         }
         messages
     }
-
-    pub fn count_messages(_project_path: &str, session_id: &str) -> u32 {
-        let path = match find_transcript_path(_project_path, session_id) {
-            Some(p) => p,
-            None => return 0,
-        };
-        parse_messages(&path).len() as u32
-    }
-
-    pub fn read_transcript(path: &Path, max_messages: u32) -> String {
-        let messages = parse_messages(path);
-        crate::utils::format_transcript(&messages, max_messages, "Assistant")
-    }
 }
 
 #[cfg(test)]

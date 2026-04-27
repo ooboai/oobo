@@ -35,7 +35,13 @@ pub fn handle_event(
     payload: &str,
     tool_flag: Option<&str>,
 ) -> crate::error::Result<()> {
-    let mut event: HookEvent = serde_json::from_str(payload)?;
+    let mut event: HookEvent = match serde_json::from_str(payload) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("anchor: warning: malformed hook payload for event '{event_name}': {e}");
+            return Ok(());
+        }
+    };
 
     if event.event.is_empty() {
         event.event = event_name.to_string();
@@ -92,7 +98,7 @@ pub fn handle_event(
                         active.as_ref(),
                     ) {
                         eprintln!(
-                            "oobo: warning: could not index session {}: {e}",
+                            "anchor: warning: could not index session {}: {e}",
                             &sid[..sid.len().min(8)]
                         );
                     }
@@ -103,6 +109,13 @@ pub fn handle_event(
         "before-submit-prompt" => {
             if let Some(sid) = session_id_field {
                 let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
+                let _ = state::start_turn(&project_root, sid);
+                let _ = state::record_hook_event(
+                    &project_root,
+                    sid,
+                    event_name,
+                    Some(event.extra.clone()),
+                );
                 if !project_root.is_empty() {
                     let _ = state::snapshot_pre_agent_state(&project_root, sid);
                 }
@@ -111,6 +124,12 @@ pub fn handle_event(
         "after-tool-use" | "after-file-edit" => {
             if let Some(sid) = session_id_field {
                 let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
+                let _ = state::record_hook_event(
+                    &project_root,
+                    sid,
+                    event_name,
+                    Some(event.extra.clone()),
+                );
                 if !project_root.is_empty() {
                     let tool_name = event
                         .extra
@@ -128,6 +147,14 @@ pub fn handle_event(
                             sid,
                             tool_name,
                             input_summary.as_deref(),
+                        );
+                        let _ = state::record_tool_call(
+                            &project_root,
+                            sid,
+                            tool_name,
+                            tool_input.cloned(),
+                            event.extra.get("tool_output").cloned(),
+                            false,
                         );
                     }
 
@@ -197,6 +224,12 @@ pub fn handle_event(
         "tool-use-failure" => {
             if let Some(sid) = session_id_field {
                 let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
+                let _ = state::record_hook_event(
+                    &project_root,
+                    sid,
+                    event_name,
+                    Some(event.extra.clone()),
+                );
                 if !project_root.is_empty() {
                     let tool_name = event
                         .extra
@@ -204,6 +237,14 @@ pub fn handle_event(
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown");
                     let _ = state::record_tool_failure(&project_root, sid, tool_name);
+                    let _ = state::record_tool_call(
+                        &project_root,
+                        sid,
+                        tool_name,
+                        event.extra.get("tool_input").cloned(),
+                        event.extra.get("tool_output").cloned(),
+                        true,
+                    );
                 }
             }
         }
@@ -232,6 +273,12 @@ pub fn handle_event(
         "after-agent-thought" => {
             if let Some(sid) = session_id_field {
                 let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
+                let _ = state::record_hook_event(
+                    &project_root,
+                    sid,
+                    event_name,
+                    Some(event.extra.clone()),
+                );
                 let duration_ms = event
                     .extra
                     .get("duration_ms")
@@ -245,6 +292,12 @@ pub fn handle_event(
         "after-agent-response" => {
             if let Some(sid) = session_id_field {
                 let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
+                let _ = state::record_hook_event(
+                    &project_root,
+                    sid,
+                    event_name,
+                    Some(event.extra.clone()),
+                );
                 // Swallow errors — this fires on every response so a transient IO
                 // failure shouldn't surface as a hook error to the user.
                 let _ = state::touch_session(&project_root, sid, None);
@@ -253,6 +306,12 @@ pub fn handle_event(
         "pre-compact" => {
             if let Some(sid) = session_id_field {
                 let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
+                let _ = state::record_hook_event(
+                    &project_root,
+                    sid,
+                    event_name,
+                    Some(event.extra.clone()),
+                );
                 let _ = state::record_compact(&project_root, sid);
             }
         }
@@ -260,6 +319,12 @@ pub fn handle_event(
             if let Some(sid) = session_id_field {
                 let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
                 let transcript_path = event.extra.get("transcript_path").and_then(|v| v.as_str());
+                let _ = state::record_hook_event(
+                    &project_root,
+                    sid,
+                    event_name,
+                    Some(event.extra.clone()),
+                );
                 state::touch_session(&project_root, sid, transcript_path)?;
 
                 if !project_root.is_empty() {
@@ -285,12 +350,25 @@ pub fn handle_event(
                     if !files.is_empty() {
                         let _ = state::snapshot_session_files(&project_root, sid, &files);
                     }
+                    let _ = state::finish_turn(
+                        &project_root,
+                        sid,
+                        agent,
+                        event.model.as_deref(),
+                        transcript_path,
+                    );
                 }
             }
         }
         "subagent-stop" => {
             if let Some(sid) = session_id_field {
                 let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
+                let _ = state::record_hook_event(
+                    &project_root,
+                    sid,
+                    event_name,
+                    Some(event.extra.clone()),
+                );
                 state::touch_session(&project_root, sid, None)?;
 
                 let agent_id = event
@@ -317,10 +395,14 @@ pub fn handle_event(
                             }
                         }
                     }
+                    let _ =
+                        state::finish_turn(&project_root, sid, agent, event.model.as_deref(), None);
                 }
             }
         }
-        _ => {}
+        _ => {
+            eprintln!("anchor: warning: unknown agent event '{event_name}' (tool={agent}). ignored.");
+        }
     }
 
     Ok(())
@@ -472,9 +554,9 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_event_invalid_json() {
-        let result = handle_event("test", "not json", None);
-        assert!(result.is_err());
+    fn test_handle_event_malformed_json_returns_ok() {
+        let result = handle_event("session-start", "not json", None);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -544,6 +626,32 @@ mod tests {
         assert!(is_dir_scoped_tool("Glob"));
         assert!(!is_dir_scoped_tool("Read"));
         assert!(!is_dir_scoped_tool("View"));
+    }
+
+    #[test]
+    fn test_handle_event_unknown_event_no_error() {
+        let json = r#"{"session_id": "s1"}"#;
+        let result = handle_event("totally-unknown-event", json, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_handle_event_missing_workspace_and_cwd() {
+        let json = r#"{"session_id": "s1", "event": "session-end"}"#;
+        let result = handle_event("session-end", json, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_handle_event_empty_payload_returns_ok() {
+        let result = handle_event("session-end", "", None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_handle_event_truncated_json_returns_ok() {
+        let result = handle_event("session-start", r#"{"session_id": "#, None);
+        assert!(result.is_ok());
     }
 
     #[test]

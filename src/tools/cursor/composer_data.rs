@@ -59,7 +59,6 @@ pub fn extract_native_stats(session_id: &str) -> Option<NativeStats> {
     };
 
     Some(NativeStats {
-        model: None,
         input_tokens: None,
         output_tokens: None,
         cache_read_tokens: None,
@@ -263,7 +262,6 @@ pub struct BubbleSession {
 pub fn native_stats_from_bubble(session: &BubbleSession) -> NativeStats {
     let has_native = session.total_input_tokens > 0 || session.total_output_tokens > 0;
     NativeStats {
-        model: None,
         input_tokens: if has_native {
             Some(session.total_input_tokens)
         } else {
@@ -290,7 +288,6 @@ pub fn native_stats_from_session(session: &ComposerSession) -> NativeStats {
     };
 
     NativeStats {
-        model: None,
         input_tokens: None,
         output_tokens: None,
         cache_read_tokens: None,
@@ -1043,7 +1040,7 @@ mod tests {
             "toolFormerData": {
                 "name": "run_terminal_command_v2",
                 "status": "completed",
-                "params": "{\"command\":\"oobo commit -m 'test'\",\"cwd\":\"/Users/teddy/projects\"}",
+                "params": "{\"command\":\"oobo commit -m 'test'\",\"cwd\":\"/Users/example/projects\"}",
             },
             "tokenCount": {"inputTokens": 0, "outputTokens": 0},
         });
@@ -1081,40 +1078,40 @@ mod tests {
 
     #[test]
     fn test_normalize_to_repo_relative_absolute() {
-        let root = "/Users/teddy/dev/projects/trender";
-        let abs = "/Users/teddy/dev/projects/trender/backdate.sh";
+        let root = "/Users/example/dev/projects/trender";
+        let abs = "/Users/example/dev/projects/trender/backdate.sh";
         assert_eq!(normalize_to_repo_relative(abs, root), "backdate.sh");
     }
 
     #[test]
     fn test_normalize_to_repo_relative_nested() {
-        let root = "/Users/teddy/dev/projects/trender";
-        let abs = "/Users/teddy/dev/projects/trender/src/main.rs";
+        let root = "/Users/example/dev/projects/trender";
+        let abs = "/Users/example/dev/projects/trender/src/main.rs";
         assert_eq!(normalize_to_repo_relative(abs, root), "src/main.rs");
     }
 
     #[test]
     fn test_normalize_to_repo_relative_leading_slash() {
-        let root = "/Users/teddy/dev/projects/trender";
+        let root = "/Users/example/dev/projects/trender";
         let rel = "/src/main.rs";
         assert_eq!(normalize_to_repo_relative(rel, root), "src/main.rs");
     }
 
     #[test]
     fn test_normalize_to_repo_relative_already_relative() {
-        let root = "/Users/teddy/dev/projects/trender";
+        let root = "/Users/example/dev/projects/trender";
         let rel = "src/main.rs";
         assert_eq!(normalize_to_repo_relative(rel, root), "src/main.rs");
     }
 
     #[test]
     fn test_normalize_to_repo_relative_different_root() {
-        let root = "/Users/teddy/dev/projects/trender";
-        let abs = "/Users/teddy/dev/projects/other/file.rs";
+        let root = "/Users/example/dev/projects/trender";
+        let abs = "/Users/example/dev/projects/other/file.rs";
         // Stripped leading `/` — won't match committed files anyway.
         assert_eq!(
             normalize_to_repo_relative(abs, root),
-            "Users/teddy/dev/projects/other/file.rs"
+            "Users/example/dev/projects/other/file.rs"
         );
     }
 }

@@ -34,6 +34,7 @@ pub enum LinkType {
 }
 
 impl LinkType {
+    #[cfg(test)]
     pub fn as_str(self) -> &'static str {
         match self {
             LinkType::Explicit => "explicit",
@@ -42,6 +43,7 @@ impl LinkType {
         }
     }
 
+    #[cfg(test)]
     pub fn parse(s: &str) -> Self {
         match s {
             "explicit" => LinkType::Explicit,
@@ -87,9 +89,8 @@ pub struct Contribution {
 }
 
 impl Contribution {
-    /// Invariant check: the window is well-formed. Returns an error
-    /// string useful for propagating into migration / attribution
-    /// errors, not a `Result<()>` with a bespoke error type.
+    /// Invariant check: the window is well-formed.
+    #[cfg(test)]
     pub fn validate(&self) -> Result<(), String> {
         if self.first_turn_index < 0 || self.last_turn_index < 0 {
             return Err(format!(
@@ -106,7 +107,7 @@ impl Contribution {
         Ok(())
     }
 
-    /// Number of turns spanned by this contribution.
+    #[cfg(test)]
     pub fn turn_count(&self) -> i64 {
         (self.last_turn_index - self.first_turn_index) + 1
     }

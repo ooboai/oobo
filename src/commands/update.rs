@@ -1,5 +1,5 @@
-const REPO: &str = "ooboai/oobo";
-const USER_AGENT: &str = concat!("oobo/", env!("CARGO_PKG_VERSION"));
+const REPO: &str = "ooboai/anchor";
+const USER_AGENT: &str = concat!("anchor/", env!("CARGO_PKG_VERSION"));
 
 pub fn run(check_only: bool) -> Result<(), String> {
     let current_version = env!("CARGO_PKG_VERSION");
@@ -16,7 +16,7 @@ pub fn run(check_only: bool) -> Result<(), String> {
     eprintln!("new version available: v{latest_clean}");
 
     if check_only {
-        eprintln!("run `oobo update` to install");
+        eprintln!("run `anchor update` to install");
         return Ok(());
     }
 
@@ -41,46 +41,11 @@ pub fn run(check_only: bool) -> Result<(), String> {
 }
 
 pub fn run_post_update() -> Result<(), String> {
-    eprintln!("oobo: running post-update tasks...");
+    eprintln!("anchor: running post-update tasks...");
 
     match crate::commands::agent::ensure_skill_file() {
         Ok(_) => eprintln!("  skill file updated"),
         Err(e) => eprintln!("  skill file: {e}"),
-    }
-
-    let cfg = crate::config::Config::load_or_default();
-
-    // Open & migrate DB. This applies schema bumps and arms the
-    // `backfill_pending` flag when crossing v11→v12.
-    let mut db = match crate::db::Db::open() {
-        Ok(db) => {
-            eprintln!("  database migrations applied");
-            db
-        }
-        Err(e) => {
-            eprintln!("  database: {e}");
-            return Ok(());
-        }
-    };
-
-    // Always run a full backfill after an update. Post-update is a
-    // rare, user-triggered event; doing the rebuild unconditionally
-    // means new token-accounting and inference logic in the fresh
-    // binary take effect immediately, and the `backfill_pending`
-    // flag is guaranteed to be clear.
-    let report = crate::attribution::auto_backfill::backfill_force_all(&mut db, &cfg);
-    eprintln!(
-        "  backfill: {}/{} projects, {} sessions, {} turns, {} contributions, {} subagents ({} proposed)",
-        report.projects_succeeded,
-        report.projects_attempted,
-        report.sessions_scanned,
-        report.turns_emitted,
-        report.contributions_written,
-        report.subagents_inferred,
-        report.subagents_proposed,
-    );
-    for (pid, err) in &report.failures {
-        eprintln!("  backfill failed: {pid}: {err}");
     }
 
     let hooks = crate::hooks::install::install_all_agent_hooks();
@@ -125,9 +90,9 @@ fn install_latest(tag: &str) -> Result<(), String> {
     }
 
     #[cfg(target_os = "windows")]
-    let (asset_name, is_zip) = (format!("oobo-{tag}-{target}.zip"), true);
+    let (asset_name, is_zip) = (format!("anchor-{tag}-{target}.zip"), true);
     #[cfg(not(target_os = "windows"))]
-    let (asset_name, is_zip) = (format!("oobo-{tag}-{target}.tar.gz"), false);
+    let (asset_name, is_zip) = (format!("anchor-{tag}-{target}.tar.gz"), false);
 
     let url = format!("https://github.com/{REPO}/releases/download/{tag}/{asset_name}");
 
@@ -152,7 +117,7 @@ fn install_latest(tag: &str) -> Result<(), String> {
     let current_exe =
         std::env::current_exe().map_err(|e| format!("cannot find current binary: {e}"))?;
 
-    let tmp_dir = std::env::temp_dir().join(format!("oobo-update-{}", std::process::id()));
+    let tmp_dir = std::env::temp_dir().join(format!("anchor-update-{}", std::process::id()));
     std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("cannot create temp dir: {e}"))?;
 
     let archive_path = tmp_dir.join(&asset_name);
@@ -172,9 +137,9 @@ fn install_latest(tag: &str) -> Result<(), String> {
     }
 
     #[cfg(target_os = "windows")]
-    let binary_name = "oobo.exe";
+    let binary_name = "anchor.exe";
     #[cfg(not(target_os = "windows"))]
-    let binary_name = "oobo";
+    let binary_name = "anchor";
 
     let new_binary = tmp_dir.join(binary_name);
     if !new_binary.exists() {
@@ -183,7 +148,7 @@ fn install_latest(tag: &str) -> Result<(), String> {
 
     let backup = current_exe.with_extension("old");
     if let Err(e) = std::fs::rename(&current_exe, &backup) {
-        eprintln!("oobo: warning: could not backup current binary: {e}");
+        eprintln!("anchor: warning: could not backup current binary: {e}");
     }
 
     if let Err(e) = std::fs::copy(&new_binary, &current_exe) {

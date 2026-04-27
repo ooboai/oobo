@@ -1,15 +1,15 @@
 # Global flags
 
-Flags that apply to every subcommand (and to bare `oobo`). Parsed at the clap root with `global = true`. Position-independent: `oobo --agent anchors`, `oobo anchors --agent`, and `oobo anchors --agent -n 5` are all equivalent.
+Flags that apply to every subcommand (and to bare `anchor`). Parsed at the clap root with `global = true`. Position-independent: `anchor --agent anchors`, `anchor anchors --agent`, and `anchor anchors --agent -n 5` are all equivalent.
 
 ---
 
 ## `--agent`
 
-Forces **agent mode**: ruthlessly minimal plain-text output, one item per line, no colors, no borders, no prose. Inspired by `git log --oneline`. Exists to NOT waste tokens when an LLM consumes oobo's output.
+Forces **agent mode**: ruthlessly minimal plain-text output, one item per line, no colors, no borders, no prose. Inspired by `git log --oneline`. Exists to NOT waste tokens when an LLM consumes anchor's output.
 
 ### Invocation
-`oobo anchors --agent`
+`anchor anchors --agent`
 
 **Context:** inside a repo with at least one anchor.
 
@@ -30,10 +30,10 @@ d4e5f6g 18m  add rate limiter           gemini 31k 2s
 
 ## `--json`
 
-Forces **JSON mode**: full-fidelity structured data for tools/scripts parsing oobo's output. Verbose by design — do NOT use for LLM consumption.
+Forces **JSON mode**: full-fidelity structured data for tools/scripts parsing anchor's output. Verbose by design — do NOT use for LLM consumption.
 
 ### Invocation
-`oobo anchors --json`
+`anchor anchors --json`
 
 **Context:** inside a repo with at least one anchor.
 
@@ -65,7 +65,7 @@ Forces **JSON mode**: full-fidelity structured data for tools/scripts parsing oo
 ## `--agent` + `--json` combined
 
 ### Invocation
-`oobo anchors --agent --json`
+`anchor anchors --agent --json`
 
 **Behavior:** Fail fast. The two flags have different intents (token-efficiency vs. structured fidelity) and cannot be combined.
 
@@ -82,10 +82,10 @@ error: the argument '--agent' cannot be used with '--json'
 
 ## `--interactive`
 
-Escape hatch. Forces pretty/TUI mode even when auto-detection would flip to `--agent` (non-TTY stdout, agent env var present). Useful when running `oobo` inside tmux/screen with piped stdout for logging but you still want the TUI on stderr. Rarely needed by end users.
+Escape hatch. Forces pretty/TUI mode even when auto-detection would flip to `--agent` (non-TTY stdout, agent env var present). Useful when running `anchor` inside tmux/screen with piped stdout for logging but you still want the TUI on stderr. Rarely needed by end users.
 
 ### Invocation
-`oobo --interactive > /tmp/out.txt`
+`anchor --interactive > /tmp/out.txt`
 
 **Context:** inside a repo.
 
@@ -98,31 +98,38 @@ Escape hatch. Forces pretty/TUI mode even when auto-detection would flip to `--a
 ## `--help` / `-h`
 
 ### Invocation
-`oobo --help`
+`anchor --help`
 
 **Behavior:** Print the top-level help. Commands are grouped by mental-model category: Views, Actions, Wizard/Config, Lifecycle.
 
 **Example output (shape):**
 ```
-oobo — git with memory.
+anchor — git with memory.
 
 USAGE:
-    oobo [OPTIONS] [COMMAND]
+    anchor [OPTIONS] [COMMAND]
 
 VIEWS:
-    anchors    See the memory
+    anchors, a See the memory
     blame      Per-line AI/human attribution
     search     Find any past session
 
 ACTIONS:
+    from       Load code/context from a turn or anchor
     enable     Start tracking this project
     disable    Stop tracking this project
-    alias      Install/uninstall the git=oobo shell alias
-    update     Self-update
+    alias      Install/uninstall the git=anchor shell alias
 
 WIZARD + CONFIG:
     setup      Onboard, repair, reindex, manage projects
     settings   Show / set / unset config values
+
+LIFECYCLE:
+    update     Self-update
+
+GIT PASSTHROUGH:
+    Any command not listed above is forwarded to git unchanged.
+    Write operations (commit, push, merge) also capture AI context.
 
 OPTIONS:
     --agent          Minimal plain-text output (token-efficient)
@@ -131,17 +138,17 @@ OPTIONS:
     -h, --help       Print help
     -V, --version    Print version
 
-Run `oobo <command> --help` for per-command help.
+Run `anchor <command> --help` for per-command help.
 ```
 
 **Exit code:** `0`.
 
 ### Subcommand help
 
-`oobo anchors --help`, `oobo settings --help`, etc. — every subcommand must print its own help showing ONLY its own flags and positional args. No clap-default brag about global flags except for a brief footer:
+`anchor anchors --help`, `anchor settings --help`, etc. — every subcommand must print its own help showing ONLY its own flags and positional args. No clap-default brag about global flags except for a brief footer:
 
 ```
-Global flags: --agent, --json, --interactive. See `oobo --help`.
+Global flags: --agent, --json, --interactive. See `anchor --help`.
 ```
 
 ---
@@ -149,23 +156,23 @@ Global flags: --agent, --json, --interactive. See `oobo --help`.
 ## `--version` / `-V`
 
 ### Invocation
-`oobo --version`
+`anchor --version`
 
-**Behavior:** Print one line: `oobo <semver>`. Nothing else.
+**Behavior:** Print one line: `anchor <semver>`. Nothing else.
 
 **Example output:**
 ```
-oobo 1.0.0
+anchor 1.0.0
 ```
 
 **Exit code:** `0`.
 
 ### Machine-readable variant
-`oobo --version --json`
+`anchor --version --json`
 
 **Example output:**
 ```json
-{ "name": "oobo", "version": "1.0.0", "commit": "{hash}", "built_at": "{timestamp}" }
+{ "name": "anchor", "version": "1.0.0", "commit": "{hash}", "built_at": "{timestamp}" }
 ```
 
 **Exit code:** `0`.
@@ -174,15 +181,15 @@ oobo 1.0.0
 
 ## Auto-detection of agent mode
 
-`oobo` implicitly flips to `--agent` when ANY of these is true:
+`anchor` implicitly flips to `--agent` when ANY of these is true:
 
 - `stdout` is not a TTY (pipe, redirect).
 - Any of these env vars is set and non-empty: `CURSOR_AGENT`, `CLAUDECODE`, `AIDER`, `CONTINUE_SESSION`, `CONTINUE_IDE`, `AICOMMITS`.
 
 ### Invocation
-`oobo anchors | head -5`
+`anchor anchors | head -5`
 
-**Behavior:** Even though no explicit `--agent` flag is passed, stdout is a pipe, so oobo emits agent-mode output. No colors, no TUI.
+**Behavior:** Even though no explicit `--agent` flag is passed, stdout is a pipe, so anchor emits agent-mode output. No colors, no TUI.
 
 **Example output:**
 ```
@@ -196,14 +203,14 @@ f7a8b9c 4h   bump deps                  -      -   -
 **Exit code:** `0`.
 
 ### Invocation
-`CURSOR_AGENT=1 oobo anchors`
+`CURSOR_AGENT=1 anchor anchors`
 
 **Behavior:** Env var triggers agent mode even with a TTY attached. An LLM running inside Cursor's agent gets token-efficient output without having to know about the flag.
 
 **Exit code:** `0`.
 
 ### Invocation
-`oobo anchors` (plain TTY, no env vars)
+`anchor anchors` (plain TTY, no env vars)
 
 **Behavior:** TTY detected, no env var, no flag → pretty mode (colored table).
 
@@ -214,7 +221,7 @@ f7a8b9c 4h   bump deps                  -      -   -
 ## Negative: unknown flag
 
 ### Invocation
-`oobo anchors --fake`
+`anchor anchors --fake`
 
 **Behavior:** Clap prints the error on stderr.
 
@@ -222,7 +229,7 @@ f7a8b9c 4h   bump deps                  -      -   -
 ```
 error: unexpected argument '--fake' found
 
-Usage: oobo anchors [OPTIONS]
+Usage: anchor anchors [OPTIONS]
 
 For more information, try '--help'.
 ```
@@ -235,8 +242,8 @@ For more information, try '--help'.
 
 For every subcommand and every global flag, these must produce identical output:
 
-- `oobo <flag> <cmd> <args>`
-- `oobo <cmd> <flag> <args>`
-- `oobo <cmd> <args> <flag>`
+- `anchor <flag> <cmd> <args>`
+- `anchor <cmd> <flag> <args>`
+- `anchor <cmd> <args> <flag>`
 
 Test matrix is exercised in every subcommand's spec.

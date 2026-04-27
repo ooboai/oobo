@@ -1,6 +1,14 @@
+pub mod anchor_cache;
+mod anchor_builder;
+mod anchor_persist;
 pub mod commands;
+mod context;
 pub mod detect;
 pub mod first_use;
 pub mod interceptor;
+mod line_attribution;
 pub mod orphan;
 pub mod proxy;
+mod session_evidence;
+mod transcripts;
+pub mod turns;

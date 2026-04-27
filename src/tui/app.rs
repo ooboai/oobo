@@ -13,8 +13,9 @@
 //! - [`View::Help`]        keybindings overlay
 //!
 //! For some actions we suspend the TUI, shell out to an external tool
-//! (git show, oobo blame), and restore on return.
+//! (git show, anchor blame), and restore on return.
 
+use std::collections::HashMap;
 use std::io;
 use std::time::Duration;
 
@@ -25,7 +26,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::config::Config;
-use crate::db::Db;
+
+use super::format::*;
+use super::transcript::load_transcript_lines;
+use super::types::{
+    AnchorRow, FeedState, MemoryKind, PickerAction, PickerKind, PickerState, SearchState,
+    SessionLink, TimeWindow, TranscriptState, View,
+};
 
 // ── Public entry ──────────────────────────────────────────────────────
 
@@ -34,593 +41,287 @@ pub fn run(cfg: &Config) -> Result<i32, String> {
         return Err("not a git repository".to_string());
     };
 
-    let mut app = App::load(cfg.clone(), root)?;
-    if !app.enabled {
-        println!("oobo disabled for this project. run: oobo enable");
-        return Ok(0);
-    }
-
     let mut terminal = super::init().map_err(|e| format!("tui init: {e}"))?;
+
+    let project_name = std::path::Path::new(&root)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("project")
+        .to_string();
+    let enabled = crate::project_config::is_enabled(&root);
+    let branch = current_branch(&root);
+    let dirty = worktree_dirty(&root);
+    let anchor_remote =
+        crate::project_config::anchor_remote(&root).unwrap_or_else(|| "origin".to_string());
+
+    let cfg_clone = cfg.clone();
+    let root_clone = root.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = App::load(cfg_clone, root_clone);
+        let _ = tx.send(result);
+    });
+
+    const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let mut frame_idx = 0usize;
+    let skeleton = LoadingSkeleton {
+        project_name: &project_name,
+        enabled,
+        branch: branch.as_deref(),
+        dirty,
+        anchor_remote: &anchor_remote,
+    };
+    let app = loop {
+        let spinner = SPINNER_FRAMES[frame_idx];
+        let _ = terminal.draw(|f| {
+            draw_loading_skeleton(f, &skeleton, spinner);
+        });
+
+        match rx.try_recv() {
+            Ok(result) => break result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                super::restore();
+                return Err("loading thread panicked".to_string());
+            }
+        }
+
+        if crossterm::event::poll(Duration::from_millis(80)).unwrap_or(false) {
+            if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
+                if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
+                    super::restore();
+                    return Ok(0);
+                }
+            }
+        }
+        frame_idx = (frame_idx + 1) % SPINNER_FRAMES.len();
+    };
+
+    let mut app = match app {
+        Ok(app) => app,
+        Err(e) => {
+            super::restore();
+            return Err(e);
+        }
+    };
     let result = event_loop(&mut terminal, &mut app);
     super::restore();
     result
 }
 
-/// Project-picker TUI for bare `oobo` run outside of a git repo.
-///
-/// Shows every tracked project with stats; pressing Enter drills into that
-/// project's feed (reusing the same App/event loop). Quitting the feed
-/// returns to the picker. `q`/`Esc` from the picker exits.
-pub fn run_projects(cfg: &Config) -> Result<i32, String> {
-    let mut terminal = super::init().map_err(|e| format!("tui init: {e}"))?;
-    let result = project_picker_loop(cfg, &mut terminal);
-    super::restore();
-    result
-}
-
-// ── Project picker ────────────────────────────────────────────────────
-
-#[derive(Clone)]
-struct ProjectPickerRow {
-    id: String,
-    name: String,
-    path: String,
-    remote: Option<String>,
+struct LoadingSkeleton<'a> {
+    project_name: &'a str,
     enabled: bool,
-    last_activity: i64,
-    anchors: i64,
-    tokens: i64,
-    ai_pct: i64,
-    /// Last tool that worked in the project (claude, cursor, codex, …).
-    last_agent: Option<String>,
+    branch: Option<&'a str>,
+    dirty: bool,
+    anchor_remote: &'a str,
 }
 
-fn project_picker_loop(
-    cfg: &Config,
-    terminal: &mut ratatui::DefaultTerminal,
-) -> Result<i32, String> {
-    let mut rows = load_project_rows();
-    if rows.is_empty() {
-        // Nothing usable to show — bail so the caller's fallback can render.
-        return Err("no projects".into());
-    }
-
-    let mut state = ListState::default();
-    state.select(Some(0));
-    let mut filter = String::new();
-    let mut filter_open = false;
-
-    loop {
-        terminal
-            .draw(|frame| draw_project_picker(frame, &rows, &filter, filter_open, &mut state))
-            .map_err(|e| format!("tui draw: {e}"))?;
-
-        let Some(key) = super::next_key(Duration::from_millis(200))
-            .map_err(|e: io::Error| format!("key read: {e}"))?
-        else {
-            continue;
-        };
-
-        if filter_open {
-            match key.code {
-                KeyCode::Esc => {
-                    filter.clear();
-                    filter_open = false;
-                }
-                KeyCode::Enter => {
-                    filter_open = false;
-                }
-                KeyCode::Backspace => {
-                    filter.pop();
-                }
-                KeyCode::Char(c) => filter.push(c),
-                _ => {}
-            }
-            state.select(Some(0));
-            continue;
-        }
-
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => return Ok(0),
-            KeyCode::Char('/') => {
-                filter_open = true;
-                filter.clear();
-            }
-            KeyCode::Char('r') => {
-                rows = load_project_rows();
-                state.select(Some(0));
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                let visible = visible_project_count(&rows, &filter);
-                if visible > 0 {
-                    let i = state.selected().unwrap_or(0);
-                    state.select(Some((i + 1).min(visible - 1)));
-                }
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                let i = state.selected().unwrap_or(0);
-                state.select(Some(i.saturating_sub(1)));
-            }
-            KeyCode::Home => {
-                state.select(Some(0));
-            }
-            KeyCode::End => {
-                let visible = visible_project_count(&rows, &filter);
-                if visible > 0 {
-                    state.select(Some(visible - 1));
-                }
-            }
-            KeyCode::Enter => {
-                let selected = state.selected().unwrap_or(0);
-                let picked_path: Option<String> = visible_projects(&rows, &filter)
-                    .nth(selected)
-                    .map(|r| r.path.clone());
-                if let Some(path) = picked_path {
-                    // Suspend the picker, open the feed for this project,
-                    // then re-init and resume.
-                    super::restore();
-                    let res = open_feed_for_project(cfg, &path);
-                    *terminal = super::init().map_err(|e| format!("tui init: {e}"))?;
-                    if let Err(e) = res {
-                        eprintln!("oobo: could not open project: {e}");
-                    }
-                    // Refresh stats since anchors may have changed.
-                    rows = load_project_rows();
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn load_project_rows() -> Vec<ProjectPickerRow> {
-    let Ok(db) = Db::open() else {
-        return Vec::new();
-    };
-    let projects = db.list_projects().unwrap_or_default();
-    let mut rows: Vec<ProjectPickerRow> = Vec::with_capacity(projects.len());
-    for p in &projects {
-        if is_stale_project_path(&p.path) {
-            continue;
-        }
-        let settings = db.get_project_settings(&p.id).unwrap_or_default();
-        let stats = db.anchor_stats_for_project(&p.id).unwrap_or_default();
-
-        // Tokens across ALL sessions in the project (not just anchored ones).
-        let session_tokens = project_session_tokens(&db, &p.id);
-        let tokens = stats.tokens.max(session_tokens);
-
-        // Last activity across multiple sources.
-        let last_activity = project_last_activity(&db, &p.id, stats.last_activity);
-
-        // Last agent to work in the project.
-        let last_agent = project_last_agent(&db, &p.id);
-
-        rows.push(ProjectPickerRow {
-            id: p.id.clone(),
-            name: p.name.clone(),
-            path: p.path.clone(),
-            remote: p.git_remote.clone(),
-            enabled: !settings.ignored,
-            last_activity,
-            anchors: stats.anchors,
-            tokens,
-            ai_pct: stats.ai_pct,
-            last_agent,
-        });
-    }
-    // Sort: projects with activity first (most recent), zeros sink to bottom
-    // alphabetically so it's stable.
-    rows.sort_by(|a, b| {
-        match (a.last_activity > 0, b.last_activity > 0) {
-            (true, true) => b.last_activity.cmp(&a.last_activity),
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            (false, false) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        }
-    });
-    rows
-}
-
-fn project_session_tokens(db: &Db, project_id: &str) -> i64 {
-    use rusqlite::params;
-    // Prefer the v11 canonical view: sum of per-call deltas across
-    // all turns. This is the only value that's arithmetically
-    // correct with respect to per-commit and per-session rollups.
-    let v11: i64 = db
-        .conn
-        .query_row(
-            "SELECT COALESCE(billed_tokens, 0) \
-             FROM v_project_totals WHERE project_id = ?1",
-            params![project_id],
-            |r| r.get::<_, i64>(0),
-        )
-        .unwrap_or(0);
-    if v11 > 0 {
-        return v11;
-    }
-
-    // Fallback for projects that haven't been backfilled yet: old
-    // session_stats totals. Safe because the number they returned
-    // was already session-level (not multiplied per-commit); it's
-    // just coarser than turn-level deltas.
-    db.conn
-        .query_row(
-            "SELECT COALESCE(SUM(
-                COALESCE(st.input_tokens, 0)
-                + COALESCE(st.output_tokens, 0)
-                + COALESCE(st.cache_read_tokens, 0)
-                + COALESCE(st.cache_creation_tokens, 0)
-             ), 0)
-             FROM session_stats st
-             JOIN sessions s ON s.id = st.session_id AND s.source = st.source
-             WHERE s.project_id = ?1",
-            params![project_id],
-            |r| r.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-}
-
-fn project_last_activity(db: &Db, project_id: &str, seed: i64) -> i64 {
-    use rusqlite::params;
-    let mut best = seed;
-
-    // v11: latest per-turn `ended_at` via the canonical view.
-    // Stored in ms; convert to secs for comparison with the other
-    // secs-keyed timestamps below.
-    if let Ok(ms) = db.conn.query_row(
-        "SELECT COALESCE(last_turn_at, 0) \
-         FROM v_project_totals WHERE project_id = ?1",
-        params![project_id],
-        |r| r.get::<_, i64>(0),
-    ) {
-        let secs = ms / 1000;
-        if secs > best {
-            best = secs;
-        }
-    }
-
-    if let Ok(ts) = db.conn.query_row(
-        "SELECT COALESCE(MAX(updated_at), 0) FROM sessions WHERE project_id = ?1",
-        params![project_id],
-        |r| r.get::<_, i64>(0),
-    ) {
-        if ts > best {
-            best = ts;
-        }
-    }
-
-    if let Ok(ts) = db.conn.query_row(
-        "SELECT COALESCE(MAX(a.committed_at), 0)
-         FROM anchors a
-         JOIN ai_commits c ON c.commit_hash = a.commit_hash
-         WHERE c.project_id = ?1",
-        params![project_id],
-        |r| r.get::<_, i64>(0),
-    ) {
-        if ts > best {
-            best = ts;
-        }
-    }
-
-    if let Ok(ts) = db.conn.query_row(
-        "SELECT COALESCE(MAX(timestamp), 0) FROM events WHERE project_id = ?1",
-        params![project_id],
-        |r| r.get::<_, i64>(0),
-    ) {
-        if ts > best {
-            best = ts;
-        }
-    }
-
-    best
-}
-
-fn project_last_agent(db: &Db, project_id: &str) -> Option<String> {
-    use rusqlite::params;
-    db.conn
-        .query_row(
-            "SELECT source FROM sessions
-             WHERE project_id = ?1
-             ORDER BY COALESCE(updated_at, created_at, 0) DESC
-             LIMIT 1",
-            params![project_id],
-            |r| r.get::<_, String>(0),
-        )
-        .ok()
-}
-
-fn is_stale_project_path(path: &str) -> bool {
-    if path.is_empty() {
-        return true;
-    }
-    let tmp_prefixes = [
-        "/tmp/",
-        "/var/folders/",
-        "/private/tmp/",
-        "/private/var/folders/",
-    ];
-    if tmp_prefixes.iter().any(|p| path.starts_with(p)) {
-        return true;
-    }
-    !std::path::Path::new(path).exists()
-}
-
-fn visible_projects<'a>(
-    rows: &'a [ProjectPickerRow],
-    filter: &'a str,
-) -> impl Iterator<Item = &'a ProjectPickerRow> {
-    let needle = filter.to_lowercase();
-    rows.iter().filter(move |r| {
-        if needle.is_empty() {
-            return true;
-        }
-        r.name.to_lowercase().contains(&needle)
-            || r.path.to_lowercase().contains(&needle)
-            || r.remote
-                .as_deref()
-                .map(|s| s.to_lowercase().contains(&needle))
-                .unwrap_or(false)
-    })
-}
-
-fn visible_project_count(rows: &[ProjectPickerRow], filter: &str) -> usize {
-    visible_projects(rows, filter).count()
-}
-
-fn open_feed_for_project(cfg: &Config, root: &str) -> Result<(), String> {
-    let mut app = App::load(cfg.clone(), root.to_string())?;
-    if !app.enabled {
-        // Still allow read-only browsing of disabled projects.
-        app.enabled = false;
-    }
-    let mut t = super::init().map_err(|e| format!("tui init: {e}"))?;
-    let res = event_loop(&mut t, &mut app);
-    super::restore();
-    res.map(|_| ())
-}
-
-fn draw_project_picker(
+fn draw_loading_skeleton(
     frame: &mut ratatui::Frame<'_>,
-    rows: &[ProjectPickerRow],
-    filter: &str,
-    filter_open: bool,
-    state: &mut ListState,
+    sk: &LoadingSkeleton<'_>,
+    spinner: &str,
 ) {
     let area = frame.area();
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
+
+    let notice = !sk.enabled;
+    let constraints = if notice {
+        vec![
+            Constraint::Length(4),
             Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(1),
-        ])
+        ]
+    } else {
+        vec![
+            Constraint::Length(4),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ]
+    };
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
         .split(area);
 
-    // Header
-    let total = rows.len();
-    let filtered = visible_project_count(rows, filter);
-    let count_str = if filter.is_empty() {
-        format!("{total} projects")
+    let (header_area, notice_area, body_area, footer_area) = if notice {
+        (layout[0], Some(layout[1]), layout[2], layout[3])
     } else {
-        format!("{filtered}/{total} projects")
+        (layout[0], None, layout[1], layout[2])
     };
-    let totals = project_totals(rows);
-    let header = Line::from(vec![
-        Span::styled(
-            " oobo · projects",
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(
-                "    {}  ·  {} anchors  ·  {} tok  ·  {}% AI ",
-                count_str,
-                totals.anchors,
-                super::format_tokens(totals.tokens),
-                totals.ai_pct
-            ),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(header), layout[0]);
 
-    // List
-    // Columns:
-    //   ● | name (flex)  path (flex, dim)  agent  when  anchors  tokens  AI%  on|off
-    let inner_w = layout[1].width.saturating_sub(2) as usize;
-    // Fixed trailing metadata width — each column gets right-aligned space.
-    // agent(8) + when(6) + anchors(6+1) + tokens(7) + ai%(5) + enabled(4) + gaps(~10)
-    let meta_w = 50usize;
-    let name_w = 22usize;
-    let path_w = inner_w.saturating_sub(meta_w + name_w + 3).max(10);
-
-    // Text color shown inside highlighted row so it stays readable on blue bg.
-    let dim_normal = Style::default().fg(Color::DarkGray);
-
-    let items: Vec<ListItem> = visible_projects(rows, filter)
-        .map(|r| {
-            let when = relative_time(r.last_activity);
-            let tokens = super::format_tokens(r.tokens);
-            let enabled_label = if r.enabled { "on" } else { "off" };
-            let dot_style = if r.enabled {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-            let dot = if r.enabled { "●" } else { "○" };
-
-            let name = pad_or_truncate(&r.name, name_w);
-            let path_display = display_path(&r.path);
-            let path = pad_or_truncate(&path_display, path_w);
-            let agent_raw = r
-                .last_agent
-                .as_deref()
-                .map(short_agent_label)
-                .unwrap_or("-");
-            let agent = pad_or_truncate(agent_raw, 8);
-
-            ListItem::new(Line::from(vec![
-                Span::styled(format!(" {dot} "), dot_style),
-                Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled(format!("  {path}"), dim_normal),
-                Span::styled(format!("  {agent}"), Style::default().fg(Color::Cyan)),
-                Span::styled(format!("  {when:>5}"), dim_normal),
-                Span::styled(format!("  {:>4}a", r.anchors), dim_normal),
-                Span::styled(format!("  {tokens:>6}"), dim_normal),
-                Span::styled(format!("  {:>3}% AI", r.ai_pct), dim_normal),
-                Span::styled(format!("  {enabled_label}"), dim_normal),
-            ]))
-        })
-        .collect();
-
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::NONE))
-        .highlight_style(
-            // Blue background with white foreground reads well in both
-            // light and dark terminals; bold makes the selection pop.
-            Style::default()
-                .bg(Color::Blue)
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▸ ");
-    frame.render_stateful_widget(list, layout[1], state);
-
-    // Footer
-    let footer = if filter_open {
+    // Header — identical to draw_header
+    let branch_str = sk.branch.unwrap_or("detached");
+    let dirty_label = if sk.dirty { "dirty" } else { "clean" };
+    let header_lines = vec![
         Line::from(vec![
             Span::styled(
-                " filter: ",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                "  anchor",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(filter.to_string()),
-            Span::styled("_", Style::default().fg(Color::Yellow)),
+            Span::styled(" / ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                "   (enter to apply · esc to clear)",
+                sk.project_name.to_string(),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled("  memory", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  ", Style::default()),
+            chip("branch", branch_str, Color::Cyan),
+            Span::styled("  ", Style::default()),
+            chip(
+                "tree",
+                dirty_label,
+                if sk.dirty {
+                    Color::Yellow
+                } else {
+                    Color::DarkGray
+                },
+            ),
+            Span::styled("  ", Style::default()),
+            chip("anchors", sk.anchor_remote, Color::Magenta),
+        ]),
+        Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("{spinner} loading"),
                 Style::default().fg(Color::DarkGray),
             ),
-        ])
-    } else {
-        Line::from(Span::styled(
-            " ↑↓ nav · enter open · / filter · r reload · q quit ",
-            Style::default().fg(Color::DarkGray),
-        ))
-    };
-    frame.render_widget(Paragraph::new(footer), layout[2]);
-}
+            Span::styled("   ", Style::default()),
+            Span::styled("window all", Style::default().fg(Color::Gray)),
+            Span::styled("   ", Style::default()),
+            Span::styled(
+                if sk.enabled {
+                    "tracking on"
+                } else {
+                    "tracking off"
+                },
+                if sk.enabled {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Red)
+                },
+            ),
+            Span::styled("   ", Style::default()),
+            Span::styled(
+                dirty_label,
+                if sk.dirty {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                },
+            ),
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(header_lines), header_area);
 
-fn display_path(path: &str) -> String {
-    if let Some(home) = std::env::var("HOME").ok() {
-        if let Some(rest) = path.strip_prefix(&home) {
-            return format!("~{rest}");
+    if let Some(na) = notice_area {
+        draw_tracking_notice(frame, na);
+    }
+
+    // Body — same 43/57 split as real feed, with skeleton placeholder lines
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(43), Constraint::Percentage(57)])
+        .split(body_area);
+
+    let list_block = Block::default().borders(Borders::NONE);
+    let list_inner = list_block.inner(body[0]);
+    frame.render_widget(list_block, body[0]);
+
+    let shimmer_chars = ["░", "▒", "░", " "];
+    let list_h = list_inner.height as usize;
+    let list_w = list_inner.width.saturating_sub(4) as usize;
+    let mut list_lines: Vec<Line<'_>> = Vec::new();
+    for i in 0..list_h {
+        if i < 8 {
+            let bar_len = match i {
+                0 => list_w * 75 / 100,
+                1 => list_w * 60 / 100,
+                2 => list_w * 80 / 100,
+                3 => list_w * 55 / 100,
+                4 => list_w * 70 / 100,
+                5 => list_w * 45 / 100,
+                6 => list_w * 65 / 100,
+                7 => list_w * 50 / 100,
+                _ => list_w * 60 / 100,
+            };
+            let ch = shimmer_chars[i % shimmer_chars.len()];
+            let bar: String = ch.repeat(bar_len);
+            list_lines.push(Line::from(Span::styled(
+                format!("  {bar}"),
+                Style::default().fg(Color::Rgb(40, 40, 50)),
+            )));
+        } else {
+            list_lines.push(Line::from(""));
         }
     }
-    path.to_string()
-}
+    frame.render_widget(Paragraph::new(list_lines), list_inner);
 
-fn short_agent_label(source: &str) -> &str {
-    let s = source.to_lowercase();
-    if s.contains("claude") {
-        "claude"
-    } else if s.contains("cursor") {
-        "cursor"
-    } else if s.contains("codex") {
-        "codex"
-    } else if s.contains("copilot") {
-        "copilot"
-    } else if s.contains("gemini") {
-        "gemini"
-    } else if s.contains("aider") {
-        "aider"
-    } else {
-        // Best-effort: show first 8 chars of whatever source label is.
-        source
-    }
-}
+    let detail_block = Block::default().borders(Borders::NONE);
+    let detail_inner = detail_block.inner(body[1]);
+    frame.render_widget(detail_block, body[1]);
 
-struct ProjectTotals {
-    anchors: i64,
-    tokens: i64,
-    ai_pct: i64,
-}
-
-fn project_totals(rows: &[ProjectPickerRow]) -> ProjectTotals {
-    let anchors: i64 = rows.iter().map(|r| r.anchors).sum();
-    let tokens: i64 = rows.iter().map(|r| r.tokens).sum();
-    let weighted: i64 = rows.iter().map(|r| r.anchors * r.ai_pct).sum();
-    let ai_pct = if anchors == 0 { 0 } else { weighted / anchors };
-    ProjectTotals {
-        anchors,
-        tokens,
-        ai_pct,
-    }
-}
-
-// ── Data ──────────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-pub struct AnchorRow {
-    pub sha: String,
-    pub timestamp: i64,
-    pub subject: String,
-    pub intent: Option<String>,
-    pub tool: Option<String>,
-    pub tokens: Option<i64>,
-    pub session_count: usize,
-}
-
-#[derive(Clone)]
-pub struct SessionLink {
-    pub session_id: String,
-    pub source: String,
-    pub model: Option<String>,
-    pub tokens: i64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TimeWindow {
-    All,
-    Day,
-    Week,
-    Month,
-}
-
-impl TimeWindow {
-    fn label(self) -> &'static str {
-        match self {
-            TimeWindow::All => "all",
-            TimeWindow::Day => "24h",
-            TimeWindow::Week => "7d",
-            TimeWindow::Month => "30d",
+    let detail_h = detail_inner.height as usize;
+    let mut detail_lines: Vec<Line<'_>> = Vec::new();
+    for i in 0..detail_h {
+        if i < 5 {
+            let bar_len = match i {
+                0 => 20,
+                1 => 35,
+                2 => 15,
+                3 => 25,
+                4 => 30,
+                _ => 20,
+            };
+            let ch = shimmer_chars[(i + 2) % shimmer_chars.len()];
+            let bar: String = ch.repeat(bar_len);
+            detail_lines.push(Line::from(Span::styled(
+                format!("  {bar}"),
+                Style::default().fg(Color::Rgb(40, 40, 50)),
+            )));
+        } else {
+            detail_lines.push(Line::from(""));
         }
     }
-    fn cutoff(self) -> Option<i64> {
-        let now = chrono::Utc::now().timestamp();
-        match self {
-            TimeWindow::All => None,
-            TimeWindow::Day => Some(now - 86_400),
-            TimeWindow::Week => Some(now - 7 * 86_400),
-            TimeWindow::Month => Some(now - 30 * 86_400),
-        }
-    }
-    fn cycle(self) -> Self {
-        match self {
-            TimeWindow::All => TimeWindow::Day,
-            TimeWindow::Day => TimeWindow::Week,
-            TimeWindow::Week => TimeWindow::Month,
-            TimeWindow::Month => TimeWindow::All,
-        }
-    }
+    frame.render_widget(Paragraph::new(detail_lines), detail_inner);
+
+    // Footer — same keybindings as real feed
+    let footer = Line::from(vec![
+        Span::styled(" ↑↓", Style::default().fg(Color::White)),
+        Span::styled(" move  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("enter", Style::default().fg(Color::White)),
+        Span::styled(" memory  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("/", Style::default().fg(Color::White)),
+        Span::styled(" filter  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("?", Style::default().fg(Color::White)),
+        Span::styled(" help  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("q", Style::default().fg(Color::White)),
+        Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+    ]);
+    frame.render_widget(Paragraph::new(footer), footer_area);
+}
+
+#[cfg(test)]
+pub fn run_projects(_cfg: &Config) -> Result<i32, String> {
+    println!("anchor: not a git repository. cd into a project and run `anchor` to see your anchor feed.");
+    Ok(0)
 }
 
 // ── App state ─────────────────────────────────────────────────────────
 
-pub struct App {
+pub(super) struct App {
     cfg: Config,
     root: String,
     project_id: String,
     project_name: String,
-    enabled: bool,
+    branch: Option<String>,
+    anchor_remote: String,
+    dirty: bool,
+    pub(super) enabled: bool,
     anchors: Vec<AnchorRow>,
     filter: String,
     time_window: TimeWindow,
@@ -628,92 +329,10 @@ pub struct App {
     flash: Option<String>,
 }
 
-enum View {
-    Feed(FeedState),
-    Transcript(TranscriptState),
-    Search(SearchState),
-    Picker(PickerState),
-    Help,
-}
-
-struct FeedState {
-    list: ListState,
-    filter_input_open: bool,
-}
-
-struct TranscriptState {
-    sessions: Vec<SessionLink>,
-    idx: usize,
-    project_path: String,
-    lines: Vec<Line<'static>>,
-    scroll: u16,
-    // in-transcript filter
-    filter: String,
-    filter_open: bool,
-    match_lines: Vec<usize>, // line indices that contain filter match
-    match_cursor: usize,     // current position in match_lines
-}
-
-struct SearchState {
-    query: String,
-    global: bool,
-    results: Vec<crate::commands::search::Hit>,
-    list: ListState,
-    running: bool,
-}
-
-/// Generic modal picker used for session and file selection.
-struct PickerState {
-    title: String,
-    list: ListState,
-    kind: PickerKind,
-}
-
-enum PickerKind {
-    Session {
-        sessions: Vec<SessionLink>,
-        project_path: String,
-    },
-    BlameFile {
-        files: Vec<String>,
-        sha: String,
-        root: String,
-    },
-}
-
-impl PickerState {
-    fn len(&self) -> usize {
-        match &self.kind {
-            PickerKind::Session { sessions, .. } => sessions.len(),
-            PickerKind::BlameFile { files, .. } => files.len(),
-        }
-    }
-    fn row_label(&self, i: usize) -> String {
-        match &self.kind {
-            PickerKind::Session { sessions, .. } => sessions
-                .get(i)
-                .map(|s| {
-                    let sid: String = s.session_id.chars().take(10).collect();
-                    let model = s.model.clone().unwrap_or_else(|| "-".into());
-                    let tok = if s.tokens > 0 {
-                        super::format_tokens(s.tokens)
-                    } else {
-                        "-".into()
-                    };
-                    format!(" {sid:<10}  {:<10}  {model:<20}  {tok}", s.source)
-                })
-                .unwrap_or_default(),
-            PickerKind::BlameFile { files, .. } => {
-                files.get(i).cloned().unwrap_or_default()
-            }
-        }
-    }
-}
-
 // ── Loading ───────────────────────────────────────────────────────────
 
 impl App {
-    fn load(cfg: Config, root: String) -> Result<Self, String> {
+    pub(super) fn load(cfg: Config, root: String) -> Result<Self, String> {
         let project_id = crate::project::id_for_root(&root);
         let project_name = std::path::Path::new(&root)
             .file_name()
@@ -721,10 +340,12 @@ impl App {
             .unwrap_or("unknown")
             .to_string();
 
-        let db = Db::open()?;
-        let settings = db.get_project_settings(&project_id).unwrap_or_default();
-        let enabled = !settings.ignored;
-        let anchors = load_anchors(&cfg, &db, &root, 500, TimeWindow::All)?;
+        let enabled = crate::project_config::is_enabled(&root);
+        let anchors = load_anchors(&cfg, &root, 500, TimeWindow::All)?;
+        let branch = current_branch(&root);
+        let anchor_remote =
+            crate::project_config::anchor_remote(&root).unwrap_or_else(|| "origin".to_string());
+        let dirty = worktree_dirty(&root);
 
         let mut feed = FeedState {
             list: ListState::default(),
@@ -739,6 +360,9 @@ impl App {
             root,
             project_id,
             project_name,
+            branch,
+            anchor_remote,
+            dirty,
             enabled,
             anchors,
             filter: String::new(),
@@ -749,13 +373,14 @@ impl App {
     }
 
     fn reload_anchors(&mut self) {
-        if let Ok(db) = Db::open() {
-            if let Ok(rows) = load_anchors(&self.cfg, &db, &self.root, 500, self.time_window) {
-                self.anchors = rows;
-            }
-            let settings = db.get_project_settings(&self.project_id).unwrap_or_default();
-            self.enabled = !settings.ignored;
+        if let Ok(rows) = load_anchors(&self.cfg, &self.root, 500, self.time_window) {
+            self.anchors = rows;
         }
+        self.enabled = crate::project_config::is_enabled(&self.root);
+        self.branch = current_branch(&self.root);
+        self.anchor_remote = crate::project_config::anchor_remote(&self.root)
+            .unwrap_or_else(|| "origin".to_string());
+        self.dirty = worktree_dirty(&self.root);
         if let Some(View::Feed(feed)) = self.stack.first_mut() {
             let visible = visible_anchor_count(&self.anchors, &self.filter);
             let sel = feed.list.selected().unwrap_or(0);
@@ -774,7 +399,9 @@ impl App {
             return None;
         };
         let idx = feed.list.selected()?;
-        visible_anchors(&self.anchors, &self.filter).nth(idx).cloned()
+        visible_anchors(&self.anchors, &self.filter)
+            .nth(idx)
+            .cloned()
     }
 
     fn flash(&mut self, msg: impl Into<String>) {
@@ -793,6 +420,10 @@ fn visible_anchors<'a>(
         }
         r.subject.to_ascii_lowercase().contains(&f)
             || r.sha.to_ascii_lowercase().contains(&f)
+            || r.session_id
+                .as_deref()
+                .map(|s| s.to_ascii_lowercase().contains(&f))
+                .unwrap_or(false)
             || r.intent
                 .as_deref()
                 .map(|s| s.to_ascii_lowercase().contains(&f))
@@ -810,7 +441,7 @@ fn visible_anchor_count(rows: &[AnchorRow], filter: &str) -> usize {
 
 // ── Event loop ────────────────────────────────────────────────────────
 
-fn event_loop(
+pub(super) fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
 ) -> Result<i32, String> {
@@ -909,7 +540,14 @@ fn handle_feed_key(
 
     match key.code {
         KeyCode::Char('q') => return Ok(true),
-        KeyCode::Esc => return Ok(true),
+        KeyCode::Esc => {
+            if app.filter.is_empty() {
+                return Ok(true);
+            }
+            app.filter.clear();
+            select_first_visible(app);
+            app.flash("filter cleared");
+        }
         KeyCode::Char('?') => {
             app.stack.push(View::Help);
         }
@@ -929,22 +567,47 @@ fn handle_feed_key(
             app.flash("reloaded");
         }
         KeyCode::Char('e') => toggle_enabled(app),
+        KeyCode::Char('c') => continue_selected_memory(terminal, app)?,
         KeyCode::Char('d') => {
             if let Some(anchor) = app.selected_anchor() {
-                suspend_and_run(terminal, || run_git_show(&app.root, &anchor.sha))?;
+                if anchor.kind == MemoryKind::Anchor {
+                    suspend_and_run(terminal, || run_git_show(&app.root, &anchor.sha))?;
+                } else {
+                    app.flash("this point has no git commit yet; press enter to inspect memory");
+                }
             }
         }
-        KeyCode::Char('b') => open_blame_picker(app),
+        KeyCode::Char('b') => {
+            if app
+                .selected_anchor()
+                .map(|a| a.kind == MemoryKind::Anchor)
+                .unwrap_or(false)
+            {
+                open_blame_picker(app)
+            } else {
+                app.flash("blame is available after this anchor is committed");
+            }
+        }
         KeyCode::Up | KeyCode::Char('k') => move_selection(app, -1),
         KeyCode::Down | KeyCode::Char('j') => move_selection(app, 1),
         KeyCode::PageUp => move_selection(app, -10),
         KeyCode::PageDown => move_selection(app, 10),
         KeyCode::Char('g') => move_to(app, 0),
         KeyCode::Char('G') => move_to(app, usize::MAX),
-        KeyCode::Enter | KeyCode::Char('s') => open_sessions_for_selected_anchor(app),
+        KeyCode::Enter | KeyCode::Char('s') => open_selected_memory(app),
         _ => {}
     }
     Ok(false)
+}
+
+fn select_first_visible(app: &mut App) {
+    if let Some(View::Feed(feed)) = app.stack.first_mut() {
+        if visible_anchor_count(&app.anchors, &app.filter) == 0 {
+            feed.list.select(None);
+        } else {
+            feed.list.select(Some(0));
+        }
+    }
 }
 
 // ── Transcript view keys ──────────────────────────────────────────────
@@ -1050,7 +713,11 @@ fn recompute_transcript_matches(ts: &mut TranscriptState) {
         return;
     }
     for (i, line) in ts.lines.iter().enumerate() {
-        let text = line.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        let text = line
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
         if text.to_ascii_lowercase().contains(&needle) {
             ts.match_lines.push(i);
         }
@@ -1162,8 +829,7 @@ fn run_search(app: &mut App) {
         tool: None,
         limit: 100,
     };
-    let hits = crate::commands::search::collect_local(&app.cfg, &query, &opts)
-        .unwrap_or_default();
+    let hits = crate::commands::search::collect_local(&app.cfg, &query, &opts).unwrap_or_default();
     if let Some(View::Search(state)) = app.stack.last_mut() {
         state.running = false;
         state.results = hits;
@@ -1227,7 +893,7 @@ fn open_search_hit(app: &mut App) {
 
     // Anchor hit → load its sessions and open the first transcript.
     if let Some(sha) = anchor_sha {
-        let sessions = load_sessions_for_anchor(&sha);
+        let sessions = load_sessions_for_anchor(&project_path, &sha);
         if sessions.is_empty() {
             app.flash("no sessions linked to this anchor");
             return;
@@ -1295,21 +961,6 @@ fn picker_move(p: &mut PickerState, delta: i32) {
     let cur = p.list.selected().unwrap_or(0) as i32;
     let next = (cur + delta).clamp(0, n - 1);
     p.list.select(Some(next as usize));
-}
-
-enum PickerAction {
-    OpenSession {
-        session: SessionLink,
-        project_path: String,
-        siblings: Vec<SessionLink>,
-        idx: usize,
-    },
-    Blame {
-        root: String,
-        file: String,
-        sha: String,
-    },
-    Noop,
 }
 
 fn resolve_picker_action(p: &PickerState) -> PickerAction {
@@ -1397,13 +1048,48 @@ fn move_to(app: &mut App, idx: usize) {
     }
 }
 
-/// Open transcript for the selected anchor. If it has a single session,
-/// open it directly. If multiple, push a session picker.
-fn open_sessions_for_selected_anchor(app: &mut App) {
+fn open_selected_memory(app: &mut App) {
     let Some(anchor) = app.selected_anchor() else {
         return;
     };
-    let sessions = load_sessions_for_anchor(&anchor.sha);
+    match anchor.kind {
+        MemoryKind::Anchor => open_sessions_for_anchor_row(app, &anchor),
+        MemoryKind::ShadowAnchor => open_shadow_memory(app, &anchor),
+    }
+}
+
+fn continue_selected_memory(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+) -> Result<(), String> {
+    let Some(anchor) = app.selected_anchor() else {
+        return Ok(());
+    };
+    if anchor.kind != MemoryKind::ShadowAnchor {
+        app.flash("continue is for working memory");
+        return Ok(());
+    }
+    if worktree_dirty(&app.root) {
+        app.dirty = true;
+        app.flash(format!(
+            "worktree dirty; run `anchor from turn {} --load --force`",
+            short_sha(&anchor.sha)
+        ));
+        return Ok(());
+    }
+
+    let root = app.root.clone();
+    let turn_id = anchor.sha.clone();
+    suspend_and_run(terminal, || run_oobo_from_turn(&root, &turn_id))?;
+    app.reload_anchors();
+    app.flash("loaded working memory");
+    Ok(())
+}
+
+/// Open transcript for the selected anchor. If it has a single session,
+/// open it directly. If multiple, push a session picker.
+fn open_sessions_for_anchor_row(app: &mut App, anchor: &AnchorRow) {
+    let sessions = load_sessions_for_anchor(&app.root, &anchor.sha);
     if sessions.is_empty() {
         app.flash("no sessions linked to this anchor");
         return;
@@ -1434,6 +1120,51 @@ fn open_sessions_for_selected_anchor(app: &mut App) {
             sessions,
             project_path: app.root.clone(),
         },
+    }));
+}
+
+fn open_shadow_memory(app: &mut App, shadow: &AnchorRow) {
+    let Some(session_id) = shadow.session_id.clone() else {
+        app.flash("no session captured for this anchor");
+        return;
+    };
+    let source = shadow.tool.clone().unwrap_or_else(|| "unknown".to_string());
+    let session = SessionLink {
+        session_id,
+        source,
+        model: None,
+        tokens: 0,
+    };
+    let mut lines = load_transcript_lines(&app.root, &session);
+    if lines.is_empty() {
+        lines = vec![
+            Line::from(Span::styled(
+                "anchor memory",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(format!("prompt: {}", shadow.subject)),
+            Line::from(format!("files:  {}", shadow.files)),
+            Line::from(format!("tools:  {}", shadow.tool_calls)),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Use `anchor from turn <id> --load` to restore this point.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+    }
+    app.stack.push(View::Transcript(TranscriptState {
+        sessions: vec![session],
+        idx: 0,
+        project_path: app.root.clone(),
+        lines,
+        scroll: 0,
+        filter: String::new(),
+        filter_open: false,
+        match_lines: Vec::new(),
+        match_cursor: 0,
     }));
 }
 
@@ -1482,20 +1213,12 @@ fn open_blame_picker(app: &mut App) {
 }
 
 fn toggle_enabled(app: &mut App) {
-    let Ok(db) = Db::open() else {
-        app.flash("cannot open db");
-        return;
-    };
-    let mut settings = db.get_project_settings(&app.project_id).unwrap_or_default();
-    settings.ignored = !settings.ignored;
-    if db
-        .set_project_settings(&app.project_id, &settings)
-        .is_err()
-    {
+    let next_enabled = !crate::project_config::is_enabled(&app.root);
+    if crate::project_config::set_enabled(&app.root, &app.project_id, next_enabled).is_err() {
         app.flash("cannot update settings");
         return;
     }
-    app.enabled = !settings.ignored;
+    app.enabled = crate::project_config::is_enabled(&app.root);
     app.flash(if app.enabled {
         "tracking enabled"
     } else {
@@ -1505,10 +1228,7 @@ fn toggle_enabled(app: &mut App) {
 
 // ── External commands (suspend/restore TUI) ──────────────────────────
 
-fn suspend_and_run<F>(
-    terminal: &mut ratatui::DefaultTerminal,
-    f: F,
-) -> Result<(), String>
+fn suspend_and_run<F>(terminal: &mut ratatui::DefaultTerminal, f: F) -> Result<(), String>
 where
     F: FnOnce() -> Result<(), String>,
 {
@@ -1534,14 +1254,30 @@ fn run_git_show(root: &str, sha: &str) -> Result<(), String> {
 }
 
 fn run_oobo_blame(root: &str, file: &str, sha: &str) -> Result<(), String> {
-    let oobo = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("oobo"));
+    let oobo = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("anchor"));
     let status = std::process::Command::new(oobo)
         .args(["blame", file, sha])
         .current_dir(root)
         .status()
-        .map_err(|e| format!("spawn oobo blame: {e}"))?;
+        .map_err(|e| format!("spawn anchor blame: {e}"))?;
     if !status.success() {
-        return Err(format!("oobo blame exited {status}"));
+        return Err(format!("anchor blame exited {status}"));
+    }
+    println!("\npress enter to return...");
+    let mut buf = String::new();
+    let _ = std::io::stdin().read_line(&mut buf);
+    Ok(())
+}
+
+fn run_oobo_from_turn(root: &str, turn_id: &str) -> Result<(), String> {
+    let oobo = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("anchor"));
+    let status = std::process::Command::new(oobo)
+        .args(["from", "turn", turn_id, "--load"])
+        .current_dir(root)
+        .status()
+        .map_err(|e| format!("spawn anchor from: {e}"))?;
+    if !status.success() {
+        return Err(format!("anchor from exited {status}"));
     }
     println!("\npress enter to return...");
     let mut buf = String::new();
@@ -1553,24 +1289,24 @@ fn run_oobo_blame(root: &str, file: &str, sha: &str) -> Result<(), String> {
 
 fn load_anchors(
     cfg: &Config,
-    db: &Db,
     project_root: &str,
     limit: usize,
     window: TimeWindow,
 ) -> Result<Vec<AnchorRow>, String> {
-    // Walk git log as source of truth (authoritative subject + timestamp),
-    // then enrich each commit with AI session data from the DB.
     let n = limit.max(1);
     let log = crate::git::proxy::run_git_capture_in(
         cfg,
-        &[
-            "log",
-            &format!("-{}", n),
-            "--format=%H|||%s|||%ct",
-        ],
+        &["log", &format!("-{}", n), "--format=%H|||%s|||%ct"],
         Some(project_root),
     )
     .unwrap_or_default();
+
+    let (all_anchors, all_links) =
+        crate::git::anchor_cache::load_anchors_cached(project_root);
+    let anchor_map: HashMap<String, &crate::core::anchor::Anchor> = all_anchors
+        .iter()
+        .map(|a| (a.commit_hash.clone(), a))
+        .collect();
 
     let cutoff = window.cutoff().unwrap_or(0);
     let mut rows: Vec<AnchorRow> = Vec::new();
@@ -1582,26 +1318,36 @@ fn load_anchors(
         let sha = parts[0].to_string();
         let subject_git = parts[1].to_string();
         let ts: i64 = parts[2].parse().unwrap_or(0);
-
         if ts < cutoff {
             continue;
         }
 
-        // Pull intent from anchors table when present; otherwise use commit subject.
-        let (intent, _msg_db) = load_anchor_meta(db, &sha);
-        let subject = intent
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                if subject_git.is_empty() {
-                    "(no subject)".to_string()
-                } else {
-                    subject_git.clone()
-                }
-            });
+        let (anchor_opt, summary) = if let Some(anchor) = anchor_map.get(&sha) {
+            let links = all_links.get(&sha).cloned().unwrap_or_default();
+            let s = summarize_from_links(&links);
+            (Some((*anchor).clone()), s)
+        } else {
+            (
+                None,
+                AnchorSummary {
+                    tool: None,
+                    tokens: None,
+                    count: 0,
+                },
+            )
+        };
 
-        let summary = summarize_sessions(db, &sha);
+        let intent = anchor_opt.as_ref().and_then(|a| a.intent.clone());
+        let subject = intent.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| {
+            if subject_git.is_empty() {
+                "(no subject)".to_string()
+            } else {
+                subject_git.clone()
+            }
+        });
+
         rows.push(AnchorRow {
+            kind: MemoryKind::Anchor,
             sha,
             timestamp: ts,
             subject,
@@ -1609,28 +1355,150 @@ fn load_anchors(
             tool: summary.tool,
             tokens: summary.tokens,
             session_count: summary.count,
+            files: 0,
+            tool_calls: 0,
+            turn_index: None,
+            session_id: None,
+            parent_anchor: None,
         });
-        if rows.len() >= limit {
-            break;
-        }
     }
+    let parents = build_shadow_parents_from_cached(&all_anchors);
+    rows.extend(load_shadow_rows(project_root, window, &parents));
+    sort_memory_rows(&mut rows);
+    rows.truncate(limit);
     Ok(rows)
 }
 
-fn load_anchor_meta(db: &Db, commit_hash: &str) -> (Option<String>, Option<String>) {
-    use rusqlite::params;
-    db.conn
-        .query_row(
-            "SELECT intent, message FROM anchors WHERE commit_hash = ?1",
-            params![commit_hash],
-            |row| {
-                Ok((
-                    row.get::<_, Option<String>>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                ))
-            },
-        )
-        .unwrap_or((None, None))
+fn load_shadow_rows(
+    project_root: &str,
+    window: TimeWindow,
+    parents: &HashMap<String, String>,
+) -> Vec<AnchorRow> {
+    let cutoff = window.cutoff().unwrap_or(0);
+    crate::git::turns::list_turn_snapshots(project_root)
+        .into_iter()
+        .filter_map(|turn| {
+            let ts = turn.ended_at.or(turn.started_at).unwrap_or(turn.created_at);
+            if ts < cutoff {
+                return None;
+            }
+            Some(AnchorRow {
+                kind: MemoryKind::ShadowAnchor,
+                sha: turn.id.clone(),
+                timestamp: ts,
+                subject: shadow_subject(&turn),
+                intent: None,
+                tool: Some(turn.source.clone()),
+                tokens: None,
+                session_count: 1,
+                files: turn_file_count(&turn),
+                tool_calls: turn.memory.tool_calls.len(),
+                turn_index: Some(turn.turn_index),
+                session_id: Some(turn.session_id.clone()),
+                parent_anchor: parents.get(&turn.id).cloned(),
+            })
+        })
+        .collect()
+}
+
+fn shadow_subject(turn: &crate::core::turn::TurnSnapshot) -> String {
+    for event in &turn.memory.hook_events {
+        let Some(payload) = event.payload.as_ref() else {
+            continue;
+        };
+        for key in ["prompt", "message", "text", "input"] {
+            if let Some(value) = payload.get(key).and_then(|v| v.as_str()) {
+                let value = value.lines().next().unwrap_or(value).trim();
+                if !value.is_empty() {
+                    return value.to_string();
+                }
+            }
+        }
+    }
+    format!("anchor #{}", turn.turn_index)
+}
+
+fn turn_file_count(turn: &crate::core::turn::TurnSnapshot) -> usize {
+    let mut files = std::collections::HashSet::new();
+    for call in &turn.memory.tool_calls {
+        if let Some(input) = call.input.as_ref() {
+            collect_file_paths_from_value(input, &mut files);
+        }
+    }
+    for event in &turn.memory.hook_events {
+        if let Some(payload) = event.payload.as_ref() {
+            collect_file_paths_from_value(payload, &mut files);
+        }
+    }
+    if files.is_empty() {
+        turn.files.len()
+    } else {
+        files.len()
+    }
+}
+
+fn collect_file_paths_from_value(
+    value: &serde_json::Value,
+    files: &mut std::collections::HashSet<String>,
+) {
+    for key in ["file_path", "path"] {
+        if let Some(path) = value.get(key).and_then(|v| v.as_str()) {
+            push_counted_file(path, files);
+        }
+    }
+    for key in ["modified_files", "files", "file_paths"] {
+        if let Some(items) = value.get(key).and_then(|v| v.as_array()) {
+            for item in items {
+                if let Some(path) = item.as_str() {
+                    push_counted_file(path, files);
+                }
+            }
+        }
+    }
+    if let Some(input) = value.get("tool_input") {
+        collect_file_paths_from_value(input, files);
+    }
+}
+
+fn push_counted_file(path: &str, files: &mut std::collections::HashSet<String>) {
+    if path.is_empty() || path == "." || path.ends_with('/') {
+        return;
+    }
+    files.insert(path.to_string());
+}
+
+fn build_shadow_parents_from_cached(
+    all_anchors: &[crate::core::anchor::Anchor],
+) -> HashMap<String, String> {
+    let mut parents = HashMap::new();
+    for anchor in all_anchors {
+        for turn in &anchor.turns {
+            parents
+                .entry(turn.id.clone())
+                .or_insert_with(|| anchor.commit_hash.clone());
+        }
+    }
+    parents
+}
+
+fn sort_memory_rows(rows: &mut [AnchorRow]) {
+    rows.sort_by(|a, b| {
+        if a.parent_anchor.as_deref() == Some(b.sha.as_str()) {
+            return std::cmp::Ordering::Greater;
+        }
+        if b.parent_anchor.as_deref() == Some(a.sha.as_str()) {
+            return std::cmp::Ordering::Less;
+        }
+        if a.parent_anchor.is_some() && a.parent_anchor == b.parent_anchor {
+            return a
+                .turn_index
+                .cmp(&b.turn_index)
+                .then_with(|| a.sha.cmp(&b.sha));
+        }
+        b.timestamp
+            .cmp(&a.timestamp)
+            .then_with(|| b.sha.cmp(&a.sha))
+    });
 }
 
 struct AnchorSummary {
@@ -1639,111 +1507,51 @@ struct AnchorSummary {
     count: usize,
 }
 
-fn summarize_sessions(db: &Db, commit_hash: &str) -> AnchorSummary {
-    use rusqlite::params;
-
-    // Prefer v11 canonical per-anchor totals (delta windows, no
-    // double-counting). Only when v_anchor_totals has no row for
-    // this commit do we fall back to the legacy anchor_sessions
-    // cumulative shape — a backfill gap rather than a correct path.
-    if let Ok((sessions, billed)) = db.conn.query_row(
-        "SELECT contributing_sessions, billed_tokens \
-         FROM v_anchor_totals WHERE commit_hash = ?1",
-        params![commit_hash],
-        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
-    ) {
-        if sessions > 0 {
-            let tool: Option<String> = db
-                .conn
-                .query_row(
-                    "SELECT source FROM anchor_contributions \
-                     WHERE commit_hash = ?1 AND is_subagent = 0 \
-                     ORDER BY output_tokens DESC NULLS LAST LIMIT 1",
-                    params![commit_hash],
-                    |r| r.get::<_, String>(0),
-                )
-                .ok();
-            return AnchorSummary {
-                tool,
-                tokens: if billed > 0 { Some(billed) } else { None },
-                count: sessions as usize,
-            };
-        }
+fn summarize_from_links(links: &[crate::core::anchor::SessionLink]) -> AnchorSummary {
+    if links.is_empty() {
+        return AnchorSummary {
+            tool: None,
+            tokens: None,
+            count: 0,
+        };
     }
-
-    let mut count = 0usize;
-    let mut tokens: i64 = 0;
-    let mut tool: Option<String> = None;
-    let sql = "SELECT agent, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
-               FROM anchor_sessions WHERE commit_hash = ?1";
-    if let Ok(mut stmt) = db.conn.prepare(sql) {
-        if let Ok(rows) = stmt.query_map(params![commit_hash], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<i64>>(1)?.unwrap_or(0),
-                row.get::<_, Option<i64>>(2)?.unwrap_or(0),
-                row.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                row.get::<_, Option<i64>>(4)?.unwrap_or(0),
-            ))
-        }) {
-            for r in rows.flatten() {
-                count += 1;
-                tokens += r.1 + r.2 + r.3 + r.4;
-                if tool.is_none() {
-                    tool = Some(r.0);
-                }
-            }
-        }
-    }
+    let tool = Some(links[0].agent.clone());
+    let total: i64 = links
+        .iter()
+        .map(|l| {
+            l.input_tokens.unwrap_or(0) as i64
+                + l.output_tokens.unwrap_or(0) as i64
+                + l.cache_read_tokens.unwrap_or(0) as i64
+                + l.cache_creation_tokens.unwrap_or(0) as i64
+        })
+        .sum();
     AnchorSummary {
         tool,
-        tokens: if tokens == 0 { None } else { Some(tokens) },
-        count,
+        tokens: if total == 0 { None } else { Some(total) },
+        count: links.len(),
     }
 }
 
-fn load_sessions_for_anchor(commit_hash: &str) -> Vec<SessionLink> {
-    use rusqlite::params;
-    let Ok(db) = Db::open() else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    let sql = "SELECT session_id, agent, model,
-                      COALESCE(input_tokens,0) + COALESCE(output_tokens,0)
-                      + COALESCE(cache_read_tokens,0) + COALESCE(cache_creation_tokens,0)
-               FROM anchor_sessions WHERE commit_hash = ?1";
-    if let Ok(mut stmt) = db.conn.prepare(sql) {
-        if let Ok(rows) = stmt.query_map(params![commit_hash], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
-        }) {
-            for r in rows.flatten() {
-                out.push(SessionLink {
-                    session_id: r.0,
-                    source: r.1,
-                    model: r.2,
-                    tokens: r.3,
-                });
+fn load_sessions_for_anchor(project_root: &str, commit_hash: &str) -> Vec<SessionLink> {
+    crate::git::orphan::read_session_links(project_root, commit_hash)
+        .into_iter()
+        .map(|l| {
+            let tokens = l.input_tokens.unwrap_or(0) as i64
+                + l.output_tokens.unwrap_or(0) as i64
+                + l.cache_read_tokens.unwrap_or(0) as i64
+                + l.cache_creation_tokens.unwrap_or(0) as i64;
+            SessionLink {
+                session_id: l.session_id,
+                source: l.agent,
+                model: l.model,
+                tokens,
             }
-        }
-    }
-    out
+        })
+        .collect()
 }
 
-fn lookup_project_path(project_id: &str) -> Option<String> {
-    use rusqlite::params;
-    let db = Db::open().ok()?;
-    db.conn
-        .query_row(
-            "SELECT path FROM projects WHERE id = ?1",
-            params![project_id],
-            |row| row.get::<_, String>(0),
-        )
-        .ok()
+fn lookup_project_path(_project_id: &str) -> Option<String> {
+    None
 }
 
 fn touched_files_for(root: &str, sha: &str) -> Vec<String> {
@@ -1768,294 +1576,40 @@ fn touched_files_for(root: &str, sha: &str) -> Vec<String> {
         .collect()
 }
 
-fn load_transcript_lines(project_root: &str, s: &SessionLink) -> Vec<Line<'static>> {
-    let messages =
-        crate::session::parse_messages_for_session(project_root, &s.session_id, &s.source);
-    if messages.is_empty() {
-        return vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                "  (transcript not available for this session)",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                format!("  session {} · {}", &s.session_id, s.source),
-                Style::default().fg(Color::DarkGray),
-            )),
-        ];
+fn current_branch(root: &str) -> Option<String> {
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+    let output = std::process::Command::new(git)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
     }
-    let mut out: Vec<Line<'static>> = Vec::new();
-    for m in &messages {
-        render_message(&mut out, m);
-    }
-    out
-}
-
-fn render_message(out: &mut Vec<Line<'static>>, m: &crate::core::message::Message) {
-    let role = role_label(&m.role);
-    let r_style = role_style(&m.role);
-
-    let ts = timestamp_short(m.timestamp_ms);
-    let ts_part = if ts.is_empty() {
-        String::new()
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() {
+        None
     } else {
-        format!("  {ts}")
+        Some(branch)
+    }
+}
+
+fn worktree_dirty(root: &str) -> bool {
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+    let Ok(output) = std::process::Command::new(git)
+        .args(["status", "--porcelain"])
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return false;
     };
-
-    // ── Message header with separator bar ──
-    let separator: String = "─".repeat(60);
-    out.push(Line::from(Span::styled(
-        format!("  {separator}"),
-        Style::default().fg(Color::DarkGray),
-    )));
-    out.push(Line::from(vec![
-        Span::styled(
-            format!("  {role}"),
-            r_style.add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(ts_part, Style::default().fg(Color::DarkGray)),
-    ]));
-    out.push(Line::from(""));
-
-    // ── Body: markdown-aware rendering ──
-    let text = &m.text;
-    let body_style = match m.role.as_str() {
-        "tool" => Style::default().fg(Color::DarkGray),
-        _ => Style::default(),
-    };
-
-    let mut in_code_block = false;
-    let mut code_lang = String::new();
-
-    for raw_line in text.lines() {
-        // Toggle code fences
-        if raw_line.trim_start().starts_with("```") {
-            if in_code_block {
-                // Closing fence
-                out.push(Line::from(Span::styled(
-                    "  └───",
-                    Style::default().fg(Color::DarkGray),
-                )));
-                in_code_block = false;
-                code_lang.clear();
-                continue;
-            } else {
-                // Opening fence — extract language tag
-                code_lang = raw_line
-                    .trim_start()
-                    .trim_start_matches('`')
-                    .trim()
-                    .to_string();
-                let label = if code_lang.is_empty() {
-                    "  ┌─── code".to_string()
-                } else {
-                    format!("  ┌─── {code_lang}")
-                };
-                out.push(Line::from(Span::styled(
-                    label,
-                    Style::default().fg(Color::DarkGray),
-                )));
-                in_code_block = true;
-                continue;
-            }
-        }
-
-        if in_code_block {
-            // Code lines: dim green on dark bg, indented with gutter
-            out.push(Line::from(vec![
-                Span::styled("  │ ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    raw_line.to_string(),
-                    Style::default().fg(Color::Yellow),
-                ),
-            ]));
-            continue;
-        }
-
-        let trimmed = raw_line.trim();
-
-        // Empty lines
-        if trimmed.is_empty() {
-            out.push(Line::from(""));
-            continue;
-        }
-
-        // Markdown headings
-        if trimmed.starts_with("### ") {
-            out.push(Line::from(Span::styled(
-                format!("  {}", &trimmed[4..]),
-                body_style.fg(Color::White).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            )));
-            continue;
-        }
-        if trimmed.starts_with("## ") {
-            out.push(Line::from(Span::styled(
-                format!("  {}", &trimmed[3..]),
-                body_style.fg(Color::White).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            )));
-            continue;
-        }
-        if trimmed.starts_with("# ") {
-            out.push(Line::from(Span::styled(
-                format!("  {}", &trimmed[2..]),
-                body_style.fg(Color::White).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            )));
-            continue;
-        }
-
-        // Bullet lists
-        if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
-            let indent = raw_line.len() - raw_line.trim_start().len();
-            let pad = " ".repeat(indent + 2);
-            out.push(Line::from(vec![
-                Span::raw(pad),
-                Span::styled("• ", body_style.fg(Color::Cyan)),
-                Span::styled(trimmed[2..].to_string(), body_style),
-            ]));
-            continue;
-        }
-
-        // Numbered lists
-        if let Some(rest) = strip_numbered_prefix(trimmed) {
-            out.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(
-                    format!("{}. ", trimmed.split('.').next().unwrap_or("1")),
-                    body_style.fg(Color::Cyan),
-                ),
-                Span::styled(rest.to_string(), body_style),
-            ]));
-            continue;
-        }
-
-        // Regular text with inline formatting
-        out.push(render_inline_markdown(raw_line, body_style));
-    }
-
-    // Close an unclosed code block
-    if in_code_block {
-        out.push(Line::from(Span::styled(
-            "  └───",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-
-    out.push(Line::from(""));
-}
-
-/// Render a line of text with inline `code`, **bold**, and *italic* spans.
-fn render_inline_markdown(line: &str, base: Style) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    spans.push(Span::raw("  ")); // left margin
-
-    let chars: Vec<char> = line.chars().collect();
-    let len = chars.len();
-    let mut i = 0;
-    let mut buf = String::new();
-
-    while i < len {
-        // Inline code: `...`
-        if chars[i] == '`' && !matches!(chars.get(i + 1), Some('`')) {
-            if !buf.is_empty() {
-                spans.push(Span::styled(buf.clone(), base));
-                buf.clear();
-            }
-            i += 1;
-            let mut code = String::new();
-            while i < len && chars[i] != '`' {
-                code.push(chars[i]);
-                i += 1;
-            }
-            if i < len {
-                i += 1; // skip closing `
-            }
-            spans.push(Span::styled(
-                code,
-                Style::default().fg(Color::Yellow),
-            ));
-            continue;
-        }
-
-        // Bold: **...**
-        if chars[i] == '*'
-            && chars.get(i + 1) == Some(&'*')
-            && i + 2 < len
-            && chars[i + 2] != '*'
-        {
-            if !buf.is_empty() {
-                spans.push(Span::styled(buf.clone(), base));
-                buf.clear();
-            }
-            i += 2;
-            let mut bold = String::new();
-            while i + 1 < len && !(chars[i] == '*' && chars[i + 1] == '*') {
-                bold.push(chars[i]);
-                i += 1;
-            }
-            if i + 1 < len {
-                i += 2; // skip **
-            }
-            spans.push(Span::styled(
-                bold,
-                base.add_modifier(Modifier::BOLD),
-            ));
-            continue;
-        }
-
-        buf.push(chars[i]);
-        i += 1;
-    }
-
-    if !buf.is_empty() {
-        spans.push(Span::styled(buf, base));
-    }
-
-    Line::from(spans)
-}
-
-/// Check if a line starts with "1. ", "2. ", etc. and return the rest.
-fn strip_numbered_prefix(s: &str) -> Option<&str> {
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() && bytes[i].is_ascii_digit() {
-        i += 1;
-    }
-    if i > 0 && i < bytes.len() && bytes[i] == b'.' {
-        if i + 1 < bytes.len() && bytes[i + 1] == b' ' {
-            return Some(&s[i + 2..]);
-        }
-    }
-    None
-}
-
-fn role_label(role: &str) -> &'static str {
-    match role {
-        "user" => "You",
-        "assistant" => "AI",
-        "system" => "System",
-        "tool" => "Tool",
-        _ => "?",
-    }
-}
-
-fn role_style(role: &str) -> Style {
-    match role {
-        "user" => Style::default().fg(Color::Cyan),
-        "assistant" => Style::default().fg(Color::Green),
-        "system" => Style::default().fg(Color::DarkGray),
-        "tool" => Style::default().fg(Color::Magenta),
-        _ => Style::default(),
-    }
-}
-
-fn timestamp_short(ts_ms: Option<i64>) -> String {
-    match ts_ms {
-        Some(ms) => chrono::DateTime::from_timestamp(ms / 1000, 0)
-            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-            .unwrap_or_default(),
-        None => String::new(),
-    }
+    output.status.success() && !String::from_utf8_lossy(&output.stdout).trim().is_empty()
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────
@@ -2067,7 +1621,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
     if let Some(first) = app.stack.first() {
         match first {
             View::Feed(feed) => draw_feed(frame, app, feed),
-            View::Transcript(ts) => draw_transcript(frame, app, ts),
+            View::Transcript(ts) => super::transcript::draw_transcript(frame, ts),
             View::Search(s) => draw_search(frame, app, s),
             View::Picker(_) | View::Help => {}
         }
@@ -2078,7 +1632,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
         if let Some(top) = app.stack.last() {
             match top {
                 View::Feed(_) => {} // already drawn as root
-                View::Transcript(ts) => draw_transcript(frame, app, ts),
+                View::Transcript(ts) => super::transcript::draw_transcript(frame, ts),
                 View::Search(s) => draw_search(frame, app, s),
                 View::Picker(p) => draw_picker_overlay(frame, p),
                 View::Help => draw_help_overlay(frame),
@@ -2091,134 +1645,303 @@ fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
 
 fn draw_feed(frame: &mut ratatui::Frame<'_>, app: &App, feed: &FeedState) {
     let area = frame.area();
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
+    let notice = !app.enabled;
+    let constraints = if notice {
+        vec![
+            Constraint::Length(4),
             Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(1),
-        ])
+        ]
+    } else {
+        vec![
+            Constraint::Length(4),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ]
+    };
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
         .split(area);
 
-    draw_header(frame, app, layout[0]);
+    let (header_area, notice_area, body_area, footer_area) = if notice {
+        (layout[0], Some(layout[1]), layout[2], layout[3])
+    } else {
+        (layout[0], None, layout[1], layout[2])
+    };
 
-    // Empty state
+    draw_header(frame, app, header_area);
+
+    if let Some(na) = notice_area {
+        draw_tracking_notice(frame, na);
+    }
+
     if app.anchors.is_empty() {
-        draw_empty_state(frame, app, layout[1]);
-        draw_footer(frame, app, feed, layout[2]);
+        draw_empty_state(frame, app, body_area);
+        draw_footer(frame, app, feed, footer_area);
+        return;
+    }
+    if visible_anchor_count(&app.anchors, &app.filter) == 0 {
+        draw_filtered_empty_state(frame, app, body_area);
+        draw_footer(frame, app, feed, footer_area);
         return;
     }
 
     let body = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-        .split(layout[1]);
+        .constraints([Constraint::Percentage(43), Constraint::Percentage(57)])
+        .split(body_area);
 
     draw_anchor_list(frame, app, feed, body[0]);
     draw_anchor_detail(frame, app, body[1]);
-    draw_footer(frame, app, feed, layout[2]);
+    draw_footer(frame, app, feed, footer_area);
+}
+
+fn draw_tracking_notice(frame: &mut ratatui::Frame<'_>, area: Rect) {
+    let line = Line::from(vec![
+        Span::styled("  tracking off", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " — new sessions won't be captured on commit. press ",
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::styled("e", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(" to enable", Style::default().fg(Color::Yellow)),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_empty_state(frame: &mut ratatui::Frame<'_>, app: &App, area: Rect) {
-    let hints: Vec<Line<'static>> = vec![
+    let hints: Vec<Line<'static>> = if !app.enabled {
+        vec![
+            Line::from(""),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("  anchor is not tracking \"{}\"", app.project_name),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  anchor captures AI sessions and links them to your commits.",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "  enable tracking to start building memory for this project.",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  · press ", Style::default().fg(Color::Gray)),
+                Span::styled("e", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(" to enable tracking now", Style::default().fg(Color::Gray)),
+            ]),
+            Line::from(Span::styled(
+                "  · or run:  anchor enable", Style::default().fg(Color::Gray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  press ? for keybindings · q to quit",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]
+    } else {
+        vec![
+            Line::from(""),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("  no memory yet for \"{}\"", app.project_name),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  anchor captures working memory as you go and makes it durable when you commit.",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  · make a commit:   anchor commit -m \"your message\"",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  · (re)install git alias:  anchor alias install",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  · index existing sessions: anchor setup",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  press ? for keybindings · q to quit",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]
+    };
+    frame.render_widget(Paragraph::new(hints).wrap(Wrap { trim: false }), area);
+}
+
+fn draw_filtered_empty_state(frame: &mut ratatui::Frame<'_>, app: &App, area: Rect) {
+    let lines: Vec<Line<'static>> = vec![
         Line::from(""),
         Line::from(""),
         Line::from(Span::styled(
-            format!("  no anchors yet for \"{}\"", app.project_name),
+            "  no memory items match this filter",
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from(Span::styled(
-            "  an anchor is created each time you commit with oobo active.",
-            Style::default().fg(Color::DarkGray),
-        )),
+        Line::from(vec![
+            Span::styled("  filter ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("\"{}\"", app.filter),
+                Style::default().fg(Color::Yellow),
+            ),
+        ]),
         Line::from(""),
         Line::from(Span::styled(
-            "  · make a commit:   oobo commit -m \"your message\"",
-            Style::default().fg(Color::Gray),
-        )),
-        Line::from(Span::styled(
-            "  · (re)install git alias:  oobo alias install",
-            Style::default().fg(Color::Gray),
-        )),
-        Line::from(Span::styled(
-            "  · index existing sessions: oobo setup",
-            Style::default().fg(Color::Gray),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  press ? for keybindings · q to quit",
+            "  press / to search again · esc to clear · ? for keybindings",
             Style::default().fg(Color::DarkGray),
         )),
     ];
-    frame.render_widget(
-        Paragraph::new(hints).wrap(Wrap { trim: false }),
-        area,
-    );
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
 fn draw_header(frame: &mut ratatui::Frame<'_>, app: &App, area: Rect) {
-    let total_anchors = app.anchors.len();
+    let total_items = app.anchors.len();
     let filtered = visible_anchor_count(&app.anchors, &app.filter);
+    let committed = app
+        .anchors
+        .iter()
+        .filter(|r| r.kind == MemoryKind::Anchor)
+        .count();
+    let working = total_items.saturating_sub(committed);
     let count_str = if app.filter.is_empty() {
-        format!("{total_anchors} anchors")
+        format!("{committed} committed  {working} working")
     } else {
-        format!("{filtered}/{total_anchors} anchors")
+        format!("{filtered}/{total_items} memory items")
     };
-    let enabled = if app.enabled { "on" } else { "off" };
-    let line = Line::from(vec![
-        Span::styled(
-            format!(" oobo · {}", app.project_name),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(
-                "    {} · window: {} · tracking: {} ",
-                count_str,
-                app.time_window.label(),
-                enabled
+    let branch = app.branch.as_deref().unwrap_or("detached");
+    let dirty_label = if app.dirty { "dirty" } else { "clean" };
+    let dirty_style = if app.dirty {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(
+                "  anchor",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(line).alignment(Alignment::Left), area);
+            Span::styled(" / ", Style::default().fg(Color::DarkGray)),
+            Span::styled(app.project_name.clone(), Style::default().fg(Color::Gray)),
+            Span::styled("  memory", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  ", Style::default()),
+            chip("branch", branch, Color::Cyan),
+            Span::styled("  ", Style::default()),
+            chip(
+                "tree",
+                dirty_label,
+                if app.dirty {
+                    Color::Yellow
+                } else {
+                    Color::DarkGray
+                },
+            ),
+            Span::styled("  ", Style::default()),
+            chip("anchors", &app.anchor_remote, Color::Magenta),
+        ]),
+        Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(count_str, Style::default().fg(Color::Gray)),
+            Span::styled("   ", Style::default()),
+            Span::styled(
+                format!("window {}", app.time_window.label()),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled("   ", Style::default()),
+            Span::styled(
+                if app.enabled {
+                    "tracking on"
+                } else {
+                    "tracking off"
+                },
+                if app.enabled {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Red)
+                },
+            ),
+            Span::styled("   ", Style::default()),
+            Span::styled(dirty_label, dirty_style),
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(lines).alignment(Alignment::Left), area);
 }
 
-fn draw_anchor_list(
-    frame: &mut ratatui::Frame<'_>,
-    app: &App,
-    feed: &FeedState,
-    area: Rect,
-) {
-    // Reserve columns for the trailing metadata (tokens/sessions), dot and time.
-    // Layout: " ● " (3) + "when " (6) + subject (flex) + "  tokens sessions" (~14)
+fn chip(label: &str, value: &str, color: Color) -> Span<'static> {
+    Span::styled(
+        format!("{label} {value}"),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    )
+}
+
+fn draw_anchor_list(frame: &mut ratatui::Frame<'_>, app: &App, feed: &FeedState, area: Rect) {
+    // Keep the feed quiet: state is expressed by timeline rail + typography.
     let total_w = area.width.saturating_sub(2) as usize;
-    let meta_w = 14usize;
-    let prefix_w = 3 + 6;
+    let meta_w = 18usize;
+    let prefix_w = 9usize;
     let subject_w = total_w.saturating_sub(meta_w + prefix_w).max(12);
 
     let items: Vec<ListItem> = visible_anchors(&app.anchors, &app.filter)
         .map(|r| {
             let when = relative_time(r.timestamp);
-            let has_ai = r.session_count > 0;
-            let dot_style = if has_ai {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::DarkGray)
+            let (rail, dot, dot_style, subject_style) = match r.kind {
+                MemoryKind::Anchor => (
+                    "│",
+                    "●",
+                    Style::default().fg(Color::Green),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                MemoryKind::ShadowAnchor => (
+                    if r.parent_anchor.is_some() {
+                        "╰"
+                    } else {
+                        " "
+                    },
+                    "·",
+                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::DarkGray),
+                ),
             };
-            let dot = if has_ai { "●" } else { "○" };
 
-            let tok_str = r
-                .tokens
-                .filter(|t| *t > 0)
-                .map(super::format_tokens)
-                .unwrap_or_else(|| "-".into());
-            let sess_str = if r.session_count > 0 {
-                format!("{}s", r.session_count)
-            } else {
-                "-".into()
+            let meta = match r.kind {
+                MemoryKind::Anchor => {
+                    let tok_str = r
+                        .tokens
+                        .filter(|t| *t > 0)
+                        .map(super::format_tokens)
+                        .unwrap_or_else(|| "-".into());
+                    let sessions = if r.session_count > 0 {
+                        format!("{}s", r.session_count)
+                    } else {
+                        "-".to_string()
+                    };
+                    format!("{tok_str:>7} {sessions:>3}")
+                }
+                MemoryKind::ShadowAnchor => {
+                    let turn = r
+                        .turn_index
+                        .map(|idx| format!("#{idx}"))
+                        .unwrap_or_else(|| "#-".to_string());
+                    format!("{:>3}f {:>3}t {turn:>4}", r.files, r.tool_calls)
+                }
             };
-            let meta = format!("{tok_str:>6}  {sess_str:>4}");
 
             let subject_raw = if r.subject.is_empty() {
                 "(no subject)".to_string()
@@ -2228,44 +1951,24 @@ fn draw_anchor_list(
             let subject = pad_or_truncate(&subject_raw, subject_w);
 
             ListItem::new(Line::from(vec![
-                Span::styled(format!(" {dot} "), dot_style),
+                Span::styled(format!(" {rail} "), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{dot} "), dot_style),
                 Span::styled(format!("{when:<5} "), Style::default().fg(Color::DarkGray)),
-                Span::raw(subject),
-                Span::styled(
-                    format!("  {meta}"),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(subject, subject_style),
+                Span::styled(format!("  {meta}"), Style::default().fg(Color::DarkGray)),
             ]))
         })
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::RIGHT))
         .highlight_style(
             Style::default()
-                .bg(Color::Blue)
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("▸ ");
-    let mut state = feed.list.clone();
+        .highlight_symbol("› ");
+    let mut state = feed.list;
     frame.render_stateful_widget(list, area, &mut state);
-}
-
-fn pad_or_truncate(s: &str, width: usize) -> String {
-    let count = s.chars().count();
-    if count > width {
-        let keep = width.saturating_sub(1);
-        let mut out: String = s.chars().take(keep).collect();
-        out.push('…');
-        out
-    } else {
-        let mut out = s.to_string();
-        for _ in 0..(width - count) {
-            out.push(' ');
-        }
-        out
-    }
 }
 
 fn draw_anchor_detail(frame: &mut ratatui::Frame<'_>, app: &App, area: Rect) {
@@ -2280,20 +1983,32 @@ fn draw_anchor_detail(frame: &mut ratatui::Frame<'_>, app: &App, area: Rect) {
         return;
     };
 
-    let sessions = load_sessions_for_anchor(&anchor.sha);
+    if anchor.kind == MemoryKind::ShadowAnchor {
+        draw_shadow_detail(frame, app, &anchor, area);
+        return;
+    }
+
+    let sessions = load_sessions_for_anchor(&app.root, &anchor.sha);
     let files = touched_files_for(&app.root, &anchor.sha);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(vec![
+        Span::styled("  ● ", Style::default().fg(Color::Green)),
         Span::styled(
             format!("  {}", short_sha(&anchor.sha)),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("  {}", relative_time(anchor.timestamp)),
+            format!("  {} ago", relative_time(anchor.timestamp)),
             Style::default().fg(Color::DarkGray),
         ),
     ]));
+    lines.push(Line::from(Span::styled(
+        "  committed memory",
+        Style::default().fg(Color::DarkGray),
+    )));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         format!("  {}", anchor.subject),
@@ -2315,22 +2030,22 @@ fn draw_anchor_detail(frame: &mut ratatui::Frame<'_>, app: &App, area: Rect) {
         .map(super::format_tokens)
         .unwrap_or_else(|| "-".into());
     lines.push(Line::from(vec![
-        Span::styled("  tool    ", Style::default().fg(Color::DarkGray)),
-        Span::raw(tool.to_string()),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  tokens  ", Style::default().fg(Color::DarkGray)),
-        Span::raw(tokens),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("  sessions", Style::default().fg(Color::DarkGray)),
-        Span::raw(format!(" {}", anchor.session_count)),
+        Span::styled("  ", Style::default()),
+        chip("tool", tool, Color::Cyan),
+        Span::styled("  ", Style::default()),
+        chip("tokens", &tokens, Color::Green),
+        Span::styled("  ", Style::default()),
+        chip(
+            "sessions",
+            &anchor.session_count.to_string(),
+            Color::Magenta,
+        ),
     ]));
 
     if !sessions.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "  SESSIONS",
+            "  sessions",
             Style::default().fg(Color::DarkGray),
         )));
         for s in &sessions {
@@ -2355,7 +2070,7 @@ fn draw_anchor_detail(frame: &mut ratatui::Frame<'_>, app: &App, area: Rect) {
     if !files.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            format!("  FILES ({})", files.len()),
+            format!("  files ({})", files.len()),
             Style::default().fg(Color::DarkGray),
         )));
         for f in files.iter().take(12) {
@@ -2369,23 +2084,121 @@ fn draw_anchor_detail(frame: &mut ratatui::Frame<'_>, app: &App, area: Rect) {
         }
     }
 
-    let para = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::NONE));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  actions",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(vec![
+        Span::styled("    enter", Style::default().fg(Color::White)),
+        Span::styled(" memory", Style::default().fg(Color::DarkGray)),
+        Span::styled("   d", Style::default().fg(Color::White)),
+        Span::styled(" diff", Style::default().fg(Color::DarkGray)),
+        Span::styled("   b", Style::default().fg(Color::White)),
+        Span::styled(" blame", Style::default().fg(Color::DarkGray)),
+    ]));
+
+    let para = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(para, area);
 }
 
-fn draw_footer(
-    frame: &mut ratatui::Frame<'_>,
-    app: &App,
-    feed: &FeedState,
-    area: Rect,
-) {
+fn draw_shadow_detail(frame: &mut ratatui::Frame<'_>, app: &App, shadow: &AnchorRow, area: Rect) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled("  · ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("  {}", short_sha(&shadow.sha)),
+            Style::default()
+                .fg(Color::Gray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {} ago", relative_time(shadow.timestamp)),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
+    lines.push(Line::from(Span::styled(
+        "  working memory",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", shadow.subject),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  ", Style::default()),
+        chip(
+            "source",
+            &shadow.tool.clone().unwrap_or_else(|| "-".to_string()),
+            Color::Cyan,
+        ),
+        Span::styled("  ", Style::default()),
+        chip("files", &shadow.files.to_string(), Color::Gray),
+        Span::styled("  ", Style::default()),
+        chip("tools", &shadow.tool_calls.to_string(), Color::Magenta),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  session ", Style::default().fg(Color::DarkGray)),
+        Span::raw(
+            shadow
+                .session_id
+                .as_deref()
+                .map(short_session)
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+    ]));
+    if let Some(parent) = shadow.parent_anchor.as_deref() {
+        lines.push(Line::from(vec![
+            Span::styled("  follows ", Style::default().fg(Color::DarkGray)),
+            Span::raw(short_sha(parent)),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  continue from here",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(vec![
+        Span::styled("    anchor from turn ", Style::default().fg(Color::DarkGray)),
+        Span::styled(shadow.sha.clone(), Style::default().fg(Color::Gray)),
+        Span::styled(" --load", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(""));
+    if app.dirty {
+        lines.push(Line::from(Span::styled(
+            "  worktree is dirty; loading this point will require --force",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    lines.push(Line::from(vec![
+        Span::styled("  enter", Style::default().fg(Color::White)),
+        Span::styled(
+            " opens captured memory",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled("   c", Style::default().fg(Color::White)),
+        Span::styled(" continues from here", Style::default().fg(Color::DarkGray)),
+    ]));
+
+    let para = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
+}
+
+fn short_session(session_id: &str) -> String {
+    session_id.chars().take(18).collect()
+}
+
+fn draw_footer(frame: &mut ratatui::Frame<'_>, app: &App, feed: &FeedState, area: Rect) {
     let content: Line<'static> = if feed.filter_input_open {
         Line::from(vec![
             Span::styled(
                 " filter: ",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(app.filter.clone()),
             Span::styled("_", Style::default().fg(Color::Yellow)),
@@ -2399,136 +2212,58 @@ fn draw_footer(
             format!(" {flash} "),
             Style::default().fg(Color::Yellow),
         ))
+    } else if !app.filter.is_empty() {
+        Line::from(vec![
+            Span::styled(" filter ", Style::default().fg(Color::Yellow)),
+            Span::raw(app.filter.clone()),
+            Span::styled(
+                " · / edit · esc clear · ? help ",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])
     } else {
-        Line::from(vec![Span::styled(
-            " ↑↓ nav · enter sessions · d diff · b blame · / filter · ^f search · t time · e toggle · ? help · q quit ",
-            Style::default().fg(Color::DarkGray),
-        )])
+        match app.selected_anchor().map(|row| row.kind) {
+            Some(MemoryKind::Anchor) => Line::from(vec![
+                Span::styled(" ↑↓", Style::default().fg(Color::White)),
+                Span::styled(" move  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("enter", Style::default().fg(Color::White)),
+                Span::styled(" memory  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("d", Style::default().fg(Color::White)),
+                Span::styled(" diff  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("b", Style::default().fg(Color::White)),
+                Span::styled(" blame  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("/", Style::default().fg(Color::White)),
+                Span::styled(" filter  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("?", Style::default().fg(Color::White)),
+                Span::styled(" help  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("q", Style::default().fg(Color::White)),
+                Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+            ]),
+            Some(MemoryKind::ShadowAnchor) => Line::from(vec![
+                Span::styled(" ↑↓", Style::default().fg(Color::White)),
+                Span::styled(" move  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("enter", Style::default().fg(Color::White)),
+                Span::styled(" captured memory  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("c", Style::default().fg(Color::White)),
+                Span::styled(" continue  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("/", Style::default().fg(Color::White)),
+                Span::styled(" filter  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("t", Style::default().fg(Color::White)),
+                Span::styled(" time  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("r", Style::default().fg(Color::White)),
+                Span::styled(" reload  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("?", Style::default().fg(Color::White)),
+                Span::styled(" help  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("q", Style::default().fg(Color::White)),
+                Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+            ]),
+            None => Line::from(vec![Span::styled(
+                " / filter · ^f search · t time · ? help · q quit ",
+                Style::default().fg(Color::DarkGray),
+            )]),
+        }
     };
     frame.render_widget(Paragraph::new(content), area);
-}
-
-fn draw_transcript(frame: &mut ratatui::Frame<'_>, _app: &App, ts: &TranscriptState) {
-    let area = frame.area();
-
-    // Clear the entire area so the feed doesn't bleed through.
-    frame.render_widget(Clear, area);
-    frame.render_widget(
-        Block::default().style(Style::default().bg(Color::Reset)),
-        area,
-    );
-
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .split(area);
-
-    let session = &ts.sessions[ts.idx];
-    let short_sid: String = session.session_id.chars().take(8).collect();
-    let model = session.model.clone().unwrap_or_default();
-    let position = if ts.sessions.len() > 1 {
-        format!("  [{}/{}]", ts.idx + 1, ts.sessions.len())
-    } else {
-        String::new()
-    };
-    let matches_str = if ts.match_lines.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "  {}/{} matches",
-            ts.match_cursor + 1,
-            ts.match_lines.len()
-        )
-    };
-
-    let header_lines = vec![
-        Line::from(vec![
-            Span::styled(
-                " transcript",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("  {short_sid}  {}{model}{position}{matches_str}", session.source),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]),
-        Line::from(Span::styled(
-            format!(" {}", "─".repeat(area.width.saturating_sub(2) as usize)),
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
-    frame.render_widget(Paragraph::new(header_lines), layout[0]);
-
-    // Highlight matching lines by colouring them.
-    let rendered: Vec<Line<'static>> = ts
-        .lines
-        .iter()
-        .enumerate()
-        .map(|(i, line)| {
-            if ts.match_lines.contains(&i) {
-                let mut new = line.clone();
-                for span in new.spans.iter_mut() {
-                    span.style = span.style.bg(Color::Yellow).fg(Color::Black);
-                }
-                new
-            } else {
-                line.clone()
-            }
-        })
-        .collect();
-
-    let max_scroll = rendered
-        .len()
-        .saturating_sub(layout[1].height as usize) as u16;
-    let scroll = ts.scroll.min(max_scroll);
-    let body = Paragraph::new(rendered)
-        .wrap(Wrap { trim: false })
-        .scroll((scroll, 0));
-    frame.render_widget(body, layout[1]);
-
-    // Scroll indicator
-    let total_lines = ts.lines.len();
-    let visible_h = layout[1].height as usize;
-    let pct = if total_lines <= visible_h {
-        100
-    } else {
-        ((scroll as usize) * 100) / (total_lines.saturating_sub(visible_h)).max(1)
-    };
-
-    let footer_content: Line<'static> = if ts.filter_open {
-        Line::from(vec![
-            Span::styled(
-                " /",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(ts.filter.clone()),
-            Span::styled("_", Style::default().fg(Color::Yellow)),
-            Span::styled(
-                "   (enter to jump · esc to clear)",
-                Style::default().fg(Color::DarkGray),
-            ),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled(
-                format!(" {pct}%"),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(
-                "  ↑↓ scroll · pgup/pgdn · g/G top/bot · [ ] prev/next · / find · n/N next · esc back · q quit",
-                Style::default().fg(Color::DarkGray),
-            ),
-        ])
-    };
-    frame.render_widget(Paragraph::new(footer_content), layout[2]);
 }
 
 fn draw_search(frame: &mut ratatui::Frame<'_>, _app: &App, state: &SearchState) {
@@ -2556,7 +2291,9 @@ fn draw_search(frame: &mut ratatui::Frame<'_>, _app: &App, state: &SearchState) 
     let prompt = Line::from(vec![
         Span::styled(
             " > ",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw(state.query.clone()),
         Span::styled("_", Style::default().fg(Color::Yellow)),
@@ -2595,23 +2332,14 @@ fn draw_search(frame: &mut ratatui::Frame<'_>, _app: &App, state: &SearchState) 
                 };
                 let snippet = truncate(&h.snippet, 60);
                 ListItem::new(Line::from(vec![
-                    Span::styled(
-                        format!(" {kind}"),
-                        Style::default().fg(Color::Magenta),
-                    ),
-                    Span::styled(
-                        format!("  {pname:<14}"),
-                        Style::default().fg(Color::Cyan),
-                    ),
-                    Span::styled(
-                        format!("  {when:<5}"),
-                        Style::default().fg(Color::DarkGray),
-                    ),
+                    Span::styled(format!(" {kind}"), Style::default().fg(Color::Magenta)),
+                    Span::styled(format!("  {pname:<14}"), Style::default().fg(Color::Cyan)),
+                    Span::styled(format!("  {when:<5}"), Style::default().fg(Color::DarkGray)),
                     Span::raw(format!("  {snippet}")),
                 ]))
             })
             .collect();
-        let mut ls = state.list.clone();
+        let mut ls = state.list;
         frame.render_stateful_widget(
             List::new(items)
                 .highlight_style(
@@ -2657,7 +2385,7 @@ fn draw_picker_overlay(frame: &mut ratatui::Frame<'_>, p: &PickerState) {
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▸ ");
-    let mut ls = p.list.clone();
+    let mut ls = p.list;
     frame.render_stateful_widget(list, rect, &mut ls);
 }
 
@@ -2667,31 +2395,32 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>) {
 
     let lines = vec![
         Line::from(Span::styled(
-            " oobo TUI · keybindings",
+            " anchor TUI · keybindings",
             Style::default().add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(" FEED"),
         Line::from("   ↑/k ↓/j     move selection"),
         Line::from("   g / G       top / bottom"),
-        Line::from("   enter, s    open transcript (session picker if >1)"),
+        Line::from("   enter, s    open memory (session picker if >1)"),
+        Line::from("   c           continue from selected working memory"),
         Line::from("   d           git show --color (diff)"),
-        Line::from("   b           oobo blame (file picker if >1)"),
+        Line::from("   b           anchor blame (file picker if >1)"),
         Line::from("   /           live filter"),
         Line::from("   ctrl-f      full search (project/global)"),
         Line::from("   t           cycle time window (all / 24h / 7d / 30d)"),
         Line::from("   e           toggle tracking for this repo"),
         Line::from("   r           reload from db"),
         Line::from(""),
-        Line::from(" TRANSCRIPT"),
+        Line::from(" MEMORY"),
         Line::from("   ↑↓ pgup/pgdn  scroll · g/G top/bot"),
         Line::from("   [ / ]         prev / next session of this anchor"),
-        Line::from("   /             find in transcript · n/N next/prev match"),
+        Line::from("   /             find in memory · n/N next/prev match"),
         Line::from("   esc/backspace back · q quit"),
         Line::from(""),
         Line::from(" SEARCH"),
         Line::from("   tab         toggle project ↔ global"),
-        Line::from("   enter       run · (on a hit) open transcript"),
+        Line::from("   enter       run · (on a hit) open memory"),
         Line::from(""),
         Line::from(Span::styled(
             " press any key to dismiss",
@@ -2709,45 +2438,44 @@ fn draw_help_overlay(frame: &mut ratatui::Frame<'_>) {
     frame.render_widget(para, rect);
 }
 
-fn centered(area: Rect, w: u16, h: u16) -> Rect {
-    let w = w.min(area.width.saturating_sub(2));
-    let h = h.min(area.height.saturating_sub(2));
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
-    Rect { x, y, width: w, height: h }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-// ── Utilities ─────────────────────────────────────────────────────────
-
-fn short_sha(sha: &str) -> String {
-    sha.chars().take(8).collect()
-}
-
-fn relative_time(ts: i64) -> String {
-    if ts <= 0 {
-        return "-".to_string();
+    fn anchor(subject: &str, intent: Option<&str>, tool: Option<&str>) -> AnchorRow {
+        AnchorRow {
+            kind: MemoryKind::Anchor,
+            sha: "abcdef123456".into(),
+            timestamp: 0,
+            subject: subject.into(),
+            intent: intent.map(str::to_string),
+            tool: tool.map(str::to_string),
+            tokens: None,
+            session_count: 0,
+            files: 0,
+            tool_calls: 0,
+            turn_index: None,
+            session_id: None,
+            parent_anchor: None,
+        }
     }
-    let now = chrono::Utc::now().timestamp();
-    let d = (now - ts).max(0);
-    if d < 60 {
-        format!("{d}s")
-    } else if d < 3600 {
-        format!("{}m", d / 60)
-    } else if d < 86400 {
-        format!("{}h", d / 3600)
-    } else if d < 30 * 86400 {
-        format!("{}d", d / 86400)
-    } else {
-        format!("{}mo", d / (30 * 86400))
-    }
-}
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        format!("{s:<max$}")
-    } else {
-        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-        out.push('…');
-        out
+    #[test]
+    fn visible_anchors_match_subject_intent_sha_and_tool() {
+        let rows = vec![
+            anchor(
+                "fix auth middleware",
+                Some("refresh token flow"),
+                Some("claude"),
+            ),
+            anchor("update docs", None, Some("cursor")),
+        ];
+
+        assert_eq!(visible_anchor_count(&rows, "auth"), 1);
+        assert_eq!(visible_anchor_count(&rows, "refresh"), 1);
+        assert_eq!(visible_anchor_count(&rows, "abcdef"), 2);
+        assert_eq!(visible_anchor_count(&rows, "cursor"), 1);
+        assert_eq!(visible_anchor_count(&rows, "missing"), 0);
     }
+
 }

@@ -3,14 +3,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::anchor::{Anchor, SessionLink};
 
-/// Event payload sent to the backend on git write operations.
-///
-/// The `anchor` field is the same structure written to the orphan branch,
-/// so a self-hosted backend reading the orphan branch directly would see
-/// identical data. The optional `transcript` is only included when
-/// transparency mode is on, and is always redacted through gitleaks.
+#[allow(dead_code)]
+pub const EVENT_PAYLOAD_SCHEMA_VERSION: u32 = 1;
+
+#[allow(dead_code)]
+fn default_event_payload_schema_version() -> u32 {
+    EVENT_PAYLOAD_SCHEMA_VERSION
+}
+
+/// Anchor payload envelope — kept for schema documentation and test round-trips.
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct EventPayload {
+    /// Version of the remote transport envelope. The embedded anchor has its
+    /// own schema version and remains the canonical commit-memory object.
+    #[serde(default = "default_event_payload_schema_version")]
+    pub payload_schema_version: u32,
     pub event: String,
     pub timestamp: DateTime<Utc>,
     pub oobo_version: String,
@@ -26,6 +34,7 @@ pub struct EventPayload {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ProjectInfo {
     pub name: String,
     pub git_remote: Option<String>,
@@ -33,6 +42,7 @@ pub struct ProjectInfo {
 
 /// The anchor plus its linked sessions, mirroring what's on the orphan branch.
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct AnchorPayload {
     #[serde(flatten)]
     pub anchor: Anchor,
@@ -42,6 +52,7 @@ pub struct AnchorPayload {
 
 /// A tool invocation within a transcript.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ToolCallMessage {
     pub tool_use_id: String,
     pub name: String,
@@ -50,6 +61,7 @@ pub struct ToolCallMessage {
 
 /// The result of a tool invocation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ToolResultMessage {
     pub tool_use_id: String,
     pub name: String,
@@ -61,6 +73,7 @@ pub struct ToolResultMessage {
 /// A single transcript message. All optional fields are additive — older
 /// backends that only read `role` + `text` continue to work unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct TranscriptMessage {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -76,8 +89,8 @@ pub struct TranscriptMessage {
 }
 
 /// A session's transcript with parent-child relationship metadata.
-/// Used to represent the agent→subagent delegation tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct SessionTranscript {
     pub session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,24 +130,7 @@ fn is_zero(v: &u32) -> bool {
     *v == 0
 }
 
-/// Successful response from `POST /anchors/ingest`.
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-pub struct IngestResponse {
-    pub success: bool,
-    pub message: String,
-    #[serde(default)]
-    pub data: Option<IngestData>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-pub struct IngestData {
-    pub anchor_id: String,
-    pub commit_hash: String,
-}
-
-/// Error body returned by the ingestion API on 4xx / 5xx.
+/// Error body returned by the remote API on 4xx / 5xx (e.g. 401 from search).
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct IngestError {
@@ -146,6 +142,61 @@ pub struct IngestError {
     pub message: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchRequest {
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<SearchProjectScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchProjectScope {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchResponse {
+    #[serde(default)]
+    pub hits: Vec<SearchHit>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SearchHit {
+    #[serde(default)]
+    pub project: SearchProject,
+    #[serde(default)]
+    pub anchor_sha: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub tool: Option<String>,
+    #[serde(default)]
+    pub tokens: Option<i64>,
+    #[serde(default)]
+    pub timestamp: Option<i64>,
+    #[serde(default)]
+    pub intent: Option<String>,
+    #[serde(default)]
+    pub snippet: Option<String>,
+    #[serde(default)]
+    pub score: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SearchProject {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +205,7 @@ mod tests {
     #[test]
     fn test_serialize_commit_event() {
         let anchor = Anchor {
+            anchor_schema_version: ANCHOR_SCHEMA_VERSION,
             oobo_version: "0.1.0".into(),
             commit_hash: "abc123".into(),
             branch: "main".into(),
@@ -195,6 +247,13 @@ mod tests {
             reasoning: None,
             transparency_mode: TransparencyMode::On,
             file_interactions: None,
+            turns: vec![AnchorTurnRef {
+                id: "turn-1".into(),
+                session_id: "sess-1".into(),
+                source: "claude".into(),
+                turn_index: 0,
+                tree_hash: Some("tree123".into()),
+            }],
         };
 
         let session_links = vec![SessionLink {
@@ -223,6 +282,7 @@ mod tests {
         }];
 
         let payload = EventPayload {
+            payload_schema_version: EVENT_PAYLOAD_SCHEMA_VERSION,
             event: "git.commit".into(),
             timestamp: chrono::Utc::now(),
             oobo_version: "0.1.0".into(),
@@ -256,6 +316,8 @@ mod tests {
         };
 
         let json = serde_json::to_string_pretty(&payload).unwrap();
+        assert!(json.contains("payload_schema_version"));
+        assert!(json.contains("anchor_schema_version"));
         assert!(json.contains("git.commit"));
         assert!(json.contains("abc123"));
         assert!(json.contains("assisted"));
@@ -265,12 +327,16 @@ mod tests {
         assert!(json.contains("auth.js"));
         assert!(json.contains("github.com/user/my-app"));
         assert!(json.contains("Add auth flow"));
+        assert!(json.contains("turn-1"));
+        assert!(!json.contains("hook_events"));
+        assert!(!json.contains("native_transcript_path"));
         assert!(!json.contains("cost"));
     }
 
     #[test]
     fn test_serialize_push_event_no_anchor() {
         let payload = EventPayload {
+            payload_schema_version: EVENT_PAYLOAD_SCHEMA_VERSION,
             event: "git.push".into(),
             timestamp: chrono::Utc::now(),
             oobo_version: "0.1.0".into(),
@@ -287,5 +353,21 @@ mod tests {
         assert!(json.contains("git.push"));
         assert!(!json.contains("anchor"));
         assert!(!json.contains("transcript"));
+    }
+
+    #[test]
+    fn test_payload_schema_version_defaults_for_legacy_json() {
+        let json = serde_json::json!({
+            "event": "git.push",
+            "timestamp": chrono::Utc::now(),
+            "oobo_version": "0.1.0",
+            "project": {
+                "name": "my-app",
+                "git_remote": null
+            }
+        });
+
+        let payload: EventPayload = serde_json::from_value(json).unwrap();
+        assert_eq!(payload.payload_schema_version, EVENT_PAYLOAD_SCHEMA_VERSION);
     }
 }

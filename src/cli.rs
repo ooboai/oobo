@@ -11,49 +11,54 @@ pub enum OutputMode {
 }
 
 impl OutputMode {
+    #[allow(dead_code)]
     pub fn is_structured(self) -> bool {
         matches!(self, OutputMode::Agent | OutputMode::Json)
     }
 }
 
-/// oobo — git with memory
+/// anchor — git with memory
 #[derive(Parser, Debug)]
 #[command(
-    name = "oobo",
+    name = "anchor",
     version,
-    about = "Git with memory. Every commit tells you why it exists.",
+    about = "anchor — git with memory.",
     help_template = "\
-{about-with-newline}
-{usage-heading} {usage}
+{about}
 
-{options}
-\x1b[1;4mAnchor:\x1b[0m  \x1b[2m(see your memory)\x1b[0m
-  anchors, a   Enriched commit history with AI context
+USAGE:
+    anchor [OPTIONS] [COMMAND]
+
+VIEWS:
+  anchors, a   See the memory
   blame        Per-line AI/human attribution
+  search       Find any past session
 
-\x1b[1;4mRecall:\x1b[0m  \x1b[2m(find your memory)\x1b[0m
-  search       Search sessions and anchors across projects
-
-\x1b[1;4mSettings:\x1b[0m  \x1b[2m(configure oobo)\x1b[0m
-  settings     Declarative KV config
+ACTIONS:
+  from        Load code/context from a turn or anchor
   enable       Start tracking this project
   disable      Stop tracking this project
-  alias        Install/uninstall git→oobo shell alias
+  alias        Install/uninstall the git=anchor shell alias
 
-\x1b[1;4mLifecycle:\x1b[0m  \x1b[2m(onboard, repair, update)\x1b[0m
-  setup        Onboard, repair, manage projects
+WIZARD + CONFIG:
+  setup        Onboard, repair, reindex, manage projects
+  settings     Show / set / unset config values
+
+LIFECYCLE:
   update       Self-update
 
-\x1b[1;4mGit passthrough:\x1b[0m
+GIT PASSTHROUGH:
   Any command not listed above is forwarded to git unchanged.
   Write operations (commit, push, merge) also capture AI context.
 
-  oobo status              git status
-  oobo commit -m \"fix\"     git commit + AI context capture
-  oobo push origin main    git push + anchor sync
+OPTIONS:
+  --agent          Minimal plain-text output (token-efficient)
+  --json           Full structured JSON output
+  --interactive    Force TUI even when auto-detection would not
+  -h, --help       Print help
+  -V, --version    Print version
 
-\x1b[2mOutput modes: default pretty (TTY); --agent for LLMs; --json for scripts.\x1b[0m
-\x1b[2mRun `oobo <cmd> --help` for per-command usage and examples.\x1b[0m
+Run `anchor <command> --help` for per-command help.
 ",
     disable_help_subcommand = true
 )]
@@ -73,7 +78,7 @@ pub struct Cli {
     #[arg(long, global = true, conflicts_with_all = ["agent", "json"])]
     pub interactive: bool,
 
-    /// Raw args passed when invoked as a git alias (everything after `oobo`)
+    /// Raw args passed when invoked as a git alias (everything after `anchor`)
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
     pub git_args: Vec<String>,
 }
@@ -94,10 +99,10 @@ pub enum Command {
         display_order = 1,
         alias = "a",
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       oobo anchors               Show recent commits with AI context\n  \
-                       oobo a -n 20               Show last 20 (short alias)\n  \
-                       oobo anchors --agent       Compact output\n  \
-                       oobo anchors --json        Full JSON output"
+                       anchor anchors               Show recent commits with AI context\n  \
+                       anchor a -n 20               Show last 20 (short alias)\n  \
+                       anchor anchors --agent       Compact output\n  \
+                       anchor anchors --json        Full JSON output"
     )]
     Anchors {
         /// Subcommand (e.g. `show <sha>`). Omit to list anchors.
@@ -121,9 +126,9 @@ pub enum Command {
     #[command(
         display_order = 2,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       oobo blame src/main.rs          Show AI attribution for file at HEAD\n  \
-                       oobo blame src/main.rs abc123   Show attribution at a specific commit\n  \
-                       oobo blame src/main.rs --json   JSON output"
+                       anchor blame src/main.rs          Show AI attribution for file at HEAD\n  \
+                       anchor blame src/main.rs abc123   Show attribution at a specific commit\n  \
+                       anchor blame src/main.rs --json   JSON output"
     )]
     Blame {
         /// Pure `git blame` output (no AI column).
@@ -138,12 +143,12 @@ pub enum Command {
     #[command(
         display_order = 3,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       oobo search \"auth middleware\"      This project (inside a repo)\n  \
-                       oobo search foo --global            Across all projects\n  \
-                       oobo search foo --since 7d          Last 7 days\n  \
-                       oobo search foo --project oobo-cli  Explicit project scope\n  \
-                       oobo search foo --tool cursor       Scope to a tool\n  \
-                       oobo search foo --agent             Compact output"
+                       anchor search \"auth middleware\"      This project (inside a repo)\n  \
+                       anchor search foo --global            Across all projects\n  \
+                       anchor search foo --since 7d          Last 7 days\n  \
+                       anchor search foo --project oobo-cli  Explicit project scope\n  \
+                       anchor search foo --tool cursor       Scope to a tool\n  \
+                       anchor search foo --agent             Compact output"
     )]
     Search {
         /// Free-text query (quote multi-word queries)
@@ -174,19 +179,32 @@ pub enum Command {
         limit: usize,
     },
 
-    /// Declarative KV config (no OAuth, no login flow)
+    /// Load code/context from a turn or anchor (preview by default)
     #[command(
         display_order = 5,
-        after_help = "\x1b[1mGrammar:\x1b[0m  oobo settings [scope] [verb] <key> [value]\n\n\
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       anchor from turn t123abc          Preview a turn\n  \
+                       anchor from turn t123abc --load   Load that turn into the worktree\n  \
+                       anchor from anchor abc123 --load  Load an anchor commit"
+    )]
+    From {
+        #[command(subcommand)]
+        action: FromAction,
+    },
+
+    /// Declarative KV config (no OAuth, no login flow)
+    #[command(
+        display_order = 6,
+        after_help = "\x1b[1mGrammar:\x1b[0m  anchor settings [scope] [verb] <key> [value]\n\n\
                        \x1b[1mExamples:\x1b[0m\n  \
-                       oobo settings                       Show all effective settings\n  \
-                       oobo settings default               Show defaults only\n  \
-                       oobo settings project               Show project overrides\n  \
-                       oobo settings key                   Show the default 'key' value\n  \
-                       oobo settings set key sk_abc        Set the default API key\n  \
-                       oobo settings project set remote <url>  Per-project override\n  \
-                       oobo settings unset key             Remove the default API key\n  \
-                       oobo settings project unset remote  Drop the project override"
+                       anchor settings                       Show all effective settings\n  \
+                       anchor settings default               Show defaults only\n  \
+                       anchor settings project               Show project overrides\n  \
+                       anchor settings key                   Show the default 'key' value\n  \
+                       anchor settings set key sk_abc        Set the default API key\n  \
+                       anchor settings project set remote <url>  Per-project override\n  \
+                       anchor settings unset key             Remove the default API key\n  \
+                       anchor settings project unset remote  Drop the project override"
     )]
     Settings {
         /// Positional args: [scope] [verb] <key> [value]
@@ -196,19 +214,19 @@ pub enum Command {
 
     /// Start tracking the current project (idempotent)
     #[command(
-        display_order = 6,
+        display_order = 7,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       oobo enable           Turn on tracking for this repo\n  \
-                       oobo enable --json    Machine-readable confirmation"
+                       anchor enable           Turn on tracking for this repo\n  \
+                       anchor enable --json    Machine-readable confirmation"
     )]
     Enable {},
 
     /// Stop tracking the current project (keeps existing anchors)
     #[command(
-        display_order = 7,
+        display_order = 8,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       oobo disable          Turn off tracking for this repo\n  \
-                       oobo disable --agent  Minimal confirmation"
+                       anchor disable          Turn off tracking for this repo\n  \
+                       anchor disable --agent  Minimal confirmation"
     )]
     Disable {},
 
@@ -216,12 +234,12 @@ pub enum Command {
     #[command(
         display_order = 10,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       oobo setup                        Interactive wizard\n  \
-                       oobo setup --non-interactive      CI-safe: accept defaults\n  \
-                       oobo setup --reindex              Force full reindex\n  \
-                       oobo setup --repair               Re-install hooks + verify\n  \
-                       oobo setup --uninstall-alias      Remove the shell alias\n  \
-                       oobo setup --repair --reindex     Composable"
+                       anchor setup                        Interactive wizard\n  \
+                       anchor setup --non-interactive      CI-safe: accept defaults\n  \
+                       anchor setup --reindex              Force full reindex\n  \
+                       anchor setup --repair               Re-install hooks + verify\n  \
+                       anchor setup --uninstall-alias      Remove the shell alias\n  \
+                       anchor setup --repair --reindex     Composable"
     )]
     Setup {
         /// Accept defaults non-interactively (CI-safe)
@@ -230,7 +248,7 @@ pub enum Command {
         /// Force a full reindex
         #[arg(long)]
         reindex: bool,
-        /// Remove the git→oobo shell alias
+        /// Remove the git→anchor shell alias
         #[arg(long)]
         uninstall_alias: bool,
         /// Re-install hooks, re-detect tools, rebuild orphan branch if needed
@@ -238,12 +256,12 @@ pub enum Command {
         repair: bool,
     },
 
-    /// Manage the git→oobo shell alias [install, uninstall]
+    /// Manage the git→anchor shell alias [install, uninstall]
     #[command(
         display_order = 11,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       oobo alias install     Alias git→oobo in your shell\n  \
-                       oobo alias uninstall   Remove the alias"
+                       anchor alias install     Alias git→anchor in your shell\n  \
+                       anchor alias uninstall   Remove the alias"
     )]
     Alias {
         #[command(subcommand)]
@@ -267,15 +285,40 @@ pub enum Command {
         #[command(subcommand)]
         action: HookAction,
     },
-
 }
 
 #[derive(Subcommand, Debug)]
 pub enum AliasAction {
-    /// Add `alias git=oobo` to your shell RC file
+    /// Add `alias git=anchor` to your shell RC file
     Install,
-    /// Remove the git→oobo alias from your shell RC file
+    /// Remove the git→anchor alias from your shell RC file
     Uninstall,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum FromAction {
+    /// Preview or load a shadow-anchor snapshot
+    Turn {
+        /// Turn id (full or unambiguous prefix)
+        turn_id: String,
+        /// Actually load the turn into the worktree. Omit for preview.
+        #[arg(long)]
+        load: bool,
+        /// Permit loading over a dirty worktree.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Preview or load an anchor commit
+    Anchor {
+        /// Commit SHA (full or unambiguous prefix)
+        sha: String,
+        /// Actually load the anchor into the worktree. Omit for preview.
+        #[arg(long)]
+        load: bool,
+        /// Permit loading over a dirty worktree.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -300,16 +343,28 @@ pub enum HookAction {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
         _args: Vec<String>,
     },
+    /// Post-merge hook handler
+    PostMerge {
+        /// Args passed by git (ignored)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+        _args: Vec<String>,
+    },
+    /// Post-rewrite hook handler
+    PostRewrite {
+        /// Rewrite command passed by git, e.g. amend or rebase
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+        _args: Vec<String>,
+    },
 }
 
-/// Reserved oobo verbs. Anything else at argv[1] is forwarded to `git` (passthrough).
+/// Reserved anchor verbs. Anything else at argv[1] is forwarded to `git` (passthrough).
 const OOBO_SUBCOMMANDS: &[&str] = &[
-    "anchors", "a", "blame", "search", "settings", "enable", "disable", "setup", "alias", "update",
-    "hooks",
+    "anchors", "a", "from", "blame", "search", "settings", "enable", "disable", "setup", "alias",
+    "update", "hooks",
 ];
 
 /// Re-parse the CLI with a synthetic argv and dispatch. Used by the legacy
-/// hint system to rewrite e.g. `oobo scan` → `oobo setup --reindex`.
+/// hint system to rewrite e.g. `anchor scan` → `anchor setup --reindex`.
 fn dispatch_with_argv(cfg: Config, argv: Vec<String>) -> Result<i32, String> {
     let cli = Cli::try_parse_from(argv).map_err(|e| format!("dispatch rewrite: {e}"))?;
     let mode = resolve_output_mode(cli.json, cli.agent, cli.interactive);
@@ -398,6 +453,15 @@ pub fn route(cfg: Config) -> Result<i32, String> {
         return git::proxy::run_and_intercept(&cfg, &git_args);
     }
 
+    if is_root_version_request(&raw_args) && raw_args.iter().any(|a| a == "--json") {
+        if raw_args.iter().any(|a| a == "--agent") {
+            eprintln!("error: the argument '--agent' cannot be used with '--json'");
+            return Ok(2);
+        }
+        print_version_json();
+        return Ok(0);
+    }
+
     // Legacy 0.1.x command hints. Fires BEFORE git passthrough so we can
     // intercept names that collide with git verbs only coincidentally.
     if let Some(verb) = raw_args.get(1) {
@@ -408,8 +472,7 @@ pub fn route(cfg: Config) -> Result<i32, String> {
                     None => {
                         // Continue with mapped args.
                         if let Some(mapped) = hint.mapped {
-                            let mut new_argv: Vec<String> =
-                                vec![raw_args[0].clone()];
+                            let mut new_argv: Vec<String> = vec![raw_args[0].clone()];
                             for m in mapped {
                                 new_argv.push((*m).to_string());
                             }
@@ -448,6 +511,28 @@ pub fn route(cfg: Config) -> Result<i32, String> {
     let mode = resolve_output_mode(cli.json, cli.agent, cli.interactive);
 
     dispatch_parsed(cfg, cli, mode)
+}
+
+fn is_root_version_request(args: &[String]) -> bool {
+    let mut saw_version = false;
+    for arg in args.iter().skip(1) {
+        match arg.as_str() {
+            "--version" | "-V" => saw_version = true,
+            "--json" | "--agent" | "--interactive" => {}
+            _ => return false,
+        }
+    }
+    saw_version
+}
+
+fn print_version_json() {
+    let value = serde_json::json!({
+        "name": "anchor",
+        "version": env!("CARGO_PKG_VERSION"),
+        "commit": option_env!("OOBO_BUILD_COMMIT").unwrap_or("unknown"),
+        "built_at": option_env!("OOBO_BUILT_AT").unwrap_or("unknown"),
+    });
+    crate::utils::print_json(&value);
 }
 
 /// Dispatch a parsed `Cli`. Extracted so legacy-hint rewrites can re-enter
@@ -509,6 +594,19 @@ fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, Strin
         }
         Some(Command::Settings { args }) => {
             let code = crate::commands::settings::run(&cfg, &args, mode)?;
+            Ok(code)
+        }
+        Some(Command::From { action }) => {
+            let code = match action {
+                FromAction::Turn {
+                    turn_id,
+                    load,
+                    force,
+                } => crate::commands::from::run_turn(&cfg, &turn_id, load, force, mode)?,
+                FromAction::Anchor { sha, load, force } => {
+                    crate::commands::from::run_anchor(&cfg, &sha, load, force, mode)?
+                }
+            };
             Ok(code)
         }
         Some(Command::Enable {}) => {
@@ -604,11 +702,18 @@ fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, Strin
         Some(Command::Hooks { action }) => {
             match action {
                 HookAction::Agent { event, tool } => {
+                    if git::proxy::project_root(&cfg)
+                        .as_deref()
+                        .map(crate::project_config::is_enabled)
+                        != Some(true)
+                    {
+                        return Ok(0);
+                    }
                     let mut payload = String::new();
                     if let Err(e) =
                         std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload)
                     {
-                        eprintln!("oobo: warning: could not read agent payload from stdin: {e}");
+                        eprintln!("anchor: warning: could not read agent payload from stdin: {e}");
                     }
                     if payload.trim().is_empty() {
                         payload = "{}".to_string();
@@ -635,10 +740,13 @@ fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, Strin
                 }
                 HookAction::PostCommit { .. } => {
                     if let Some(root) = git::proxy::project_root(&cfg) {
+                        if !crate::project_config::is_enabled(&root) {
+                            return Ok(0);
+                        }
                         if std::env::var("OOBO_INTERCEPTED").is_err() {
                             if let Err(e) = crate::git::interceptor::on_write_op(&cfg, &["commit"])
                             {
-                                eprintln!("oobo: warning: {e}");
+                                eprintln!("anchor: warning: {e}");
                             }
                         }
                         crate::hooks::state::cleanup_stale(&root, 86400);
@@ -646,20 +754,50 @@ fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, Strin
                 }
                 HookAction::PrePush { .. } => {
                     if let Some(root) = git::proxy::project_root(&cfg) {
+                        if !crate::project_config::is_enabled(&root) {
+                            return Ok(0);
+                        }
                         if crate::git::orphan::branch_exists(&root) {
                             if let Err(e) = crate::git::orphan::push(&root) {
-                                eprintln!("oobo: warning: could not push anchors: {e}");
+                                eprintln!("anchor: warning: could not push anchors: {e}");
                             }
                         }
                         crate::git::orphan::retry_pending_pushes(&root);
+                    }
+                }
+                HookAction::PostMerge { .. } => {
+                    if let Some(root) = git::proxy::project_root(&cfg) {
+                        if !crate::project_config::is_enabled(&root) {
+                            return Ok(0);
+                        }
+                        crate::commands::sync::auto_hydrate(&root);
+                    }
+                }
+                HookAction::PostRewrite { .. } => {
+                    let mut payload = String::new();
+                    if let Err(e) =
+                        std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload)
+                    {
+                        eprintln!("anchor: warning: could not read post-rewrite payload: {e}");
+                    }
+                    if let Some(root) = git::proxy::project_root(&cfg) {
+                        if !crate::project_config::is_enabled(&root) {
+                            return Ok(0);
+                        }
+                        let pairs = crate::git::orphan::parse_rewrite_pairs(&payload);
+                        if let Err(e) =
+                            crate::git::orphan::rekey_anchors_from_rewrite_pairs(&root, &pairs)
+                        {
+                            eprintln!("anchor: warning: could not update rewritten anchors: {e}");
+                        }
                     }
                 }
             }
             Ok(0)
         }
         None => {
-            // Truly bare `oobo` (no trailing tokens) → four-quadrant view.
-            // `oobo <non-reserved-verb>` (e.g. `oobo commit`, `oobo status`)
+            // Truly bare `anchor` (no trailing tokens) → four-quadrant view.
+            // `anchor <non-reserved-verb>` (e.g. `anchor commit`, `anchor status`)
             // lands here too because clap parks unknown verbs in git_args;
             // those should still be forwarded to git (passthrough).
             if cli.git_args.is_empty() {

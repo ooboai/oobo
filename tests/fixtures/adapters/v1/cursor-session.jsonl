@@ -1,0 +1,2 @@
+{"role":"user","message":{"content":"Fix the auth middleware regression"}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"I found the token refresh branch skipping validate_token."},{"type":"text","text":"I'll add a focused regression test."}]}}

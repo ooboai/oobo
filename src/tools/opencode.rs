@@ -646,35 +646,6 @@ pub mod transcript {
         }
     }
 
-    pub fn count_messages(_project_path: &str, session_id: &str) -> u32 {
-        let db_path = match find_db_path() {
-            Some(p) => p,
-            None => return 0,
-        };
-
-        let conn = match crate::utils::open_db_readonly(&db_path) {
-            Ok(c) => c,
-            Err(_) => return 0,
-        };
-
-        match detect_schema(&conn) {
-            DbSchema::Modern => conn
-                .query_row(
-                    "SELECT COUNT(*) FROM message WHERE session_id = ?1",
-                    [session_id],
-                    |row| row.get::<_, u32>(0),
-                )
-                .unwrap_or(0),
-            DbSchema::Legacy => conn
-                .query_row(
-                    "SELECT COUNT(*) FROM message WHERE session_id = ?1 AND role IN ('user', 'assistant')",
-                    [session_id],
-                    |row| row.get::<_, u32>(0),
-                )
-                .unwrap_or(0),
-        }
-    }
-
     pub fn parse_messages(path: &Path) -> Vec<Message> {
         let session_id = match extract_session_id_from_context(path) {
             Some(id) => id,
@@ -882,6 +853,7 @@ pub mod transcript {
         extract_stats(&db_path, session_id)
     }
 
+    #[cfg(test)]
     pub fn read_transcript(path: &Path, max_messages: u32) -> String {
         let session_id = match extract_session_id_from_context(path) {
             Some(id) => id,
@@ -890,6 +862,7 @@ pub mod transcript {
         read_transcript_for_session(path, &session_id, max_messages)
     }
 
+    #[cfg(test)]
     pub fn read_transcript_for_session(
         db_path: &Path,
         session_id: &str,

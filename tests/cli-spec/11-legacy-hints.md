@@ -19,25 +19,25 @@ Hints are the ONLY backward-compat surface. No shim commands, no auto-forward. T
 
 | Legacy command | Hint | Mapped interactive run |
 |---|---|---|
-| `oobo scan` | indexing is automatic now. for a forced reindex: `oobo setup --reindex` | `oobo setup --reindex` |
-| `oobo index` | indexing is automatic now. for a forced reindex: `oobo setup --reindex` | `oobo setup --reindex` |
-| `oobo sessions [...]` | sessions are shown inside `oobo anchors show <sha>` or `oobo search`. | `oobo anchors` |
-| `oobo projects [...]` | manage projects via `oobo setup`; view them with `oobo` (outside a repo). | `oobo setup` |
-| `oobo ignore` | use `oobo disable` instead. | `oobo disable` |
-| `oobo unignore` | use `oobo enable` instead. | `oobo enable` |
-| `oobo sync [...]` | sync is configured via `oobo settings`. set your API key: `oobo settings set key <...>`. | `oobo settings` |
-| `oobo transparency on\|off` | use `oobo settings set transparency on\|off` (advanced). | `oobo settings` |
-| `oobo auth [...]` | `oobo settings set key <your-key>`. | `oobo settings` |
-| `oobo card` | removed in 1.0. | (no mapped command) |
-| `oobo dash` | removed in 1.0; visit `oobo` in repo for the TUI. | `oobo` |
-| `oobo sources` | removed in 1.0; run `oobo setup --repair` to re-detect tool paths. | `oobo setup --repair` |
-| `oobo inspect` | removed in 1.0; run `oobo setup --repair` for diagnostics. | `oobo setup --repair` |
-| `oobo stats` | stats are inline in the anchor view and in `oobo anchors show <sha>`. | `oobo anchors` |
-| `oobo agent` | removed; use the global flag `--agent` instead. | `oobo --agent` |
-| `oobo share [...]` | removed; use `oobo anchors show <sha> --json` to get redacted, pipeable output. | `oobo anchors` |
-| `oobo export [...]` | removed; use `oobo anchors show <sha> --json`. | `oobo anchors` |
-| `oobo version` | use `oobo --version`. | `oobo --version` |
-| `oobo doctor` | removed; run `oobo setup --repair`. | `oobo setup --repair` |
+| `anchor scan` | indexing is automatic now. for a forced reindex: `anchor setup --reindex` | `anchor setup --reindex` |
+| `anchor index` | indexing is automatic now. for a forced reindex: `anchor setup --reindex` | `anchor setup --reindex` |
+| `anchor sessions [...]` | sessions are shown inside `anchor anchors show <sha>` or `anchor search`. | `anchor anchors` |
+| `anchor projects [...]` | manage projects via `anchor setup`; view them with `anchor` (outside a repo). | `anchor setup` |
+| `anchor ignore` | use `anchor disable` instead. | `anchor disable` |
+| `anchor unignore` | use `anchor enable` instead. | `anchor enable` |
+| `anchor sync [...]` | removed. team sync is Git-first (orphan branch). use `anchor settings` for API key. | `anchor settings` |
+| `anchor transparency on\|off` | use `anchor settings set transparency on\|off` (advanced). | `anchor settings` |
+| `anchor auth [...]` | `anchor settings set key <your-key>`. | `anchor settings` |
+| `anchor card` | removed in 1.0. | (no mapped command) |
+| `anchor dash` | removed in 1.0; visit `anchor` in repo for the TUI. | `anchor` |
+| `anchor sources` | removed in 1.0; run `anchor setup --repair` to re-detect tool paths. | `anchor setup --repair` |
+| `anchor inspect` | removed in 1.0; run `anchor setup --repair` for diagnostics. | `anchor setup --repair` |
+| `anchor stats` | stats are inline in the anchor view and in `anchor anchors show <sha>`. | `anchor anchors` |
+| `anchor agent` | removed; use the global flag `--agent` instead. | `anchor --agent` |
+| `anchor share [...]` | removed; use `anchor anchors show <sha> --json` to get redacted, pipeable output. | `anchor anchors` |
+| `anchor export [...]` | removed; use `anchor anchors show <sha> --json`. | `anchor anchors` |
+| `anchor version` | use `anchor --version`. | `anchor --version` |
+| `anchor doctor` | removed; run `anchor setup --repair`. | `anchor setup --repair` |
 
 ---
 
@@ -46,25 +46,25 @@ Hints are the ONLY backward-compat surface. No shim commands, no auto-forward. T
 ### TTY interactive hint
 
 #### Invocation
-`oobo scan`
+`anchor scan`
 
 **Example output (stderr):**
 ```
-oobo: 'scan' was removed in 1.0.
-      indexing is automatic now. for a forced reindex: oobo setup --reindex
+anchor: 'scan' was removed in 1.0.
+      indexing is automatic now. for a forced reindex: anchor setup --reindex
 
-run 'oobo setup --reindex' now? [Y/n]:
+run 'anchor setup --reindex' now? [Y/n]:
 ```
 
-User types `y` (or Enter): invocation continues as `oobo setup --reindex` (same process, exec'd).
+User types `y` (or Enter): invocation continues as `anchor setup --reindex` (same process, exec'd).
 User types `n`: exit `2`, nothing happens.
 
 #### Invocation
-`oobo card`
+`anchor card`
 
 **Example output (stderr):**
 ```
-oobo: 'card' was removed in 1.0.
+anchor: 'card' was removed in 1.0.
       (no replacement.)
 ```
 **Exit code:** `2`.
@@ -72,11 +72,11 @@ oobo: 'card' was removed in 1.0.
 ### Non-TTY / agent hint
 
 #### Invocation
-`oobo ignore` (with stdout redirected or `--agent`)
+`anchor ignore` (with stdout redirected or `--agent`)
 
 **Example output (stderr):**
 ```
-oobo: 'ignore' was removed in 1.0. use 'oobo disable' instead.
+anchor: 'ignore' was removed in 1.0. use 'anchor disable' instead.
 ```
 **Exit code:** `2`.
 
@@ -85,14 +85,14 @@ The hint NEVER auto-executes in non-TTY mode. Scripts that relied on the removed
 ### Hint with args passed through
 
 #### Invocation
-`oobo scan --force`
+`anchor scan --force`
 
 **Example output (stderr, TTY):**
 ```
-oobo: 'scan' was removed in 1.0.
-      indexing is automatic now. for a forced reindex: oobo setup --reindex
+anchor: 'scan' was removed in 1.0.
+      indexing is automatic now. for a forced reindex: anchor setup --reindex
 
-run 'oobo setup --reindex' now? [Y/n]:
+run 'anchor setup --reindex' now? [Y/n]:
 ```
 
 On `y`, the trailing args (`--force`) are DROPPED — they're not guaranteed to map cleanly. This is a deliberate design choice: the hint is always exact, never best-effort.
@@ -100,20 +100,20 @@ On `y`, the trailing args (`--force`) are DROPPED — they're not guaranteed to 
 ### Hint for a subcommand form
 
 #### Invocation
-`oobo sessions list`
+`anchor sessions list`
 
 **Example output (stderr):**
 ```
-oobo: 'sessions' was removed in 1.0.
-      sessions are shown inside 'oobo anchors show <sha>' or 'oobo search'.
+anchor: 'sessions' was removed in 1.0.
+      sessions are shown inside 'anchor anchors show <sha>' or 'anchor search'.
 
-run 'oobo anchors' now? [Y/n]:
+run 'anchor anchors' now? [Y/n]:
 ```
 
 ### Hint NOT matched — fall through to clap
 
 #### Invocation
-`oobo whatever`
+`anchor whatever`
 
 **Example output (stderr):**
 ```
@@ -122,7 +122,7 @@ error: unrecognized subcommand 'whatever'
 did you mean one of:
   anchors, blame, search, enable, disable, alias, setup, settings, update
 
-Usage: oobo [OPTIONS] [COMMAND]
+Usage: anchor [OPTIONS] [COMMAND]
 For more information, try '--help'.
 ```
 **Exit code:** `2`.

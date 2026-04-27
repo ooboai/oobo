@@ -1,12 +1,12 @@
-# `oobo alias`
+# `anchor alias`
 
-Install or uninstall the `alias git='oobo'` shell alias. Lets users type `git` while getting oobo's decorated behavior (commit interception, blame with AI column, passthrough for everything else).
+Install or uninstall the `alias git='anchor'` shell alias. Lets users type `git` while getting anchor's decorated behavior (commit interception, blame with AI column, passthrough for everything else).
 
 Two subcommands, both required: `install`, `uninstall`. No positional args. No flags other than `--agent` / `--json`.
 
 ---
 
-## `oobo alias install`
+## `anchor alias install`
 
 ### Shell auto-detection
 
@@ -28,27 +28,27 @@ Detection order:
 
 A delimited block that `uninstall` can find and remove precisely:
 
-    # >>> oobo alias >>>
-    alias git='oobo'
-    # <<< oobo alias <<<
+    # >>> anchor alias >>>
+    alias git='anchor'
+    # <<< anchor alias <<<
 
 For fish:
 
-    # >>> oobo alias >>>
-    alias git 'oobo'
-    # <<< oobo alias <<<
+    # >>> anchor alias >>>
+    alias git 'anchor'
+    # <<< anchor alias <<<
 
 ### Invocation: fresh install
 
-`oobo alias install`
+`anchor alias install`
 
-**Context:** shell is `zsh`, `$HOME/.zshrc` exists and contains no oobo block.
+**Context:** shell is `zsh`, `$HOME/.zshrc` exists and contains no anchor block.
 
 **Behavior:** Append the block to `$HOME/.zshrc` with a leading blank line if the file doesn't end with one. Print confirmation + the one-shot "restart your shell" hint.
 
 **Example output:**
 ```
-installed 'alias git=oobo' to ~/.zshrc
+installed 'alias git=anchor' to ~/.zshrc
 restart your shell or run: source ~/.zshrc
 ```
 **Exit code:** `0`.
@@ -58,7 +58,7 @@ restart your shell or run: source ~/.zshrc
 
 ### Invocation: already installed
 
-`oobo alias install` (run twice)
+`anchor alias install` (run twice)
 
 **Behavior:** Idempotent. Detect the existing block and exit without writing.
 
@@ -70,7 +70,7 @@ alias already installed in ~/.zshrc
 
 ### Invocation: RC file does not exist yet
 
-`oobo alias install`
+`anchor alias install`
 
 **Context:** `$HOME/.zshrc` does not exist.
 
@@ -78,14 +78,14 @@ alias already installed in ~/.zshrc
 
 **Example output:**
 ```
-created ~/.zshrc with alias 'alias git=oobo'
+created ~/.zshrc with alias 'alias git=anchor'
 restart your shell or run: source ~/.zshrc
 ```
 **Exit code:** `0`.
 
 ### Invocation: RC file read-only
 
-`oobo alias install` (RC file has `0444` perms)
+`anchor alias install` (RC file has `0444` perms)
 
 **Behavior:** Hard fail. Print the exact line the user should add manually.
 
@@ -93,26 +93,26 @@ restart your shell or run: source ~/.zshrc
 ```
 error: cannot write to ~/.zshrc (read-only). add this line yourself:
 
-    alias git='oobo'
+    alias git='anchor'
 ```
 **Exit code:** `1`.
 
 ### Invocation: fish shell
 
-`oobo alias install` (with `$SHELL=/usr/local/bin/fish`)
+`anchor alias install` (with `$SHELL=/usr/local/bin/fish`)
 
 **Behavior:** Writes fish-syntax alias to `$HOME/.config/fish/config.fish`, creating the dir if needed.
 
 **Example output:**
 ```
-installed 'alias git oobo' to ~/.config/fish/config.fish
+installed 'alias git anchor' to ~/.config/fish/config.fish
 restart your shell or run: source ~/.config/fish/config.fish
 ```
 **Exit code:** `0`.
 
 ### Agent / JSON modes
 
-`oobo alias install --agent`
+`anchor alias install --agent`
 
 **Example output:**
 ```
@@ -120,28 +120,28 @@ installed ~/.zshrc
 ```
 **Exit code:** `0`.
 
-`oobo alias install --json`
+`anchor alias install --json`
 
 **Example output:**
 ```json
-{ "shell": "zsh", "rc_file": "/Users/teddy/.zshrc", "status": "installed" }
+{ "shell": "zsh", "rc_file": "/Users/example/.zshrc", "status": "installed" }
 ```
 
 Possible `status` values: `installed`, `already_installed`, `created_and_installed`.
 
 ---
 
-## `oobo alias uninstall`
+## `anchor alias uninstall`
 
 ### Invocation: installed
 
-`oobo alias uninstall`
+`anchor alias uninstall`
 
 **Behavior:** Remove the exact block (including the two delimiter comments and the alias line). Leave surrounding content untouched (no reformatting, no trimming of unrelated blank lines). Collapse at most one adjacent blank line.
 
 **Example output:**
 ```
-removed 'alias git=oobo' from ~/.zshrc
+removed 'alias git=anchor' from ~/.zshrc
 ```
 **Exit code:** `0`.
 
@@ -150,13 +150,13 @@ removed 'alias git=oobo' from ~/.zshrc
 
 ### Invocation: not installed
 
-`oobo alias uninstall`
+`anchor alias uninstall`
 
 **Behavior:** No-op.
 
 **Example output:**
 ```
-no oobo alias found in ~/.zshrc
+no anchor alias found in ~/.zshrc
 ```
 **Exit code:** `0`.
 
@@ -166,15 +166,15 @@ no oobo alias found in ~/.zshrc
 ```
 error: cannot write to ~/.zshrc (read-only). remove this block yourself:
 
-    # >>> oobo alias >>>
-    alias git='oobo'
-    # <<< oobo alias <<<
+    # >>> anchor alias >>>
+    alias git='anchor'
+    # <<< anchor alias <<<
 ```
 **Exit code:** `1`.
 
 ### Invocation: RC file does not exist
 
-`oobo alias uninstall`
+`anchor alias uninstall`
 
 **Example output:**
 ```
@@ -184,11 +184,11 @@ nothing to uninstall (~/.zshrc does not exist).
 
 ### Agent / JSON modes
 
-`oobo alias uninstall --json`
+`anchor alias uninstall --json`
 
 **Example output:**
 ```json
-{ "shell": "zsh", "rc_file": "/Users/teddy/.zshrc", "status": "uninstalled" }
+{ "shell": "zsh", "rc_file": "/Users/example/.zshrc", "status": "uninstalled" }
 ```
 
 Possible `status` values: `uninstalled`, `not_installed`, `rc_file_missing`.
@@ -198,7 +198,7 @@ Possible `status` values: `uninstalled`, `not_installed`, `rc_file_missing`.
 ## Error cases
 
 ### No subcommand
-`oobo alias`
+`anchor alias`
 
 **Behavior:** Clap error.
 
@@ -206,28 +206,28 @@ Possible `status` values: `uninstalled`, `not_installed`, `rc_file_missing`.
 ```
 error: requires a subcommand: install, uninstall
 
-Usage: oobo alias <COMMAND>
+Usage: anchor alias <COMMAND>
 ```
 **Exit code:** `2`.
 
 ### Unknown subcommand
-`oobo alias toggle`
+`anchor alias toggle`
 
 **Example output (stderr):**
 ```
 error: unrecognized subcommand 'toggle'
 
-Usage: oobo alias <COMMAND>
+Usage: anchor alias <COMMAND>
 ```
 **Exit code:** `2`.
 
 ### Unsupported shell
-`oobo alias install` (with `$SHELL=/bin/tcsh`)
+`anchor alias install` (with `$SHELL=/bin/tcsh`)
 
 **Example output (stderr):**
 ```
 error: shell 'tcsh' not supported. supported: bash, zsh, fish.
-       add this line manually: alias git='oobo'
+       add this line manually: alias git='anchor'
 ```
 **Exit code:** `1`.
 
@@ -236,7 +236,7 @@ error: shell 'tcsh' not supported. supported: bash, zsh, fish.
 ## Invariants
 
 - `install` is idempotent: N runs produce the same file state as 1 run. The RC file is never duplicated or corrupted.
-- `uninstall` precisely removes only the delimited block oobo wrote. Other `alias git=...` lines that oobo did NOT add are left alone.
-- The block delimiter strings `# >>> oobo alias >>>` / `# <<< oobo alias <<<` are stable across releases (migration contract).
+- `uninstall` precisely removes only the delimited block anchor wrote. Other `alias git=...` lines that anchor did NOT add are left alone.
+- The block delimiter strings `# >>> anchor alias >>>` / `# <<< anchor alias <<<` are stable across releases (migration contract).
 - For all three shells, install → uninstall → install returns the RC file to a state byte-identical to the first install.
 - Neither subcommand requires a git repo; both work from anywhere.

@@ -7,13 +7,35 @@ on:
 
 permissions:
   contents: write
+  checks: write
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  quality:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-targets
+        env:
+          RUSTFLAGS: -D warnings
+      - run: cargo test --all-targets
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo fmt --all -- --check
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
   build:
     name: Build ${{ matrix.target }}
+    needs: quality
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -81,27 +103,26 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czf ../../../oobo-${{ github.ref_name }}-${{ matrix.target }}.tar.gz oobo
+          tar -czf ../../../anchor-${{ github.ref_name }}-${{ matrix.target }}.tar.gz anchor
           cd ../../..
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/oobo.exe" -DestinationPath "oobo-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/anchor.exe" -DestinationPath "anchor-${{ github.ref_name }}-${{ matrix.target }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: oobo-${{ matrix.target }}
+          name: anchor-${{ matrix.target }}
           path: |
-            oobo-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
-            oobo-${{ github.ref_name }}-${{ matrix.target }}.zip
+            anchor-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+            anchor-${{ github.ref_name }}-${{ matrix.target }}.zip
 
   release:
     name: Create Release
     needs: build
-    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -112,15 +133,15 @@ jobs:
 
       - name: Generate checksums
         run: |
-          sha256sum oobo-*.tar.gz oobo-*.zip 2>/dev/null > checksums.sha256 || true
+          sha256sum anchor-*.tar.gz anchor-*.zip 2>/dev/null > checksums.sha256 || true
           cat checksums.sha256
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            oobo-*.tar.gz
-            oobo-*.zip
+            anchor-*.tar.gz
+            anchor-*.zip
             checksums.sha256
           generate_release_notes: true
 
@@ -142,10 +163,10 @@ jobs:
           VERSION="${TAG#v}"
 
           # Compute SHA256 for each artifact
-          sha_aarch64_darwin=$(sha256sum "oobo-${TAG}-aarch64-apple-darwin.tar.gz" | cut -d' ' -f1)
-          sha_x86_64_darwin=$(sha256sum "oobo-${TAG}-x86_64-apple-darwin.tar.gz" | cut -d' ' -f1)
-          sha_aarch64_linux=$(sha256sum "oobo-${TAG}-aarch64-unknown-linux-musl.tar.gz" | cut -d' ' -f1)
-          sha_x86_64_linux=$(sha256sum "oobo-${TAG}-x86_64-unknown-linux-musl.tar.gz" | cut -d' ' -f1)
+          sha_aarch64_darwin=$(sha256sum "anchor-${TAG}-aarch64-apple-darwin.tar.gz" | cut -d' ' -f1)
+          sha_x86_64_darwin=$(sha256sum "anchor-${TAG}-x86_64-apple-darwin.tar.gz" | cut -d' ' -f1)
+          sha_aarch64_linux=$(sha256sum "anchor-${TAG}-aarch64-unknown-linux-musl.tar.gz" | cut -d' ' -f1)
+          sha_x86_64_linux=$(sha256sum "anchor-${TAG}-x86_64-unknown-linux-musl.tar.gz" | cut -d' ' -f1)
 
           # Clone the tap
           git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/ooboai/homebrew-tap.git" tap
@@ -153,8 +174,8 @@ jobs:
           mkdir -p Formula
 
           # Generate Formula/oobo.rb
-          cat > Formula/oobo.rb << FORMULA
-          class Oobo < Formula
+          cat > Formula/anchor.rb << FORMULA
+          class Anchor < Formula
             desc "AI coding analytics — track sessions, tokens, attribution across all your AI tools"
             homepage "https://oobo.ai"
             version "${VERSION}"
@@ -162,38 +183,38 @@ jobs:
 
             on_macos do
               on_arm do
-                url "https://github.com/ooboai/oobo/releases/download/${TAG}/oobo-${TAG}-aarch64-apple-darwin.tar.gz"
+                url "https://github.com/ooboai/anchor/releases/download/${TAG}/anchor-${TAG}-aarch64-apple-darwin.tar.gz"
                 sha256 "${sha_aarch64_darwin}"
               end
               on_intel do
-                url "https://github.com/ooboai/oobo/releases/download/${TAG}/oobo-${TAG}-x86_64-apple-darwin.tar.gz"
+                url "https://github.com/ooboai/anchor/releases/download/${TAG}/anchor-${TAG}-x86_64-apple-darwin.tar.gz"
                 sha256 "${sha_x86_64_darwin}"
               end
             end
 
             on_linux do
               on_arm do
-                url "https://github.com/ooboai/oobo/releases/download/${TAG}/oobo-${TAG}-aarch64-unknown-linux-musl.tar.gz"
+                url "https://github.com/ooboai/anchor/releases/download/${TAG}/anchor-${TAG}-aarch64-unknown-linux-musl.tar.gz"
                 sha256 "${sha_aarch64_linux}"
               end
               on_intel do
-                url "https://github.com/ooboai/oobo/releases/download/${TAG}/oobo-${TAG}-x86_64-unknown-linux-musl.tar.gz"
+                url "https://github.com/ooboai/anchor/releases/download/${TAG}/anchor-${TAG}-x86_64-unknown-linux-musl.tar.gz"
                 sha256 "${sha_x86_64_linux}"
               end
             end
 
             def install
-              bin.install "oobo"
+              bin.install "anchor"
             end
 
             test do
-              assert_match "oobo", shell_output("#{bin}/oobo --version")
+              assert_match "anchor", shell_output("#{bin}/anchor --version")
             end
           end
           FORMULA
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/oobo.rb
-          git commit -m "Update oobo to ${VERSION}"
+          git add Formula/anchor.rb
+          git commit -m "Update anchor to ${VERSION}"
           git push

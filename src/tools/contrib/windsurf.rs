@@ -148,16 +148,8 @@ pub mod transcript {
         None
     }
 
-    pub fn count_messages(_project_path: &str, _session_id: &str) -> u32 {
-        0
-    }
-
     pub fn parse_messages(_path: &std::path::Path) -> Vec<Message> {
         Vec::new()
-    }
-
-    pub fn read_transcript(_path: &std::path::Path, _max_messages: u32) -> String {
-        String::from("(Windsurf Cascade conversations are encrypted and cannot be read directly)")
     }
 }
 

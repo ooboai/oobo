@@ -1,110 +1,96 @@
 # Commands
 
-Full command reference for `oobo`. All commands support `--agent` and `--json` output modes.
+Current command reference for `anchor` 1.0. Commands support global `--agent`, `--json`, and `--interactive` output-mode flags unless noted.
 
-## Enriched Commit History
+Any command not listed here is forwarded to git unchanged.
+
+## Commit Memory
 
 ```bash
-oobo anchors --agent                               # Compact commit log
-oobo anchors --json                                # Full JSON with file attribution
-oobo anchors --agent -n 20                         # Limit to N commits
-oobo a --agent -n 5                                # Short alias
+anchor anchors --agent                               # Compact enriched commit log
+anchor anchors --json                                # Structured anchor summaries
+anchor anchors -n 20 --since 7d --tool cursor        # Filter anchors
+anchor a --agent -n 5                                # Short alias for anchors
+anchor anchors show <sha> --json                     # Full anchor detail
 ```
 
 ## Blame / Attribution
 
 ```bash
-oobo blame src/main.rs                             # Per-line AI attribution for file at HEAD
-oobo blame src/main.rs abc123                      # Attribution at a specific commit
-oobo blame src/main.rs --json                      # JSON output (FileChange object)
-oobo blame src/main.rs --agent                     # Compact output
+anchor blame src/main.rs                             # Git blame with AI attribution
+anchor blame src/main.rs abc123                      # Blame at a specific commit
+anchor blame src/main.rs --no-ai                     # Pure git blame
+anchor blame src/main.rs --json                      # Structured per-line output
 ```
 
-## Sessions
+## Continue / Handoff
 
 ```bash
-oobo sessions --agent                              # Current project sessions (compact)
-oobo sessions list --agent --all                   # All projects
-oobo sessions list --agent --all --tool cursor -n 10 # Filter by tool, limit
-oobo sessions show <session_id> --agent            # Session summary (no messages)
-oobo sessions show <session_id> --json             # Full conversation + messages + stats
-oobo sessions search "keyword" --all --agent       # Search by name/content
-oobo sessions export <session_id> --format md      # Export as markdown
+anchor from turn <id>                              # Preview working-memory snapshot
+anchor from turn <id> --load                       # Load snapshot into worktree
+anchor from anchor <sha>                           # Preview committed anchor tree
+anchor from anchor <sha> --load                    # Load anchor tree into worktree
 ```
 
-## Projects
+Loads are preview-first and refuse dirty worktrees unless `--force` is explicit.
+
+## Search
 
 ```bash
-oobo projects --agent                              # All tracked projects (compact)
-oobo projects --json                               # Full JSON with stats
-oobo projects show <name_or_path> --agent          # Project summary
+anchor search "auth bug" --agent                     # Search current project
+anchor search "auth bug" --global --agent            # Search all projects
+anchor search "auth" --since 7d --tool claude        # Filter by time/tool
+anchor search "auth" --project oobo-cli --json       # Explicit project scope
 ```
 
-## Stats & Analytics
+Search is local-first. With an API key, default search merges local and remote results; use `--local`, `--remote`, or `--both` to force a source.
+
+## Project Tracking
 
 ```bash
-oobo stats --agent                                 # Global stats (compact)
-oobo stats --json                                  # Full JSON with breakdowns
-oobo stats --project <name> --agent                # Per-project
-oobo stats --tool cursor --agent                   # Per-tool
-oobo stats --since 7d --agent                      # Time-scoped
+anchor enable                                        # Enable anchor in the current repo
+anchor disable                                       # Disable anchor in the current repo
+anchor                                               # In repo: anchor TUI; outside repo: project picker
 ```
 
-## Data Sources
+Disabled projects are recorded in `.oobo/config` with `[project].enabled = false`; git hooks, background indexing, and capture paths stay quiet there.
+
+## Setup / Maintenance
 
 ```bash
-oobo sources --agent                               # Data source coverage (compact)
-oobo sources --json                                # Full JSON
-oobo dash --agent                                  # Configuration overview (compact)
-oobo dash --json                                   # Full JSON
+anchor setup                                         # Onboard, select projects, install hooks
+anchor setup --non-interactive                       # CI-safe defaults
+anchor setup --reindex                               # Force reindex of enabled projects
+anchor setup --repair                                # Reinstall hooks + repair local metadata
+anchor setup --uninstall-alias                       # Remove git=anchor shell alias
+anchor update                                        # Self-update
+anchor update --check                                # Check only
 ```
 
-## Diagnostics
+Interactive setup lets users choose which scanned projects anchor should track.
+
+## Settings / Remote
 
 ```bash
-oobo inspect --agent                               # Diagnostics (compact)
-oobo inspect --json                                # Full JSON
-oobo inspect --fix                                 # Auto-fix common issues
-oobo version --agent                               # Just the version string
-oobo version --json                                # Version info as JSON
+anchor settings                                      # Show effective settings
+anchor settings set key <api_key>                    # Store remote API key
+anchor settings unset key                            # Remove persisted API key
+anchor settings set remote https://oobo.example.com  # Point to self-hosted server
+anchor settings set transparency on                  # Enable redacted transcript sync
+anchor settings set setup.scan_roots ~/dev,~/work    # Configure setup scan roots
 ```
 
-## Share Sessions
+A non-empty default API key is used for remote search. `anchor settings unset key` removes the persisted key. `OOBO_SECRET_KEY` overrides the persisted key for the current process only. There is no cloud upload pipeline; team sync is Git-first via the orphan branch.
+
+## Alias
 
 ```bash
-oobo share <session_id> --agent                    # Share + compact response
-oobo share <session_id> --out chat.md              # Save redacted session as markdown
+anchor alias install                                 # Add alias git=anchor to shell rc
+anchor alias uninstall                               # Remove the alias
 ```
 
-## Backend Sync
+## Version
 
 ```bash
-oobo sync                                          # Show current sync status
-oobo sync on                                       # Enable auto-sync (prompts for key if needed)
-oobo sync off                                      # Disable auto-sync
-oobo sync --import                                 # Import anchors from orphan branch into local DB
-```
-
-Sync is **off by default**. No data is sent to any remote server unless the user explicitly runs `oobo sync on` and configures an API key (`OOBO_SECRET_KEY` env var or `api_key` via `oobo auth login`).
-
-## Auth & Remote
-
-These commands only apply if the user has opted into remote sync. The default remote is `api.oobo.ai` (free). Self-hosted servers are also supported.
-
-```bash
-oobo auth login --key <api_key>                    # Authenticate (free account at oobo.ai)
-oobo auth logout                                   # Remove credentials
-oobo auth status                                   # Show auth state + tool keys
-oobo auth set-remote https://oobo.example.com      # Point to self-hosted server
-```
-
-The `OOBO_SECRET_KEY` environment variable overrides the persisted `api_key` when set.
-
-## Maintenance
-
-```bash
-oobo scan                                          # Discover projects/sessions
-oobo index                                         # Compute token counts & analytics
-oobo setup                                         # Install agent hooks + git hooks
-oobo update                                        # Self-update + run migrations
+anchor --version                                     # Print version
 ```

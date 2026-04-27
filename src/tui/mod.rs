@@ -1,5 +1,8 @@
 pub mod app;
+pub mod format;
 pub mod setup;
+pub mod transcript;
+mod types;
 
 use std::io;
 use std::time::Duration;
@@ -28,11 +31,13 @@ pub fn next_key(timeout: Duration) -> io::Result<Option<KeyEvent>> {
     Ok(None)
 }
 
+#[allow(dead_code)]
 pub fn key_code(timeout: Duration) -> io::Result<Option<KeyCode>> {
     Ok(next_key(timeout)?.map(|k| k.code))
 }
 
 /// Map internal source identifiers to human-readable tool names.
+#[allow(dead_code)]
 pub fn source_label(source: &str) -> &'static str {
     match source {
         "composer" => "Cursor",
@@ -62,6 +67,7 @@ pub fn format_tokens(n: i64) -> String {
     }
 }
 
+#[allow(dead_code)]
 pub fn format_duration(secs: i64) -> String {
     if secs >= 86400 {
         let days = secs / 86400;
@@ -76,6 +82,7 @@ pub fn format_duration(secs: i64) -> String {
     }
 }
 
+#[allow(dead_code)]
 pub fn kv_line(label: &str, value: &str) -> ratatui::text::Line<'static> {
     use ratatui::style::{Color, Style};
     use ratatui::text::{Line, Span};

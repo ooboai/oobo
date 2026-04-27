@@ -29,8 +29,6 @@
 //! |                       |        | the orphan's first turn.               |
 //! | `TemplatePreamble`    | 0.4    | Child's first user message starts with |
 //! |                       |        | a known subagent launch template.      |
-//! | `SameProjectBurst`    | 0.2    | Same project, contemporaneous activity |
-//! |                       |        | pattern.                               |
 //!
 //! Signals are intentionally additive: a child that matches
 //! **temporal** (0.7) **and** **template** (0.4) scores above the
@@ -94,6 +92,7 @@ pub struct ParentTurn {
     pub session_id: String,
     pub source: String,
     pub turn_id: String,
+    #[allow(dead_code)]
     pub turn_index: i64,
     /// Milliseconds since epoch. `None` means the candidate has no
     /// timestamp, which disqualifies it from temporal scoring.
@@ -175,8 +174,7 @@ impl Inference {
 
     /// Stable JSON encoding of the signals for the audit row.
     pub fn signals_json(&self) -> String {
-        serde_json::to_string(&self.signals)
-            .unwrap_or_else(|_| "[]".to_string())
+        serde_json::to_string(&self.signals).unwrap_or_else(|_| "[]".to_string())
     }
 }
 
@@ -228,11 +226,7 @@ pub fn infer(orphans: &[OrphanChild], parents: &[ParentTurn]) -> Vec<Inference> 
                 subagent_kind = Some(kind.clone());
             }
 
-            let score = signals
-                .iter()
-                .map(|s| s.weight())
-                .sum::<f32>()
-                .min(1.0);
+            let score = signals.iter().map(|s| s.weight()).sum::<f32>().min(1.0);
 
             let inference = Inference {
                 child_session_id: child.session_id.clone(),
@@ -274,7 +268,11 @@ pub fn infer(orphans: &[OrphanChild], parents: &[ParentTurn]) -> Vec<Inference> 
                             // (which encodes turn_index).
                             let new_tid = inference.parent_turn_id.as_deref().unwrap_or("");
                             let prev_tid = prev.parent_turn_id.as_deref().unwrap_or("");
-                            if new_tid < prev_tid { inference } else { prev }
+                            if new_tid < prev_tid {
+                                inference
+                            } else {
+                                prev
+                            }
                         }
                     }
                 }
@@ -287,9 +285,11 @@ pub fn infer(orphans: &[OrphanChild], parents: &[ParentTurn]) -> Vec<Inference> 
     }
 
     out.sort_by(|a, b| {
-        a.child_session_id
-            .cmp(&b.child_session_id)
-            .then(b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal))
+        a.child_session_id.cmp(&b.child_session_id).then(
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        )
     });
     out
 }
@@ -297,14 +297,14 @@ pub fn infer(orphans: &[OrphanChild], parents: &[ParentTurn]) -> Vec<Inference> 
 /// Temporal scoring. Returns `Some(hit)` when the child's first turn
 /// starts within `[parent_ts - TEMPORAL_WINDOW_MS_BEFORE, parent_ts
 /// + TEMPORAL_WINDOW_MS_AFTER]`. Earlier-is-harder: the closer the
-/// child starts after the parent (the expected order), the stronger
-/// the signal, up to the full weight.
+///   child starts after the parent (the expected order), the stronger
+///   the signal, up to the full weight.
 fn temporal_match(parent: &ParentTurn, child: &OrphanChild) -> Option<SignalHit> {
     let pts = parent.started_at_ms?;
     let cts = child.first_turn_started_at_ms?;
     let gap = cts - pts;
 
-    if gap < -TEMPORAL_WINDOW_MS_BEFORE || gap > TEMPORAL_WINDOW_MS_AFTER {
+    if !(-TEMPORAL_WINDOW_MS_BEFORE..=TEMPORAL_WINDOW_MS_AFTER).contains(&gap) {
         return None;
     }
 
@@ -377,12 +377,7 @@ fn tool_names_contains(names: &str, target: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn parent(
-        session: &str,
-        turn_idx: i64,
-        ts_ms: i64,
-        tools: &str,
-    ) -> ParentTurn {
+    fn parent(session: &str, turn_idx: i64, ts_ms: i64, tools: &str) -> ParentTurn {
         ParentTurn {
             session_id: session.into(),
             source: "claude".into(),
@@ -428,20 +423,25 @@ mod tests {
     fn temporal_match_slightly_before_parent_is_still_allowed() {
         let p = parent("P", 3, 1_000_000, "Task");
         let c = orphan("C", Some(1_000_000 - 3_000), None);
-        assert!(temporal_match(&p, &c).is_some(),
-            "clock skew / same-turn boundary must still match");
+        assert!(
+            temporal_match(&p, &c).is_some(),
+            "clock skew / same-turn boundary must still match"
+        );
     }
 
     #[test]
     fn template_preamble_detected_at_start() {
-        let hit = detect_template_preamble(Some(
-            "You are a task-focused agent. Do X and report back."
-        ));
+        let hit =
+            detect_template_preamble(Some("You are a task-focused agent. Do X and report back."));
         assert!(hit.is_some());
         let (kind, sig) = hit.unwrap();
         assert_eq!(kind, "task");
         match sig {
-            SignalHit::TemplatePreamble { weight, inferred_kind, .. } => {
+            SignalHit::TemplatePreamble {
+                weight,
+                inferred_kind,
+                ..
+            } => {
                 assert_eq!(weight, 0.4);
                 assert_eq!(inferred_kind, "task");
             }
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn infer_picks_best_parent_when_multiple_candidates() {
         let parents = vec![
-            parent("P1", 0, 900_000, "Task"),   // ~100s before child → outside window
+            parent("P1", 0, 900_000, "Task"), // ~100s before child → outside window
             parent("P2", 3, 1_000_000, "Task"), // 500ms before child → full weight
             parent("P3", 7, 1_020_000, "Task"), // 20s after child → in window but lower weight
         ];

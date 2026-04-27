@@ -90,7 +90,7 @@ fn ingest_cursor_session(
             output: positive_or_none(b.output_tokens),
         };
 
-        let tool_names = b.tool_name.as_ref().map(|n| n.clone());
+        let tool_names = b.tool_name.clone();
         let tool_call_count = if b.tool_name.is_some() { 1 } else { 0 };
         let preview = extract_preview(b);
 
@@ -134,7 +134,11 @@ fn ingest_cursor_session(
 /// (e.g. meta events). Treat these as "no signal" rather than zero
 /// to keep view aggregates honest.
 fn positive_or_none(n: i64) -> Option<i64> {
-    if n > 0 { Some(n) } else { None }
+    if n > 0 {
+        Some(n)
+    } else {
+        None
+    }
 }
 
 fn extract_preview(b: &CursorBubble) -> Option<String> {
@@ -167,11 +171,7 @@ mod tests {
     fn rejects_wrong_artifact_type() {
         let mut sink = MemorySink::default();
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        let err = CursorTurnTap.ingest_session(
-            "s1",
-            TapArtifact::File(tmp.path()),
-            &mut sink,
-        );
+        let err = CursorTurnTap.ingest_session("s1", TapArtifact::File(tmp.path()), &mut sink);
         assert!(err.is_err());
     }
 
@@ -181,7 +181,11 @@ mod tests {
         // returns empty and the tap surfaces a warning.
         let mut sink = MemorySink::default();
         let summary = CursorTurnTap
-            .ingest_session("nonexistent-session-id-xyz", TapArtifact::SelfLookup, &mut sink)
+            .ingest_session(
+                "nonexistent-session-id-xyz",
+                TapArtifact::SelfLookup,
+                &mut sink,
+            )
             .unwrap();
         assert_eq!(summary.turns_emitted, 0);
         assert!(!summary.warnings.is_empty());

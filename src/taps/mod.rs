@@ -21,9 +21,9 @@
 pub mod claude;
 pub mod codex;
 pub mod cursor;
-pub mod opencode;
 #[cfg(test)]
 pub(crate) mod memory_sink;
+pub mod opencode;
 
 use crate::config::Config;
 use crate::core::turn::Turn;
@@ -95,7 +95,6 @@ pub trait TurnSink {
 /// discovery helpers — tap is strictly "read the artifact, emit
 /// turns", nothing about project scanning.
 pub trait TurnTap {
-    /// Source label written to `turns.source` / `sessions.source`.
     fn source(&self) -> Source;
 
     fn enabled(&self, cfg: &Config) -> bool;
@@ -118,10 +117,12 @@ pub trait TurnTap {
 #[derive(Debug, Clone)]
 pub enum TapArtifact<'a> {
     /// Single file on disk (e.g. Claude JSONL, Codex JSONL, OpenCode JSONL).
+    #[allow(dead_code)]
     File(&'a std::path::Path),
     /// Primary file plus a set of known subagent files (Claude's
     /// `subagents/` convention). The tap emits explicit subagent
     /// links for each.
+    #[allow(dead_code)]
     FileWithSubagents {
         primary: &'a std::path::Path,
         subagents: &'a [(String, std::path::PathBuf)],

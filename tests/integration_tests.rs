@@ -1,5 +1,6 @@
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::Command;
 
@@ -7,8 +8,8 @@ use tempfile::TempDir;
 
 // ── Fixture helpers ─────────────────────────────────────────────────────────
 
-/// Return a fresh TempDir to use as OOBO_HOME in tests that call `oobo commit`.
-/// Passing this to every oobo invocation prevents test commits from being
+/// Return a fresh TempDir to use as OOBO_HOME in tests that call `anchor commit`.
+/// Passing this to every anchor invocation prevents test commits from being
 /// synced to the backend (the isolated config has no API key / sync disabled).
 fn isolated_oobo_home() -> TempDir {
     TempDir::new().unwrap()
@@ -65,9 +66,78 @@ fn create_transcript_txt(dir: &Path, session_id: &str) {
     .unwrap();
 }
 
-#[allow(deprecated)]
-fn oobo_binary() -> std::path::PathBuf {
-    assert_cmd::cargo::cargo_bin("oobo")
+fn anchor_binary() -> std::path::PathBuf {
+    std::env::var_os("CARGO_BIN_EXE_anchor")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("target/debug/anchor"))
+}
+
+fn run_anchor_with_stdin(
+    repo: &Path,
+    oobo_home: &Path,
+    args: &[&str],
+    payload: &serde_json::Value,
+) -> std::process::Output {
+    Command::new(anchor_binary())
+        .args(args)
+        .env("OOBO_HOME", oobo_home)
+        .current_dir(repo)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(payload.to_string().as_bytes())
+                .unwrap();
+            child.wait_with_output()
+        })
+        .unwrap()
+}
+
+fn enable_anchor_for_repo(repo: &Path, oobo_home: &Path) {
+    let output = Command::new(anchor_binary())
+        .args(["enable", "--agent"])
+        .env("OOBO_HOME", oobo_home)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "anchor enable failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn serve_search_once() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut stream);
+        assert!(
+            request.starts_with("POST /anchors/search "),
+            "unexpected request path: {request}"
+        );
+        let body = r#"{"hits":[{"project":{"id":"p:test","name":"remote-project"},"anchor_sha":"abcdef1234567890","intent":"remote hit","snippet":"from configured server","score":9.0}],"next_cursor":null}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+    });
+
+    format!("http://{addr}")
+}
+
+fn read_http_request(stream: &mut TcpStream) -> String {
+    let mut buf = [0u8; 4096];
+    let n = stream.read(&mut buf).unwrap_or(0);
+    String::from_utf8_lossy(&buf[..n]).to_string()
 }
 
 // ── Composer extraction tests ───────────────────────────────────────────────
@@ -248,7 +318,6 @@ fn test_config_save_and_load() {
         server: oobo::config::ServerConfig {
             url: "https://custom.server.com".into(),
             api_key: "sk_test_key".into(),
-            sync: true,
         },
         git: oobo::config::GitConfig {
             real_git_path: "/usr/local/bin/git".into(),
@@ -448,9 +517,9 @@ fn test_git_proxy_passthrough() {
         .output()
         .unwrap();
 
-    // Use oobo as git decorator to commit
-    let output = Command::new(oobo_binary())
-        .args(["commit", "-m", "test commit via oobo"])
+    // Use anchor as git decorator to commit
+    let output = Command::new(anchor_binary())
+        .args(["commit", "-m", "test commit via anchor"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
         .output()
@@ -458,7 +527,7 @@ fn test_git_proxy_passthrough() {
 
     assert!(
         output.status.success(),
-        "oobo commit failed: {}",
+        "anchor commit failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -471,14 +540,14 @@ fn test_git_proxy_passthrough() {
 
     let log = String::from_utf8_lossy(&log_output.stdout);
     assert!(
-        log.contains("test commit via oobo"),
+        log.contains("test commit via anchor"),
         "commit not found in log: {log}"
     );
 }
 
 #[test]
 fn test_agent_json_conflict() {
-    let output = Command::new(oobo_binary())
+    let output = Command::new(anchor_binary())
         .args(["anchors", "--agent", "--json"])
         .output()
         .unwrap();
@@ -499,7 +568,7 @@ fn test_oobo_anchors_command() {
         .output()
         .unwrap();
 
-    let output = Command::new(oobo_binary())
+    let output = Command::new(anchor_binary())
         .args(["anchors", "--json"])
         .current_dir(tmp.path())
         .output()
@@ -508,8 +577,201 @@ fn test_oobo_anchors_command() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("[]") || stdout.is_empty() || output.status.success(),
-        "oobo anchors --json should succeed or return empty on fresh repo"
+        "anchor anchors --json should succeed or return empty on fresh repo"
     );
+}
+
+#[test]
+fn test_view_does_not_create_project_config() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let output = Command::new(anchor_binary())
+        .args(["anchors", "--json"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "[]");
+    assert!(
+        !tmp.path().join(".oobo/config").exists(),
+        "viewing anchors must not create project config"
+    );
+}
+
+#[test]
+fn test_git_write_skips_capture_when_not_enabled() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let output = Command::new(anchor_binary())
+        .args(["commit", "--allow-empty", "-m", "init"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "anchor git passthrough must succeed even when not enabled"
+    );
+}
+
+#[test]
+fn test_enable_then_commit_captures() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let output = Command::new(anchor_binary())
+        .args(["enable"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "enable must succeed");
+    assert!(
+        tmp.path().join(".oobo/config").exists(),
+        "enable should create project config"
+    );
+
+    let output = Command::new(anchor_binary())
+        .args(["commit", "--allow-empty", "-m", "init"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "commit must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn test_disable_blocks_capture() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let output = Command::new(anchor_binary())
+        .args(["disable"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        tmp.path().join(".oobo/config").exists(),
+        "disable should create project config"
+    );
+
+    let output = Command::new(anchor_binary())
+        .args(["commit", "--allow-empty", "-m", "init"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "anchor commit must succeed even when disabled"
+    );
+}
+
+#[test]
+fn test_disable_persists_project_config_state() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let enable = Command::new(anchor_binary())
+        .args(["enable", "--agent"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(enable.status.success());
+
+    let disable = Command::new(anchor_binary())
+        .args(["disable", "--agent"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(disable.status.success());
+
+    let config = fs::read_to_string(tmp.path().join(".oobo/config")).unwrap();
+    assert!(config.contains("enabled = false"));
+
+    let anchors = Command::new(anchor_binary())
+        .args(["anchors", "--json"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(anchors.status.success());
+    assert_eq!(String::from_utf8_lossy(&anchors.stdout).trim(), "[]");
 }
 
 #[test]
@@ -522,19 +784,19 @@ fn test_git_log_passes_through() {
         .output()
         .unwrap();
 
-    // `log` is NOT an oobo subcommand — passes through to git
-    let output = Command::new(oobo_binary())
+    // `log` is NOT an anchor subcommand — passes through to git
+    let output = Command::new(anchor_binary())
         .args(["log", "--oneline"])
         .current_dir(tmp.path())
         .output()
         .unwrap();
 
-    // git log on empty repo exits 128, but oobo should just proxy it
+    // git log on empty repo exits 128, but anchor should just proxy it
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !stderr.contains("error: unexpected argument")
             && !stderr.contains("unrecognized subcommand"),
-        "oobo should pass 'log' through to git, not treat as oobo subcommand"
+        "anchor should pass 'log' through to git, not treat as anchor subcommand"
     );
 }
 
@@ -560,6 +822,7 @@ fn test_e2e_commit_creates_anchor() {
         .current_dir(tmp.path())
         .output()
         .unwrap();
+    enable_anchor_for_repo(tmp.path(), oobo_home.path());
 
     fs::write(tmp.path().join("hello.txt"), "hello world\n").unwrap();
     Command::new("git")
@@ -568,7 +831,7 @@ fn test_e2e_commit_creates_anchor() {
         .output()
         .unwrap();
 
-    let commit_output = Command::new(oobo_binary())
+    let commit_output = Command::new(anchor_binary())
         .args(["commit", "-m", "initial commit"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
@@ -577,11 +840,11 @@ fn test_e2e_commit_creates_anchor() {
 
     assert!(
         commit_output.status.success(),
-        "oobo commit failed: {}",
+        "anchor commit failed: {}",
         String::from_utf8_lossy(&commit_output.stderr)
     );
 
-    let log_output = Command::new(oobo_binary())
+    let log_output = Command::new(anchor_binary())
         .args(["anchors", "--json"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
@@ -589,10 +852,10 @@ fn test_e2e_commit_creates_anchor() {
         .unwrap();
 
     let stdout = String::from_utf8_lossy(&log_output.stdout);
-    assert!(log_output.status.success(), "oobo anchors --json failed");
+    assert!(log_output.status.success(), "anchor anchors --json failed");
 
     let entries: Vec<serde_json::Value> =
-        serde_json::from_str(&stdout).expect("oobo anchors --json should return valid JSON array");
+        serde_json::from_str(&stdout).expect("anchor anchors --json should return valid JSON array");
 
     assert_eq!(entries.len(), 1, "should have exactly 1 commit");
     assert_eq!(entries[0]["subject"], "initial commit");
@@ -611,8 +874,9 @@ fn test_e2e_hook_lifecycle() {
         .current_dir(tmp.path())
         .output()
         .unwrap();
+    enable_anchor_for_repo(tmp.path(), oobo_home.path());
 
-    let start_output = Command::new(oobo_binary())
+    let start_output = Command::new(anchor_binary())
         .args(["hooks", "agent", "session-start"])
         .current_dir(tmp.path())
         .env("OOBO_HOME", oobo_home.path())
@@ -633,30 +897,7 @@ fn test_e2e_hook_lifecycle() {
 
     assert!(start_output.status.success(), "session-start failed");
 
-    // State is now persisted in the SQLite `hook_sessions` table — no
-    // file under `.git/oobo-sessions/` is created anymore.
-    let legacy_file = tmp.path().join(".git/oobo-sessions/e2e-test.json");
-    assert!(
-        !legacy_file.exists(),
-        "legacy session file must NOT be created (state lives in the DB now)"
-    );
-
-    let db_path = oobo_home.path().join("db").join("oobo.db");
-    assert!(db_path.exists(), "oobo db should exist after session-start");
-
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
-    let payload: String = conn
-        .query_row(
-            "SELECT state_json FROM active_sessions WHERE session_id = ?1",
-            rusqlite::params!["e2e-test"],
-            |row| row.get(0),
-        )
-        .expect("session row should exist in active_sessions");
-    let state: serde_json::Value = serde_json::from_str(&payload).unwrap();
-    assert_eq!(state["agent"], "cursor");
-    assert_eq!(state["model"], "claude-opus-4");
-
-    let end_output = Command::new(oobo_binary())
+    let end_output = Command::new(anchor_binary())
         .args(["hooks", "agent", "session-end"])
         .current_dir(tmp.path())
         .env("OOBO_HOME", oobo_home.path())
@@ -676,16 +917,485 @@ fn test_e2e_hook_lifecycle() {
         .unwrap();
 
     assert!(end_output.status.success(), "session-end failed");
+}
 
-    let conn = rusqlite::Connection::open(&db_path).unwrap();
-    let count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM hook_sessions WHERE session_id = ?1",
-            rusqlite::params!["e2e-test"],
-            |row| row.get(0),
-        )
+#[test]
+fn test_e2e_turn_capture_and_from_preview() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
         .unwrap();
-    assert_eq!(count, 0, "session row should be removed on session-end");
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    fs::write(tmp.path().join("app.txt"), "v1\n").unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let init = Command::new("git")
+        .args(["commit", "-m", "init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        init.status.success(),
+        "initial git commit failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    enable_anchor_for_repo(tmp.path(), oobo_home.path());
+
+    let sid = "turn-e2e";
+    let session_start = run_anchor_with_stdin(
+        tmp.path(),
+        oobo_home.path(),
+        &["hooks", "agent", "session-start", "--tool", "cursor"],
+        &serde_json::json!({"session_id": sid, "agent": "cursor", "model": "claude-opus-4"}),
+    );
+    assert!(
+        session_start.status.success(),
+        "session-start failed: {}",
+        String::from_utf8_lossy(&session_start.stderr)
+    );
+
+    let before = run_anchor_with_stdin(
+        tmp.path(),
+        oobo_home.path(),
+        &["hooks", "agent", "before-submit-prompt", "--tool", "cursor"],
+        &serde_json::json!({"session_id": sid, "prompt": "change app.txt"}),
+    );
+    assert!(
+        before.status.success(),
+        "before-submit-prompt failed: {}",
+        String::from_utf8_lossy(&before.stderr)
+    );
+
+    fs::write(tmp.path().join("app.txt"), "v2\n").unwrap();
+    let abs_file = tmp.path().join("app.txt").to_string_lossy().to_string();
+    let after_tool = run_anchor_with_stdin(
+        tmp.path(),
+        oobo_home.path(),
+        &["hooks", "agent", "after-tool-use", "--tool", "cursor"],
+        &serde_json::json!({
+            "session_id": sid,
+            "tool_name": "Write",
+            "tool_input": {"file_path": abs_file},
+            "tool_output": {"ok": true}
+        }),
+    );
+    assert!(
+        after_tool.status.success(),
+        "after-tool-use failed: {}",
+        String::from_utf8_lossy(&after_tool.stderr)
+    );
+
+    let stop = run_anchor_with_stdin(
+        tmp.path(),
+        oobo_home.path(),
+        &["hooks", "agent", "stop", "--tool", "cursor"],
+        &serde_json::json!({"session_id": sid}),
+    );
+    assert!(
+        stop.status.success(),
+        "stop failed: {}",
+        String::from_utf8_lossy(&stop.stderr)
+    );
+
+    let anchors_with_turns = Command::new(anchor_binary())
+        .args(["anchors", "--json"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        anchors_with_turns.status.success(),
+        "anchor anchors should include local shadow anchors: {}",
+        String::from_utf8_lossy(&anchors_with_turns.stderr)
+    );
+    let memory: serde_json::Value =
+        serde_json::from_slice(&anchors_with_turns.stdout).expect("anchors should emit JSON");
+    let turn_memory = memory
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == "shadow_anchor")
+        .expect("anchors should include local shadow anchors inside a repo");
+    let turn_id = turn_memory["shadow_anchor_id"].as_str().unwrap();
+    assert_eq!(turn_memory["turn_id"], turn_id);
+    assert_eq!(turn_memory["session_id"], sid);
+    assert_eq!(turn_memory["files"], 1);
+    assert_eq!(turn_memory["tool_calls"], 1);
+
+    Command::new("git")
+        .args(["add", "app.txt"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let commit = Command::new(anchor_binary())
+        .args(["commit", "-m", "capture turn"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        commit.status.success(),
+        "anchor commit failed: {}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
+
+    let anchor = Command::new(anchor_binary())
+        .args(["anchors", "show", &head, "--json"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        anchor.status.success(),
+        "anchors show failed: {}",
+        String::from_utf8_lossy(&anchor.stderr)
+    );
+    let anchor_json: serde_json::Value =
+        serde_json::from_slice(&anchor.stdout).expect("anchor show should emit JSON");
+    let anchor_turn = anchor_json["shadow_anchors"]
+        .as_array()
+        .and_then(|items| items.first())
+        .expect("anchor should include turn lineage");
+    assert_eq!(anchor_turn["id"], turn_id);
+
+    let preview = Command::new(anchor_binary())
+        .args(["from", "turn", turn_id, "--agent"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(preview.status.success(), "from turn preview should succeed");
+    let preview_stdout = String::from_utf8_lossy(&preview.stdout);
+    assert!(preview_stdout.contains("preview"));
+    assert!(preview_stdout.contains("load_required=true"));
+
+    fs::write(tmp.path().join("app.txt"), "v3\n").unwrap();
+    let blocked = Command::new(anchor_binary())
+        .args(["from", "turn", turn_id, "--load", "--agent"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert_eq!(blocked.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&blocked.stdout).contains("blocked dirty_worktree"),
+        "dirty load should be blocked in agent output"
+    );
+
+    let forced = Command::new(anchor_binary())
+        .args(["from", "turn", turn_id, "--load", "--force", "--agent"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        forced.status.success(),
+        "forced turn load should succeed: {}",
+        String::from_utf8_lossy(&forced.stderr)
+    );
+    let forced_stdout = String::from_utf8_lossy(&forced.stdout);
+    let memory_path = forced_stdout
+        .split_whitespace()
+        .find_map(|part| part.strip_prefix("memory="))
+        .expect("loaded turn should materialize memory");
+    let memory_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(memory_path).unwrap()).unwrap();
+    assert_eq!(memory_json["kind"], "oobo_from_turn_memory");
+    assert_eq!(memory_json["turn"]["id"], turn_id);
+    assert_eq!(memory_json["tool_calls"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("app.txt")).unwrap(),
+        "v2\n"
+    );
+
+    let resumed_before = run_anchor_with_stdin(
+        tmp.path(),
+        oobo_home.path(),
+        &["hooks", "agent", "before-submit-prompt", "--tool", "cursor"],
+        &serde_json::json!({"session_id": sid, "prompt": "continue from loaded turn"}),
+    );
+    assert!(resumed_before.status.success());
+    fs::write(tmp.path().join("app.txt"), "v4\n").unwrap();
+    let resumed_tool = run_anchor_with_stdin(
+        tmp.path(),
+        oobo_home.path(),
+        &["hooks", "agent", "after-tool-use", "--tool", "cursor"],
+        &serde_json::json!({
+            "session_id": sid,
+            "tool_name": "Write",
+            "tool_input": {"file_path": abs_file},
+            "tool_output": {"ok": true}
+        }),
+    );
+    assert!(resumed_tool.status.success());
+    let resumed_stop = run_anchor_with_stdin(
+        tmp.path(),
+        oobo_home.path(),
+        &["hooks", "agent", "stop", "--tool", "cursor"],
+        &serde_json::json!({"session_id": sid}),
+    );
+    assert!(resumed_stop.status.success());
+
+    let resumed_turns = Command::new(anchor_binary())
+        .args(["anchors", "--json"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(resumed_turns.status.success());
+    let resumed_json: serde_json::Value =
+        serde_json::from_slice(&resumed_turns.stdout).expect("anchors should emit JSON");
+    let restored_turn = resumed_json
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == "shadow_anchor" && item["turn_index"] == 1)
+        .expect("second shadow anchor should be captured after restore");
+    assert_eq!(restored_turn["restored_from"], turn_id);
+}
+
+#[test]
+fn test_e2e_from_anchor_loads_commit_tree() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    fs::write(tmp.path().join("app.txt"), "anchor-v1\n").unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let first = Command::new("git")
+        .args(["commit", "-m", "first"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(first.status.success());
+    let first_hash = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let first_hash = String::from_utf8_lossy(&first_hash.stdout)
+        .trim()
+        .to_string();
+
+    fs::write(tmp.path().join("app.txt"), "anchor-v2\n").unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let second = Command::new("git")
+        .args(["commit", "-m", "second"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(second.status.success());
+    let head_before = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let head_before = String::from_utf8_lossy(&head_before.stdout)
+        .trim()
+        .to_string();
+
+    fs::write(tmp.path().join("app.txt"), "dirty\n").unwrap();
+    let load = Command::new(anchor_binary())
+        .args([
+            "from",
+            "anchor",
+            &first_hash,
+            "--load",
+            "--force",
+            "--agent",
+        ])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        load.status.success(),
+        "anchor load should succeed: {}",
+        String::from_utf8_lossy(&load.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("app.txt")).unwrap(),
+        "anchor-v1\n"
+    );
+
+    let head_after = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let head_after = String::from_utf8_lossy(&head_after.stdout)
+        .trim()
+        .to_string();
+    assert_eq!(
+        head_after, head_before,
+        "loading an anchor must not move HEAD"
+    );
+}
+
+#[test]
+fn test_e2e_project_settings_write_oobo_config() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let set_remote = Command::new(anchor_binary())
+        .args([
+            "settings",
+            "project",
+            "set",
+            "remote",
+            "git@github.com:acme/project-oobo.git",
+        ])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        set_remote.status.success(),
+        "project remote set failed: {}",
+        String::from_utf8_lossy(&set_remote.stderr)
+    );
+
+    let set_transparency = Command::new(anchor_binary())
+        .args(["settings", "project", "set", "transparency", "off"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        set_transparency.status.success(),
+        "project transparency set failed: {}",
+        String::from_utf8_lossy(&set_transparency.stderr)
+    );
+
+    let config_path = tmp.path().join(".oobo/config");
+    assert!(config_path.exists(), ".oobo/config should be created");
+    let config = fs::read_to_string(&config_path).unwrap();
+    assert!(config.contains("git@github.com:acme/project-oobo.git"));
+    assert!(config.contains("transparency = \"off\""));
+
+    let project_settings = Command::new(anchor_binary())
+        .args(["--agent", "settings", "project"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(project_settings.status.success());
+    let stdout = String::from_utf8_lossy(&project_settings.stdout);
+    assert!(stdout.contains("remote project git@github.com:acme/project-oobo.git"));
+    assert!(stdout.contains("transparency project off"));
+}
+
+#[test]
+fn test_e2e_remote_search_uses_default_server_remote() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let remote_url = serve_search_once();
+    let set_remote = Command::new(anchor_binary())
+        .args(["settings", "default", "set", "remote", &remote_url])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        set_remote.status.success(),
+        "project remote set failed: {}",
+        String::from_utf8_lossy(&set_remote.stderr)
+    );
+
+    let set_key = Command::new(anchor_binary())
+        .args(["settings", "set", "key", "sk_test"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(set_key.status.success());
+    let config_path = if oobo_home.path().join("config").exists() {
+        oobo_home.path().join("config")
+    } else {
+        oobo_home.path().join("config.toml")
+    };
+    let saved_config = fs::read_to_string(&config_path).unwrap();
+    assert!(
+        saved_config.contains("api_key"),
+        "settings set key should persist API key"
+    );
+
+    let search = Command::new(anchor_binary())
+        .args(["search", "remote", "--remote", "--json"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        search.status.success(),
+        "remote search failed: {}\nstdout:\n{}",
+        String::from_utf8_lossy(&search.stderr),
+        String::from_utf8_lossy(&search.stdout)
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(&search.stdout).expect("search should emit JSON");
+    assert_eq!(value["hits"][0]["project"]["name"], "remote-project");
+    assert_eq!(value["hits"][0]["snippet"], "from configured server");
 }
 
 #[test]
@@ -698,7 +1408,7 @@ fn test_git_proxy_diff() {
         .output()
         .unwrap();
 
-    let output = Command::new(oobo_binary())
+    let output = Command::new(anchor_binary())
         .args(["diff"])
         .current_dir(tmp.path())
         .output()
@@ -711,14 +1421,14 @@ fn test_git_proxy_diff() {
 
 #[test]
 fn test_cli_help() {
-    let output = Command::new(oobo_binary())
+    let output = Command::new(anchor_binary())
         .args(["--help"])
         .output()
         .unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("oobo"));
+    assert!(stdout.contains("anchor"));
     assert!(stdout.contains("setup"));
     assert!(stdout.contains("alias"));
     assert!(stdout.contains("anchors"));
@@ -726,19 +1436,19 @@ fn test_cli_help() {
 
 #[test]
 fn test_cli_version_flag() {
-    let output = Command::new(oobo_binary())
+    let output = Command::new(anchor_binary())
         .args(["--version"])
         .output()
         .unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("oobo"));
+    assert!(stdout.contains("anchor"));
 }
 
 #[test]
 fn test_cli_anchors_help() {
-    let output = Command::new(oobo_binary())
+    let output = Command::new(anchor_binary())
         .args(["anchors", "--help"])
         .output()
         .unwrap();
@@ -756,6 +1466,7 @@ fn test_event_payload_roundtrip() {
     use oobo::remote::payload::*;
 
     let anchor = Anchor {
+        anchor_schema_version: ANCHOR_SCHEMA_VERSION,
         oobo_version: "0.1.0".into(),
         commit_hash: "abc123def456".into(),
         branch: "main".into(),
@@ -807,6 +1518,7 @@ fn test_event_payload_roundtrip() {
         reasoning: None,
         transparency_mode: TransparencyMode::On,
         file_interactions: None,
+        turns: Vec::new(),
     };
 
     let sessions = vec![SessionLink {
@@ -835,6 +1547,7 @@ fn test_event_payload_roundtrip() {
     }];
 
     let payload = EventPayload {
+        payload_schema_version: EVENT_PAYLOAD_SCHEMA_VERSION,
         event: "git.commit".into(),
         timestamp: chrono::Utc::now(),
         oobo_version: "0.1.0".into(),
@@ -1156,22 +1869,22 @@ fn test_alias_install_uninstall_roundtrip() {
 
     // Simulate install
     let content = fs::read_to_string(&rc_file).unwrap();
-    let new_content = format!("{content}\nalias git=oobo # oobo alias\n");
+    let new_content = format!("{content}\nalias git=anchor # anchor alias\n");
     fs::write(&rc_file, &new_content).unwrap();
 
     let after_install = fs::read_to_string(&rc_file).unwrap();
-    assert!(after_install.contains("oobo alias"));
-    assert!(after_install.contains("alias git=oobo"));
+    assert!(after_install.contains("anchor alias"));
+    assert!(after_install.contains("alias git=anchor"));
 
     // Simulate uninstall
     let filtered: Vec<&str> = after_install
         .lines()
-        .filter(|line| !line.contains("oobo alias"))
+        .filter(|line| !line.contains("anchor alias"))
         .collect();
     fs::write(&rc_file, filtered.join("\n") + "\n").unwrap();
 
     let after_uninstall = fs::read_to_string(&rc_file).unwrap();
-    assert!(!after_uninstall.contains("oobo alias"));
+    assert!(!after_uninstall.contains("anchor alias"));
     assert!(after_uninstall.contains("my zshrc"));
     assert!(after_uninstall.contains("export PATH"));
 }
@@ -1198,6 +1911,7 @@ fn test_oobo_blame_json_output() {
         .current_dir(tmp.path())
         .output()
         .unwrap();
+    enable_anchor_for_repo(tmp.path(), oobo_home.path());
 
     // Initial commit with a file
     fs::write(tmp.path().join("src.rs"), "fn main() {}\n").unwrap();
@@ -1207,7 +1921,7 @@ fn test_oobo_blame_json_output() {
         .output()
         .unwrap();
 
-    let commit1 = Command::new(oobo_binary())
+    let commit1 = Command::new(anchor_binary())
         .args(["commit", "-m", "initial"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
@@ -1216,7 +1930,7 @@ fn test_oobo_blame_json_output() {
     assert!(commit1.status.success(), "first commit failed");
 
     // Start a session, then modify the file, snapshot, commit
-    let start = Command::new(oobo_binary())
+    let start = Command::new(anchor_binary())
         .args(["hooks", "agent", "session-start"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
@@ -1246,7 +1960,7 @@ fn test_oobo_blame_json_output() {
     .unwrap();
 
     // Snapshot the file (simulates stop hook snapshotting)
-    let stop = Command::new(oobo_binary())
+    let stop = Command::new(anchor_binary())
         .args(["hooks", "agent", "stop"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
@@ -1273,7 +1987,7 @@ fn test_oobo_blame_json_output() {
         .output()
         .unwrap();
 
-    let commit2 = Command::new(oobo_binary())
+    let commit2 = Command::new(anchor_binary())
         .args(["commit", "-m", "add hello"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
@@ -1286,7 +2000,7 @@ fn test_oobo_blame_json_output() {
     );
 
     // Run blame --json
-    let blame_output = Command::new(oobo_binary())
+    let blame_output = Command::new(anchor_binary())
         .args(["blame", "src.rs", "--json"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
@@ -1331,6 +2045,7 @@ fn test_after_tool_use_snapshots_enable_line_attribution() {
         .current_dir(tmp.path())
         .output()
         .unwrap();
+    enable_anchor_for_repo(tmp.path(), oobo_home.path());
 
     // Initial commit
     fs::write(tmp.path().join("app.rs"), "fn main() {}\n").unwrap();
@@ -1339,7 +2054,7 @@ fn test_after_tool_use_snapshots_enable_line_attribution() {
         .current_dir(tmp.path())
         .output()
         .unwrap();
-    let c1 = Command::new(oobo_binary())
+    let c1 = Command::new(anchor_binary())
         .args(["commit", "-m", "init"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
@@ -1348,7 +2063,7 @@ fn test_after_tool_use_snapshots_enable_line_attribution() {
     assert!(c1.status.success(), "initial commit failed");
 
     // 1. session-start
-    let start = Command::new(oobo_binary())
+    let start = Command::new(anchor_binary())
         .args(["hooks", "agent", "session-start"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
@@ -1384,7 +2099,7 @@ fn test_after_tool_use_snapshots_enable_line_attribution() {
         "tool_name": "Write",
         "file_path": abs_file,
     });
-    let atu = Command::new(oobo_binary())
+    let atu = Command::new(anchor_binary())
         .args(["hooks", "agent", "after-tool-use"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
@@ -1411,7 +2126,7 @@ fn test_after_tool_use_snapshots_enable_line_attribution() {
         .output()
         .unwrap();
 
-    let c2 = Command::new(oobo_binary())
+    let c2 = Command::new(anchor_binary())
         .args(["commit", "-m", "add hello"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
@@ -1424,7 +2139,7 @@ fn test_after_tool_use_snapshots_enable_line_attribution() {
     );
 
     // 5. Verify blame --json has line_attributions
-    let blame = Command::new(oobo_binary())
+    let blame = Command::new(anchor_binary())
         .args(["blame", "app.rs", "--json"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
@@ -1437,9 +2152,7 @@ fn test_after_tool_use_snapshots_enable_line_attribution() {
         let val: serde_json::Value =
             serde_json::from_str(&stdout).expect("blame --json should return valid JSON");
         assert_eq!(val["file"], "app.rs");
-        let lines = val["lines"]
-            .as_array()
-            .expect("lines should be an array");
+        let lines = val["lines"].as_array().expect("lines should be an array");
         // At least one line should have non-null AI attribution, proving
         // after-tool-use snapshots produced per-line data.
         let has_ai = lines.iter().any(|l| !l["ai"].is_null());
@@ -1450,4 +2163,270 @@ fn test_after_tool_use_snapshots_enable_line_attribution() {
              per-line data. Got: {stdout}"
         );
     }
+}
+
+#[test]
+fn test_post_rewrite_amend_rekeys_orphan_anchor() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+
+    Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "test@oobo.dev"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    enable_anchor_for_repo(tmp.path(), oobo_home.path());
+
+    fs::write(tmp.path().join("rewrite.txt"), "hello rewrite\n").unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let commit = Command::new(anchor_binary())
+        .args(["commit", "-m", "original anchor"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        commit.status.success(),
+        "anchor commit failed: {}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+
+    let old_sha = git_stdout(tmp.path(), &["rev-parse", "HEAD"]);
+    assert!(
+        oobo::git::orphan::read_anchor(tmp.path().to_str().unwrap(), &old_sha).is_some(),
+        "initial anchor commit should write an orphan anchor"
+    );
+
+    let amend = Command::new("git")
+        .args(["commit", "--amend", "-m", "amended anchor"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        amend.status.success(),
+        "git amend failed: {}",
+        String::from_utf8_lossy(&amend.stderr)
+    );
+    let new_sha = git_stdout(tmp.path(), &["rev-parse", "HEAD"]);
+    assert_ne!(old_sha, new_sha, "amend should rewrite the commit sha");
+
+    let rewrite = Command::new(anchor_binary())
+        .args(["hooks", "post-rewrite", "amend"])
+        .env("OOBO_HOME", oobo_home.path())
+        .current_dir(tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(format!("{old_sha} {new_sha}\n").as_bytes())
+                .unwrap();
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert!(
+        rewrite.status.success(),
+        "post-rewrite hook failed: {}",
+        String::from_utf8_lossy(&rewrite.stderr)
+    );
+
+    let rekeyed = oobo::git::orphan::read_anchor(tmp.path().to_str().unwrap(), &new_sha)
+        .expect("post-rewrite should copy anchor metadata to rewritten sha");
+    assert_eq!(rekeyed.commit_hash, new_sha);
+    assert_eq!(rekeyed.message, "original anchor");
+}
+
+#[test]
+fn test_post_rewrite_rebase_rekeys_same_tree_anchor() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+    init_git_repo(tmp.path());
+    enable_anchor_for_repo(tmp.path(), oobo_home.path());
+
+    fs::write(tmp.path().join("base.txt"), "base\n").unwrap();
+    git_ok(tmp.path(), &["add", "."]);
+    git_ok(tmp.path(), &["commit", "-m", "base"]);
+    let old_base = git_stdout(tmp.path(), &["rev-parse", "HEAD"]);
+
+    fs::write(tmp.path().join("feature.txt"), "feature\n").unwrap();
+    git_ok(tmp.path(), &["add", "."]);
+    anchor_commit_ok(tmp.path(), oobo_home.path(), "feature anchor");
+    let old_feature = git_stdout(tmp.path(), &["rev-parse", "HEAD"]);
+    let old_tree = git_stdout(tmp.path(), &["show", "-s", "--format=%T", &old_feature]);
+    assert!(
+        oobo::git::orphan::read_anchor(tmp.path().to_str().unwrap(), &old_feature).is_some(),
+        "initial feature commit should have an orphan anchor"
+    );
+
+    let branch = git_stdout(tmp.path(), &["branch", "--show-current"]);
+    git_ok(tmp.path(), &["checkout", &old_base]);
+    git_ok(tmp.path(), &["commit", "--amend", "-m", "base reworded"]);
+    let new_base = git_stdout(tmp.path(), &["rev-parse", "HEAD"]);
+    git_ok(tmp.path(), &["branch", "rewritten-base", &new_base]);
+    git_ok(tmp.path(), &["checkout", &branch]);
+
+    let rebase = Command::new("git")
+        .args(["rebase", "--onto", "rewritten-base", &old_base, &branch])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        rebase.status.success(),
+        "git rebase failed: {}",
+        String::from_utf8_lossy(&rebase.stderr)
+    );
+
+    let new_feature = git_stdout(tmp.path(), &["rev-parse", "HEAD"]);
+    let new_tree = git_stdout(tmp.path(), &["show", "-s", "--format=%T", &new_feature]);
+    assert_ne!(old_feature, new_feature, "rebase should rewrite the sha");
+    assert_eq!(old_tree, new_tree, "this rebase fixture must preserve tree");
+
+    run_post_rewrite_hook(
+        tmp.path(),
+        oobo_home.path(),
+        "rebase",
+        &format!("{old_feature} {new_feature}\n"),
+    );
+
+    let rekeyed = oobo::git::orphan::read_anchor(tmp.path().to_str().unwrap(), &new_feature)
+        .expect("same-tree rebase should copy anchor metadata to rewritten sha");
+    assert_eq!(rekeyed.commit_hash, new_feature);
+    assert_eq!(rekeyed.message, "feature anchor");
+}
+
+#[test]
+fn test_post_rewrite_squash_rekeys_latest_same_tree_anchor() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+    init_git_repo(tmp.path());
+    enable_anchor_for_repo(tmp.path(), oobo_home.path());
+
+    fs::write(tmp.path().join("base.txt"), "base\n").unwrap();
+    git_ok(tmp.path(), &["add", "."]);
+    git_ok(tmp.path(), &["commit", "-m", "base"]);
+
+    fs::write(tmp.path().join("first.txt"), "first\n").unwrap();
+    git_ok(tmp.path(), &["add", "."]);
+    anchor_commit_ok(tmp.path(), oobo_home.path(), "first anchor");
+    let first_sha = git_stdout(tmp.path(), &["rev-parse", "HEAD"]);
+
+    fs::write(tmp.path().join("second.txt"), "second\n").unwrap();
+    git_ok(tmp.path(), &["add", "."]);
+    anchor_commit_ok(tmp.path(), oobo_home.path(), "second anchor");
+    let second_sha = git_stdout(tmp.path(), &["rev-parse", "HEAD"]);
+    let second_tree = git_stdout(tmp.path(), &["show", "-s", "--format=%T", &second_sha]);
+
+    git_ok(tmp.path(), &["reset", "--soft", "HEAD~2"]);
+    git_ok(tmp.path(), &["commit", "-m", "squashed feature"]);
+    let squashed_sha = git_stdout(tmp.path(), &["rev-parse", "HEAD"]);
+    let squashed_tree = git_stdout(tmp.path(), &["show", "-s", "--format=%T", &squashed_sha]);
+    assert_ne!(second_sha, squashed_sha, "squash should rewrite the sha");
+    assert_eq!(
+        second_tree, squashed_tree,
+        "squash fixture should preserve the final tree from the latest old commit"
+    );
+
+    run_post_rewrite_hook(
+        tmp.path(),
+        oobo_home.path(),
+        "rebase",
+        &format!("{first_sha} {squashed_sha}\n{second_sha} {squashed_sha}\n"),
+    );
+
+    let rekeyed = oobo::git::orphan::read_anchor(tmp.path().to_str().unwrap(), &squashed_sha)
+        .expect("squash should copy the latest same-tree anchor to the squashed sha");
+    assert_eq!(rekeyed.commit_hash, squashed_sha);
+    assert_eq!(rekeyed.message, "second anchor");
+}
+
+fn init_git_repo(repo: &Path) {
+    git_ok(repo, &["init"]);
+    git_ok(repo, &["config", "user.email", "test@oobo.dev"]);
+    git_ok(repo, &["config", "user.name", "Test User"]);
+}
+
+fn anchor_commit_ok(repo: &Path, oobo_home: &Path, message: &str) {
+    let output = Command::new(anchor_binary())
+        .args(["commit", "-m", message])
+        .env("OOBO_HOME", oobo_home)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "anchor commit failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn run_post_rewrite_hook(repo: &Path, oobo_home: &Path, rewrite_kind: &str, payload: &str) {
+    let output = Command::new(anchor_binary())
+        .args(["hooks", "post-rewrite", rewrite_kind])
+        .env("OOBO_HOME", oobo_home)
+        .current_dir(repo)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(payload.as_bytes())
+                .unwrap();
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "post-rewrite hook failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn git_ok(repo: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn git_stdout(repo: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }

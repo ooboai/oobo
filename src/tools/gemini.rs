@@ -287,13 +287,6 @@ pub mod transcript {
         None
     }
 
-    pub fn count_messages(_project_path: &str, session_id: &str) -> u32 {
-        match find_transcript_path("", session_id) {
-            Some(p) => parse_messages(&p).len() as u32,
-            None => 0,
-        }
-    }
-
     pub fn parse_messages(path: &Path) -> Vec<Message> {
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
@@ -479,11 +472,6 @@ pub mod transcript {
     ) -> Option<crate::remote::payload::SessionStats> {
         let path = find_transcript_path("", session_id)?;
         extract_stats(&path)
-    }
-
-    pub fn read_transcript(path: &Path, max_messages: u32) -> String {
-        let messages = parse_messages(path);
-        crate::utils::format_transcript(&messages, max_messages, "Gemini")
     }
 }
 

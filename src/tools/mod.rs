@@ -9,6 +9,8 @@ pub mod continue_dev;
 pub mod copilot;
 pub mod cursor;
 pub mod droid;
+#[allow(dead_code)]
+pub mod external;
 pub mod gemini;
 pub mod opencode;
 pub mod vscode_fork;
@@ -24,11 +26,7 @@ pub use adapter::*;
 /// enabled in `~/.oobo/config.toml`, the 5 contrib adapters (Windsurf, Trae,
 /// Amp, Junie, Kiro) are registered alongside them.
 pub fn registry() -> ToolRegistry {
-    registry_with(
-        crate::config::Config::load_or_default()
-            .tools
-            .experimental,
-    )
+    registry_with(crate::config::Config::load_or_default().tools.experimental)
 }
 
 /// Build a registry, explicitly controlling whether experimental/contrib
@@ -85,7 +83,11 @@ mod tests {
     fn test_experimental_registry_adds_contrib_tools() {
         let reg = registry_with(true);
         let names = reg.tool_names();
-        assert_eq!(names.len(), 15, "experimental registry should have 15 tools, got {names:?}");
+        assert_eq!(
+            names.len(),
+            15,
+            "experimental registry should have 15 tools, got {names:?}"
+        );
         for contrib in ["windsurf", "trae", "kiro", "junie", "amp"] {
             assert!(
                 reg.by_name(contrib).is_some(),
@@ -190,13 +192,13 @@ mod tests {
         let reg = registry_with(true);
         for tool in reg.all() {
             let result = tool.sessions_for_project("/nonexistent/path");
-            match result {
-                Ok(sessions) => assert!(
+            // Errors are acceptable when the native tool store is unavailable.
+            if let Ok(sessions) = result {
+                assert!(
                     sessions.is_empty(),
                     "{}: sessions_for_project on nonexistent path should be empty",
                     tool.name()
-                ),
-                Err(_) => {} // acceptable
+                );
             }
         }
     }
@@ -211,7 +213,10 @@ mod tests {
             let _ = tool.find_transcript("/nonexistent", "nonexistent-session-id");
             // parse_messages on a nonexistent path — must not panic.
             let msgs = tool.parse_messages(dummy);
-            assert!(msgs.is_empty(), "{n}: parse_messages on bad path should be empty");
+            assert!(
+                msgs.is_empty(),
+                "{n}: parse_messages on bad path should be empty"
+            );
             // count_messages on nonexistent path.
             let count = tool.count_messages("/nonexistent", "nonexistent-session-id");
             assert_eq!(count, 0, "{n}: count_messages on bad path should be 0");
@@ -243,6 +248,9 @@ mod tests {
     fn test_first_class_tools_have_10_members() {
         let reg = registry_with(false);
         let count = reg.all().count();
-        assert_eq!(count, 10, "first-class tools should be exactly 10, got {count}");
+        assert_eq!(
+            count, 10,
+            "first-class tools should be exactly 10, got {count}"
+        );
     }
 }

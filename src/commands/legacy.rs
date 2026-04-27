@@ -17,47 +17,48 @@ pub struct Hint {
 const HINTS: &[Hint] = &[
     Hint {
         legacy: "scan",
-        message: "indexing is automatic now. for a forced reindex: oobo setup --reindex",
+        message: "indexing is automatic now. for a forced reindex: anchor setup --reindex",
         mapped: Some(&["setup", "--reindex"]),
     },
     Hint {
         legacy: "index",
-        message: "indexing is automatic now. for a forced reindex: oobo setup --reindex",
+        message: "indexing is automatic now. for a forced reindex: anchor setup --reindex",
         mapped: Some(&["setup", "--reindex"]),
     },
     Hint {
         legacy: "sessions",
-        message: "sessions are shown inside 'oobo anchors show <sha>' or 'oobo search'.",
+        message: "sessions are shown inside 'anchor anchors show <sha>' or 'anchor search'.",
         mapped: Some(&["anchors"]),
     },
     Hint {
         legacy: "projects",
-        message: "manage projects via 'oobo setup'; view them with 'oobo' (outside a repo).",
+        message: "manage projects via 'anchor setup'; view them with 'anchor' (outside a repo).",
         mapped: Some(&["setup"]),
     },
     Hint {
         legacy: "ignore",
-        message: "use 'oobo disable' instead.",
+        message: "use 'anchor disable' instead.",
         mapped: Some(&["disable"]),
     },
     Hint {
         legacy: "unignore",
-        message: "use 'oobo enable' instead.",
+        message: "use 'anchor enable' instead.",
         mapped: Some(&["enable"]),
     },
     Hint {
         legacy: "sync",
-        message: "sync is configured via 'oobo settings'. set your API key: oobo settings set key <...>",
+        message:
+            "removed. team sync is git-first (orphan branch). for remote search set an API key: anchor settings set key <...>",
         mapped: Some(&["settings"]),
     },
     Hint {
         legacy: "transparency",
-        message: "use 'oobo settings set transparency on|off' (advanced).",
+        message: "use 'anchor settings set transparency on|off' (advanced).",
         mapped: Some(&["settings"]),
     },
     Hint {
         legacy: "auth",
-        message: "use 'oobo settings set key <your-key>'.",
+        message: "use 'anchor settings set key <your-key>'.",
         mapped: Some(&["settings"]),
     },
     Hint {
@@ -67,22 +68,22 @@ const HINTS: &[Hint] = &[
     },
     Hint {
         legacy: "dash",
-        message: "removed in 1.0; visit 'oobo' in a repo for the TUI.",
+        message: "removed in 1.0; visit 'anchor' in a repo for the TUI.",
         mapped: Some(&[]),
     },
     Hint {
         legacy: "sources",
-        message: "removed in 1.0; run 'oobo setup --repair' to re-detect tool paths.",
+        message: "removed in 1.0; run 'anchor setup --repair' to re-detect tool paths.",
         mapped: Some(&["setup", "--repair"]),
     },
     Hint {
         legacy: "inspect",
-        message: "removed in 1.0; run 'oobo setup --repair' for diagnostics.",
+        message: "removed in 1.0; run 'anchor setup --repair' for diagnostics.",
         mapped: Some(&["setup", "--repair"]),
     },
     Hint {
         legacy: "stats",
-        message: "stats are inline in the anchor view and in 'oobo anchors show <sha>'.",
+        message: "stats are inline in the anchor view and in 'anchor anchors show <sha>'.",
         mapped: Some(&["anchors"]),
     },
     Hint {
@@ -92,22 +93,22 @@ const HINTS: &[Hint] = &[
     },
     Hint {
         legacy: "share",
-        message: "removed; use 'oobo anchors show <sha> --json' for redacted output.",
+        message: "removed; use 'anchor anchors show <sha> --json' for redacted output.",
         mapped: Some(&["anchors"]),
     },
     Hint {
         legacy: "export",
-        message: "removed; use 'oobo anchors show <sha> --json'.",
+        message: "removed; use 'anchor anchors show <sha> --json'.",
         mapped: Some(&["anchors"]),
     },
     Hint {
         legacy: "version",
-        message: "use 'oobo --version'.",
+        message: "use 'anchor --version'.",
         mapped: None,
     },
     Hint {
         legacy: "doctor",
-        message: "removed; run 'oobo setup --repair'.",
+        message: "removed; run 'anchor setup --repair'.",
         mapped: Some(&["setup", "--repair"]),
     },
 ];
@@ -121,7 +122,7 @@ pub fn lookup(verb: &str) -> Option<&'static Hint> {
 /// Returns the exit code to use, or `None` if the caller should continue
 /// execution with the mapped args.
 pub fn handle(hint: &Hint) -> Option<i32> {
-    eprintln!("oobo: '{}' was removed in 1.0.", hint.legacy);
+    eprintln!("anchor: '{}' was removed in 1.0.", hint.legacy);
     eprintln!("      {}", hint.message);
     eprintln!("      (this hint will be removed in 1.1.0)");
 
@@ -129,8 +130,8 @@ pub fn handle(hint: &Hint) -> Option<i32> {
     let stdout_is_tty = io::stdout().is_terminal();
 
     let mapped = match hint.mapped {
-        Some(m) if !m.is_empty() => m,
-        _ => return Some(2),
+        Some(m) => m,
+        None => return Some(2),
     };
 
     if !stdin_is_tty || !stdout_is_tty {
@@ -138,7 +139,11 @@ pub fn handle(hint: &Hint) -> Option<i32> {
     }
 
     eprintln!();
-    eprint!("run 'oobo {}' now? [Y/n]: ", mapped.join(" "));
+    if mapped.is_empty() {
+        eprint!("run 'anchor' now? [Y/n]: ");
+    } else {
+        eprint!("run 'anchor {}' now? [Y/n]: ", mapped.join(" "));
+    }
     let _ = io::stderr().flush();
 
     let mut line = String::new();

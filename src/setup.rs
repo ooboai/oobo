@@ -1,8 +1,9 @@
+use std::collections::HashSet;
 use std::io::IsTerminal;
 
 use crate::cli::OutputMode;
 use crate::config::Config;
-use crate::tui::setup::ScanInfo;
+use crate::tui::setup::{ProjectChoice, ScanInfo};
 
 pub struct SetupOptions {
     pub non_interactive: bool,
@@ -14,8 +15,6 @@ pub struct SetupOptions {
 
 /// Top-level dispatcher for `oobo setup [flags]`. Flags are composable.
 pub fn run_setup_with(opts: SetupOptions) -> Result<i32, String> {
-    // `--uninstall-alias` is headless. If combined with other flags we still
-    // run those; but on its own it should short-circuit like `oobo alias uninstall`.
     if opts.uninstall_alias && !opts.repair && !opts.reindex && !opts.non_interactive_wizard() {
         crate::alias::uninstall_alias()?;
         return Ok(0);
@@ -25,7 +24,7 @@ pub fn run_setup_with(opts: SetupOptions) -> Result<i32, String> {
 
     if opts.repair {
         if let Err(e) = run_repair(&opts) {
-            eprintln!("oobo: error: repair failed: {e}");
+            eprintln!("anchor: error: repair failed: {e}");
             exit_code = 1;
         }
     }
@@ -34,7 +33,7 @@ pub fn run_setup_with(opts: SetupOptions) -> Result<i32, String> {
         match run_reindex(&opts) {
             Ok(code) if code != 0 => exit_code = code,
             Err(e) => {
-                eprintln!("oobo: error: reindex failed: {e}");
+                eprintln!("anchor: error: reindex failed: {e}");
                 exit_code = 1;
             }
             _ => {}
@@ -43,14 +42,12 @@ pub fn run_setup_with(opts: SetupOptions) -> Result<i32, String> {
 
     if opts.uninstall_alias {
         if let Err(e) = crate::alias::uninstall_alias() {
-            eprintln!("oobo: warning: could not uninstall alias: {e}");
+            eprintln!("anchor: warning: could not uninstall alias: {e}");
         }
     }
 
-    // Run the wizard only when no composable flag was supplied, or when the
-    // user explicitly asked for `--non-interactive` without anything else.
     if !opts.repair && !opts.reindex && !opts.uninstall_alias {
-        run_setup()?;
+        run_setup(opts.non_interactive)?;
     }
 
     Ok(exit_code)
@@ -66,67 +63,65 @@ impl SetupOptions {
 
 fn run_repair(opts: &SetupOptions) -> Result<(), String> {
     let cfg = Config::load_or_default();
-    let db = crate::db::Db::open()?;
-    let projects = db.list_projects().unwrap_or_default();
-    let mut healthy = 0usize;
-
     let mode = opts.mode;
-    if matches!(mode, OutputMode::Tui) {
-        println!("repairing {} projects...", projects.len());
+
+    let root = crate::git::proxy::project_root(&cfg);
+    let Some(path) = root else {
+        if matches!(mode, OutputMode::Tui) {
+            println!("not in a git repository — cd into a project first.");
+        }
+        return Ok(());
+    };
+
+    let project_id = crate::project::id_for_root(&path);
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown");
+
+    let hooks_result = crate::hooks::install::install_project_hooks(&path);
+    let hooks_status = match &hooks_result {
+        Ok(_) => "ok",
+        Err(_) => "failed",
+    };
+
+    let orphan_status = if crate::git::orphan::branch_exists(&path) {
+        "ok"
+    } else if crate::git::orphan::remote_branch_exists(&path) {
+        match crate::git::orphan::fetch_and_reconcile(&path) {
+            Ok(_) => "rebuilt from remote",
+            Err(_) => "missing",
+        }
+    } else {
+        "missing (no remote branch)"
+    };
+
+    match mode {
+        OutputMode::Agent => {
+            println!(
+                "repair {} hooks={} orphan={}",
+                name, hooks_status, orphan_status
+            );
+        }
+        OutputMode::Json => {
+            let json = serde_json::json!({
+                "project": { "id": project_id, "name": name, "path": path },
+                "hooks": hooks_status,
+                "orphan": orphan_status,
+            });
+            crate::utils::print_json(&json);
+        }
+        OutputMode::Tui => {
+            println!(
+                "  {:<20} hooks {} · orphan {}",
+                name, hooks_status, orphan_status
+            );
+        }
     }
 
-    for p in &projects {
-        let settings = db.get_project_settings(&p.id).unwrap_or_default();
-        if settings.ignored {
-            continue;
-        }
-
-        let hooks_result = crate::hooks::install::install_project_hooks(&p.path);
-        let hooks_status = match &hooks_result {
-            Ok(_) => "ok",
-            Err(_) => "failed",
-        };
-
-        let orphan_status = if crate::git::orphan::branch_exists(&p.path) {
-            "ok"
-        } else if crate::git::orphan::remote_branch_exists(&p.path) {
-            match crate::git::orphan::fetch_and_reconcile(&p.path) {
-                Ok(_) => "rebuilt from remote",
-                Err(_) => "missing",
-            }
-        } else {
-            "missing (no remote branch)"
-        };
-
-        match mode {
-            OutputMode::Agent => {
-                println!("repair {} hooks={} orphan={}", p.name, hooks_status, orphan_status);
-            }
-            OutputMode::Json => {
-                let json = serde_json::json!({
-                    "project": { "id": p.id, "name": p.name, "path": p.path },
-                    "hooks": hooks_status,
-                    "orphan": orphan_status,
-                });
-                crate::utils::print_json(&json);
-            }
-            OutputMode::Tui => {
-                println!(
-                    "  {:<20} hooks {} · orphan {}",
-                    p.name, hooks_status, orphan_status
-                );
-            }
-        }
-
-        if matches!(hooks_status, "ok") && matches!(orphan_status, "ok" | "rebuilt") {
-            healthy += 1;
-        }
-    }
-
-    let _ = cfg;
     if matches!(mode, OutputMode::Tui) {
         println!();
-        println!("{} projects healthy.", healthy);
+        println!("repair complete.");
     }
     Ok(())
 }
@@ -134,94 +129,26 @@ fn run_repair(opts: &SetupOptions) -> Result<(), String> {
 // ── Reindex path ───────────────────────────────────────────────────────────
 
 fn run_reindex(opts: &SetupOptions) -> Result<i32, String> {
-    let cfg = Config::load_or_default();
-    let db = crate::db::Db::open()?;
-    let projects = db.list_projects().unwrap_or_default();
     let mode = opts.mode;
-
-    if projects.is_empty() {
-        if matches!(mode, OutputMode::Tui) {
-            println!("no projects to reindex. run `oobo setup` first.");
-        }
-        return Ok(0);
-    }
-
     if matches!(mode, OutputMode::Tui) {
-        println!("reindexing {} projects...", projects.len());
+        println!("reindex is no longer needed — anchor data lives on the orphan branch.");
     }
-
-    let mut failures = 0usize;
-    for p in &projects {
-        let settings = db.get_project_settings(&p.id).unwrap_or_default();
-        if settings.ignored {
-            eprintln!("oobo: skipping disabled project '{}'", p.name);
-            continue;
-        }
-        let start = std::time::Instant::now();
-        let result = crate::scanner::scan_project(&db, &cfg, &p.path);
-        let elapsed = start.elapsed();
-
-        match (&result, mode) {
-            (Ok(r), OutputMode::Agent) => {
-                println!(
-                    "reindex {} {} {}ms ok",
-                    p.name,
-                    r.sessions_found,
-                    elapsed.as_millis()
-                );
-            }
-            (Ok(r), OutputMode::Json) => {
-                let json = serde_json::json!({
-                    "project": { "id": p.id, "name": p.name },
-                    "sessions": r.sessions_found,
-                    "elapsed_ms": elapsed.as_millis(),
-                    "status": "ok",
-                });
-                crate::utils::print_json(&json);
-            }
-            (Ok(r), OutputMode::Tui) => {
-                println!(
-                    "  ✓ {:<20} {} sessions  {:.1}s",
-                    p.name,
-                    r.sessions_found,
-                    elapsed.as_secs_f64()
-                );
-            }
-            (Err(e), _) => {
-                failures += 1;
-                eprintln!("  ✗ {}: {}", p.name, e);
-            }
-        }
-    }
-
-    if matches!(mode, OutputMode::Tui) {
-        println!();
-        println!(
-            "done. {} projects reindexed ({} failures).",
-            projects.len() - failures,
-            failures
-        );
-    }
-    if failures > 0 {
-        Ok(1)
-    } else {
-        Ok(0)
-    }
+    Ok(0)
 }
 
-pub fn run_setup() -> Result<(), String> {
+pub fn run_setup(non_interactive: bool) -> Result<(), String> {
     if let Err(e) = crate::commands::agent::ensure_skill_file() {
-        eprintln!("oobo: warning: could not install skill file: {e}");
+        eprintln!("anchor: warning: could not install skill file: {e}");
     }
 
-    eprintln!("  scanning for AI tools...");
-    let detected = detect_tools();
-    let (projects, sessions) = run_initial_scan();
+    eprintln!("  scanning for AI tools and projects...");
+    let scan = run_initial_scan();
 
-    if detected.is_empty() {
+    if scan.detected.is_empty() {
         eprintln!("  no existing sessions found — you can enable tools during setup");
     } else {
-        let labels: Vec<String> = detected
+        let labels: Vec<String> = scan
+            .detected
             .iter()
             .map(|(key, count)| {
                 let label = tool_label(key);
@@ -230,21 +157,19 @@ pub fn run_setup() -> Result<(), String> {
             .collect();
         eprintln!("  found: {}", labels.join(", "));
     }
-    if projects > 0 {
-        eprintln!("  {projects} project(s), {sessions} session(s)");
+    if scan.projects > 0 {
+        eprintln!(
+            "  {} project(s), {} session(s)",
+            scan.projects, scan.sessions
+        );
     }
     eprintln!();
 
     let cfg = Config::load_or_default();
-    let scan = ScanInfo {
-        detected,
-        projects,
-        sessions,
-    };
 
-    let new_cfg = if std::io::stdout().is_terminal() {
+    let outcome = if !non_interactive && std::io::stdout().is_terminal() {
         match crate::tui::setup::run_setup_wizard(&cfg, scan)? {
-            Some(c) => c,
+            Some(outcome) => outcome,
             None => {
                 println!();
                 println!("  Setup cancelled.");
@@ -254,22 +179,29 @@ pub fn run_setup() -> Result<(), String> {
         }
     } else {
         eprintln!("  non-interactive environment detected — using defaults");
-        crate::tui::setup::build_default_config(&cfg, scan)
+        crate::tui::setup::build_default_outcome(&cfg, scan)
     };
 
+    let new_cfg = outcome.config.clone();
     new_cfg.save()?;
+
+    let (enabled_projects, disabled_projects) = apply_project_choices(&outcome.projects)?;
 
     println!();
     println!(
         "  Configuration saved to {}",
         Config::config_path().display()
     );
+    if !outcome.projects.is_empty() {
+        println!("  Projects enabled: {enabled_projects}");
+        println!("  Projects disabled: {disabled_projects}");
+    }
 
     if new_cfg.git.alias_enabled {
         if let Err(e) = crate::alias::install_alias() {
-            eprintln!("oobo: warning: could not install alias: {e}");
+            eprintln!("anchor: warning: could not install alias: {e}");
         } else {
-            println!("  Git alias installed (git = oobo)");
+            println!("  Git alias installed (git = anchor)");
         }
     }
 
@@ -284,51 +216,132 @@ pub fn run_setup() -> Result<(), String> {
         }
     }
 
-    if let Some(root) = crate::git::proxy::project_root(&new_cfg) {
-        match crate::hooks::install::install_project_hooks(&root) {
-            Ok(hooks) => {
-                println!();
-                println!("  Git hooks installed for this project:");
-                for h in &hooks {
-                    println!("    {h}");
-                }
-            }
-            Err(e) => {
-                eprintln!("oobo: warning: could not install git hooks: {e}");
-            }
-        }
-    }
+    install_selected_project_hooks(&new_cfg, &outcome.projects);
 
     println!();
     println!("  You're all set! Try:");
-    println!("    oobo             -- see your anchor feed");
-    println!("    oobo anchors     -- enriched commit history");
-    println!("    oobo search <q>  -- find any past session");
+    println!("    anchor             -- see your anchor feed");
+    println!("    anchor anchors     -- enriched commit history");
+    println!("    anchor search <q>  -- find any past session");
+    println!("    anchor enable      -- enable the current repo later");
+    println!("    anchor disable     -- make anchor stay quiet in this repo");
     println!();
     Ok(())
 }
 
-fn detect_tools() -> Vec<(String, usize)> {
+fn run_initial_scan() -> ScanInfo {
     let reg = crate::tools::registry();
-    let mut found = Vec::new();
+    let mut detected: Vec<(String, usize)> = Vec::new();
+    let mut project_map: std::collections::HashMap<String, (HashSet<String>, usize)> =
+        std::collections::HashMap::new();
+
     for tool in reg.all() {
-        if let Ok(sessions) = tool.all_sessions() {
-            if !sessions.is_empty() {
-                found.push((tool.config_key().to_string(), sessions.len()));
+        let sessions = match tool.all_sessions() {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let top_level_count = sessions.iter().filter(|s| !s.is_subagent()).count();
+        if top_level_count > 0 {
+            detected.push((tool.config_key().to_string(), top_level_count));
+        }
+        for session in &sessions {
+            if session.project_path.is_empty() || session.is_subagent() {
+                continue;
             }
+            let entry = project_map
+                .entry(session.project_path.clone())
+                .or_insert_with(|| (HashSet::new(), 0));
+            entry.0.insert(tool.config_key().to_string());
+            entry.1 += 1;
         }
     }
-    found
+
+    let total_projects = project_map.len();
+    let total_sessions: usize = project_map.values().map(|(_, c)| c).sum();
+
+    let mut project_choices: Vec<ProjectChoice> = project_map
+        .into_iter()
+        .filter_map(|(path, (tools, session_count))| {
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let id = crate::project::id_for_root(&path);
+            let already_enabled = crate::project_config::is_enabled(&path);
+            let has_sessions = session_count > 0;
+            Some(ProjectChoice {
+                id,
+                name,
+                path,
+                tools: tools.into_iter().collect(),
+                sessions: session_count,
+                enabled: already_enabled || has_sessions,
+            })
+        })
+        .collect();
+
+    project_choices.sort_by(|a, b| b.sessions.cmp(&a.sessions));
+
+    ScanInfo {
+        detected,
+        projects: total_projects,
+        sessions: total_sessions,
+        project_choices,
+    }
 }
 
-fn run_initial_scan() -> (usize, usize) {
-    let cfg = Config::load_or_default();
-    match crate::db::Db::open() {
-        Ok(db) => match crate::scanner::full_scan(&db, &cfg) {
-            Ok(result) => (result.projects_found, result.sessions_found),
-            Err(_) => (0, 0),
-        },
-        Err(_) => (0, 0),
+fn apply_project_choices(projects: &[ProjectChoice]) -> Result<(usize, usize), String> {
+    let mut enabled = 0usize;
+    let mut disabled = 0usize;
+    for project in projects {
+        if project.enabled {
+            crate::project_config::set_enabled(&project.path, &project.id, true)?;
+            enabled += 1;
+        } else {
+            if crate::project_config::exists(&project.path) {
+                crate::project_config::set_enabled(&project.path, &project.id, false)?;
+            }
+            disabled += 1;
+        }
+    }
+    Ok((enabled, disabled))
+}
+
+fn install_selected_project_hooks(cfg: &Config, projects: &[ProjectChoice]) {
+    if projects.is_empty() {
+        if let Some(root) = crate::git::proxy::project_root(cfg) {
+            install_project_hooks_with_status(&root, "this project");
+        }
+        return;
+    }
+
+    let enabled: Vec<&ProjectChoice> = projects.iter().filter(|p| p.enabled).collect();
+    if enabled.is_empty() {
+        println!();
+        println!("  No project git hooks installed (all projects disabled).");
+        return;
+    }
+
+    println!();
+    println!("  Git hooks installed for enabled projects:");
+    for project in enabled {
+        install_project_hooks_with_status(&project.path, &project.name);
+    }
+}
+
+fn install_project_hooks_with_status(root: &str, label: &str) {
+    match crate::hooks::install::install_project_hooks(root) {
+        Ok(hooks) => {
+            if hooks.is_empty() {
+                println!("    {label}: already up to date");
+            } else {
+                println!("    {label}: {}", hooks.join(", "));
+            }
+        }
+        Err(e) => {
+            eprintln!("anchor: warning: could not install git hooks for {label}: {e}");
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 //! Active-session tracking for hook events.
 //!
 //! State is persisted through [`crate::hooks::store`], which transparently
-//! prefers the SQLite `hook_sessions` table and falls back to a per-session
+//! prefers the SQLite `active_sessions` table and falls back to a per-session
 //! buffer file in `~/.oobo/tmp/hook-buffer/` when no project can be resolved
 //! (pre-`git init`) or when the DB is transiently unavailable. Legacy files
 //! in `<git-common-dir>/oobo-sessions/*.json` (written by oobo 0.1.x) are
@@ -15,6 +15,9 @@ use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::turn::{
+    TurnFileSnapshot, TurnHookEvent, TurnMemoryPayload, TurnSnapshot, TurnToolCall,
+};
 use crate::error::Result;
 use crate::hooks::store;
 
@@ -74,6 +77,17 @@ pub struct ActiveSession {
     /// Number of context compaction events during this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_count: Option<u32>,
+    /// 0-based turn index for Git-backed turn snapshots.
+    #[serde(default)]
+    pub current_turn_index: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_turn_started_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_turn_hook_events: Option<Vec<TurnHookEvent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_turn_tool_calls: Option<Vec<TurnToolCall>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_turn_snapshot_id: Option<String>,
     pub started_at: i64,
     pub updated_at: i64,
 }
@@ -97,6 +111,11 @@ impl ActiveSession {
             subagent_runs: None,
             thinking_duration_ms: None,
             compact_count: None,
+            current_turn_index: 0,
+            current_turn_started_at: None,
+            current_turn_hook_events: None,
+            current_turn_tool_calls: None,
+            last_turn_snapshot_id: None,
             started_at: now,
             updated_at: now,
         }
@@ -217,6 +236,64 @@ pub fn touch_session(
     })
 }
 
+pub fn start_turn(project_root: &str, session_id: &str) -> Result<()> {
+    mutate(project_root, session_id, |state| {
+        if state.current_turn_started_at.is_some() {
+            return;
+        }
+        if state.last_turn_snapshot_id.is_some() {
+            state.current_turn_index += 1;
+        }
+        state.current_turn_started_at = Some(chrono::Utc::now().timestamp());
+        state.current_turn_hook_events = Some(Vec::new());
+        state.current_turn_tool_calls = Some(Vec::new());
+    })
+}
+
+pub fn record_hook_event(
+    project_root: &str,
+    session_id: &str,
+    event_name: &str,
+    payload: Option<serde_json::Value>,
+) -> Result<()> {
+    mutate(project_root, session_id, |state| {
+        if state.current_turn_started_at.is_none() {
+            state.current_turn_started_at = Some(chrono::Utc::now().timestamp());
+        }
+        let mut events = state.current_turn_hook_events.take().unwrap_or_default();
+        events.push(TurnHookEvent {
+            name: event_name.to_string(),
+            observed_at: chrono::Utc::now().timestamp(),
+            payload,
+        });
+        state.current_turn_hook_events = Some(events);
+    })
+}
+
+pub fn record_tool_call(
+    project_root: &str,
+    session_id: &str,
+    tool_name: &str,
+    input: Option<serde_json::Value>,
+    output: Option<serde_json::Value>,
+    failed: bool,
+) -> Result<()> {
+    mutate(project_root, session_id, |state| {
+        if state.current_turn_started_at.is_none() {
+            state.current_turn_started_at = Some(chrono::Utc::now().timestamp());
+        }
+        let mut calls = state.current_turn_tool_calls.take().unwrap_or_default();
+        calls.push(TurnToolCall {
+            name: tool_name.to_string(),
+            observed_at: chrono::Utc::now().timestamp(),
+            input,
+            output,
+            failed,
+        });
+        state.current_turn_tool_calls = Some(calls);
+    })
+}
+
 /// Record a file edited by the agent during this session.
 pub fn record_edited_file(project_root: &str, session_id: &str, file_path: &str) -> Result<()> {
     mutate(project_root, session_id, |state| {
@@ -322,6 +399,210 @@ pub fn record_compact(project_root: &str, session_id: &str) -> Result<()> {
     })
 }
 
+pub fn finish_turn(
+    project_root: &str,
+    session_id: &str,
+    agent: &str,
+    model: Option<&str>,
+    transcript_path: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(mut state) = store::read(project_root, session_id) else {
+        return Ok(None);
+    };
+
+    let has_turn_memory = state.current_turn_started_at.is_some()
+        || state
+            .current_turn_hook_events
+            .as_ref()
+            .map(|events| !events.is_empty())
+            .unwrap_or(false)
+        || state
+            .current_turn_tool_calls
+            .as_ref()
+            .map(|calls| !calls.is_empty())
+            .unwrap_or(false)
+        || state
+            .edited_files
+            .as_ref()
+            .map(|files| !files.is_empty())
+            .unwrap_or(false);
+
+    if !has_turn_memory {
+        return Ok(None);
+    }
+
+    let source = crate::core::tool::normalize_source(agent);
+    let worktree_id = crate::git::turns::worktree_id(project_root);
+    let project_id = crate::project::id_for_root(project_root);
+    let mut snapshot = TurnSnapshot::new(
+        &project_id,
+        &worktree_id,
+        source,
+        &state.session_id,
+        state.current_turn_index,
+    );
+    snapshot.parent_id = state.last_turn_snapshot_id.clone();
+    snapshot.restored_from = take_restored_from(project_root);
+    snapshot.started_at = state.current_turn_started_at;
+    snapshot.ended_at = Some(chrono::Utc::now().timestamp());
+    snapshot.model = model.map(str::to_string).or_else(|| state.model.clone());
+    snapshot.files = turn_files(project_root, &state);
+
+    let transcript = transcript_path
+        .map(str::to_string)
+        .or_else(|| state.transcript_path.clone());
+    snapshot.memory = TurnMemoryPayload {
+        transcript_path: transcript.clone(),
+        transcript: transcript.as_deref().and_then(load_transcript_payload),
+        hook_events: state.current_turn_hook_events.take().unwrap_or_default(),
+        tool_calls: state.current_turn_tool_calls.take().unwrap_or_default(),
+    };
+
+    let snapshot_id = snapshot.id.clone();
+    crate::git::turns::write_turn_snapshot(project_root, snapshot)?;
+
+    state.last_turn_snapshot_id = Some(snapshot_id.clone());
+    state.current_turn_started_at = None;
+    state.current_turn_hook_events = None;
+    state.current_turn_tool_calls = None;
+    state.bump();
+    store::write(project_root, session_id, &state)?;
+
+    Ok(Some(snapshot_id))
+}
+
+pub fn mark_restored_from(project_root: &str, id: &str) -> std::io::Result<()> {
+    let path = restored_from_marker_path(project_root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, id)
+}
+
+fn take_restored_from(project_root: &str) -> Option<String> {
+    let path = restored_from_marker_path(project_root);
+    let id = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(path);
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn restored_from_marker_path(project_root: &str) -> std::path::PathBuf {
+    crate::git::detect::resolve_git_common_dir(project_root)
+        .join("oobo-state")
+        .join("restored-from")
+}
+
+fn turn_files(project_root: &str, state: &ActiveSession) -> Vec<TurnFileSnapshot> {
+    let mut files: Vec<String> = current_turn_file_paths(project_root, state)
+        .into_iter()
+        .collect();
+    if files.is_empty() {
+        let Some(session_files) = state.edited_files.as_ref() else {
+            return Vec::new();
+        };
+        files = session_files.iter().cloned().collect();
+    }
+    files.sort();
+    files
+        .into_iter()
+        .map(|path| TurnFileSnapshot {
+            pre_blob: state
+                .pre_agent_snapshots
+                .as_ref()
+                .and_then(|snapshots| snapshots.get(&path))
+                .cloned(),
+            post_blob: state
+                .file_snapshots
+                .as_ref()
+                .and_then(|snapshots| snapshots.get(&path))
+                .cloned(),
+            path,
+        })
+        .collect()
+}
+
+fn current_turn_file_paths(
+    project_root: &str,
+    state: &ActiveSession,
+) -> std::collections::HashSet<String> {
+    let mut files = std::collections::HashSet::new();
+    if let Some(calls) = state.current_turn_tool_calls.as_ref() {
+        for call in calls {
+            if let Some(input) = call.input.as_ref() {
+                collect_file_paths_from_value(project_root, input, &mut files);
+            }
+        }
+    }
+    if let Some(events) = state.current_turn_hook_events.as_ref() {
+        for event in events {
+            if let Some(payload) = event.payload.as_ref() {
+                collect_file_paths_from_value(project_root, payload, &mut files);
+            }
+        }
+    }
+    files
+}
+
+fn collect_file_paths_from_value(
+    project_root: &str,
+    value: &serde_json::Value,
+    files: &mut std::collections::HashSet<String>,
+) {
+    for key in ["file_path", "path"] {
+        if let Some(path) = value.get(key).and_then(|v| v.as_str()) {
+            push_relative_file(project_root, path, files);
+        }
+    }
+    for key in ["modified_files", "files", "file_paths"] {
+        if let Some(items) = value.get(key).and_then(|v| v.as_array()) {
+            for item in items {
+                if let Some(path) = item.as_str() {
+                    push_relative_file(project_root, path, files);
+                }
+            }
+        }
+    }
+    if let Some(input) = value.get("tool_input") {
+        collect_file_paths_from_value(project_root, input, files);
+    }
+}
+
+fn push_relative_file(
+    project_root: &str,
+    path: &str,
+    files: &mut std::collections::HashSet<String>,
+) {
+    if path.is_empty() || path.ends_with('/') || path == "." {
+        return;
+    }
+    let p = std::path::Path::new(path);
+    let normalized = if p.is_absolute() {
+        let root = std::path::Path::new(project_root);
+        p.strip_prefix(root)
+            .ok()
+            .and_then(|rel| rel.to_str())
+            .unwrap_or(path)
+            .to_string()
+    } else {
+        path.to_string()
+    };
+    if !normalized.starts_with('/') && !normalized.starts_with("..") {
+        files.insert(normalized);
+    }
+}
+
+fn load_transcript_payload(path: &str) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text)
+        .ok()
+        .or(Some(serde_json::Value::String(text)))
+}
+
 // ── Readers ───────────────────────────────────────────────────────────
 
 /// Read the accumulated edited_files set from a session's state.
@@ -354,6 +635,7 @@ pub fn read_session(project_root: &str, session_id: &str) -> Option<ActiveSessio
 }
 
 /// Read the model field from a session's state.
+#[cfg(test)]
 pub fn read_session_model(project_root: &str, session_id: &str) -> Option<String> {
     read_session(project_root, session_id).and_then(|s| s.model)
 }
@@ -407,9 +689,7 @@ pub fn snapshot_pre_agent_state(project_root: &str, session_id: &str) -> Result<
     })
 }
 
-fn snapshot_dirty_files(
-    project_root: &str,
-) -> Option<std::collections::HashMap<String, String>> {
+fn snapshot_dirty_files(project_root: &str) -> Option<std::collections::HashMap<String, String>> {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let mut dirty_files: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -781,6 +1061,97 @@ mod tests {
     }
 
     #[test]
+    fn test_finish_turn_writes_git_snapshot() {
+        let _env = setup();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        write_session(root_str, "turn-sess", "cursor", Some("claude")).unwrap();
+        start_turn(root_str, "turn-sess").unwrap();
+        record_hook_event(
+            root_str,
+            "turn-sess",
+            "before-submit-prompt",
+            Some(serde_json::json!({"prompt": "hello"})),
+        )
+        .unwrap();
+
+        std::fs::write(root.join("answer.txt"), "world\n").unwrap();
+        record_edited_file(root_str, "turn-sess", "answer.txt").unwrap();
+        snapshot_session_files(root_str, "turn-sess", &["answer.txt".to_string()]).unwrap();
+        record_tool_call(
+            root_str,
+            "turn-sess",
+            "Write",
+            Some(serde_json::json!({"file_path": "answer.txt"})),
+            None,
+            false,
+        )
+        .unwrap();
+
+        let turn_id = finish_turn(root_str, "turn-sess", "cursor", Some("claude"), None)
+            .unwrap()
+            .unwrap();
+        let snapshots = crate::git::turns::list_turn_snapshots(root_str);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].id, turn_id);
+        assert_eq!(snapshots[0].files[0].path, "answer.txt");
+        assert_eq!(snapshots[0].memory.tool_calls[0].name, "Write");
+
+        let state = read_session(root_str, "turn-sess").unwrap();
+        assert_eq!(
+            state.last_turn_snapshot_id.as_deref(),
+            Some(turn_id.as_str())
+        );
+        assert!(state.current_turn_started_at.is_none());
+    }
+
+    #[test]
+    fn test_finish_turn_prefers_current_turn_file_paths() {
+        let _env = setup();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        write_session(root_str, "turn-files", "cursor", None).unwrap();
+        start_turn(root_str, "turn-files").unwrap();
+
+        std::fs::write(root.join("old.txt"), "old\n").unwrap();
+        std::fs::write(root.join("current.txt"), "current\n").unwrap();
+
+        // Session-level edited files are cumulative and may include prior work.
+        record_edited_file(root_str, "turn-files", "old.txt").unwrap();
+        record_edited_file(root_str, "turn-files", "current.txt").unwrap();
+        snapshot_session_files(
+            root_str,
+            "turn-files",
+            &["old.txt".to_string(), "current.txt".to_string()],
+        )
+        .unwrap();
+
+        // The current turn memory is narrower and should drive TurnSnapshot.files.
+        record_tool_call(
+            root_str,
+            "turn-files",
+            "Write",
+            Some(serde_json::json!({"file_path": "current.txt"})),
+            None,
+            false,
+        )
+        .unwrap();
+
+        let turn_id = finish_turn(root_str, "turn-files", "cursor", None, None)
+            .unwrap()
+            .unwrap();
+        let snapshot = crate::git::turns::read_turn_snapshot(root_str, &turn_id).unwrap();
+        assert_eq!(snapshot.files.len(), 1);
+        assert_eq!(snapshot.files[0].path, "current.txt");
+    }
+
+    #[test]
     fn test_read_session_model() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -818,7 +1189,8 @@ mod tests {
     }
 
     /// Legacy `.git/oobo-sessions/<sid>.json` files written by oobo 0.1.x
-    /// should be discovered and lazily imported into the DB on first read.
+    /// Legacy `.git/oobo-sessions/<sid>.json` files should be readable
+    /// as a fallback when no buffer file exists.
     #[test]
     fn test_legacy_file_lazy_import() {
         let _env = setup();
@@ -827,29 +1199,18 @@ mod tests {
         init_git_repo(root);
         let root_str = root.to_str().unwrap();
 
-        // Hand-write a legacy session file directly.
         let legacy_dir = root.join(".git").join("oobo-sessions");
         std::fs::create_dir_all(&legacy_dir).unwrap();
         let legacy_file = legacy_dir.join("legacy-sid.json");
         let legacy = ActiveSession::new("legacy-sid", "claude", None, None);
-        std::fs::write(
-            &legacy_file,
-            serde_json::to_string_pretty(&legacy).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(&legacy_file, serde_json::to_string_pretty(&legacy).unwrap()).unwrap();
 
-        // First read imports it into the DB and deletes the legacy file.
         let state = read_session(root_str, "legacy-sid");
         assert!(state.is_some());
         assert_eq!(state.unwrap().session_id, "legacy-sid");
-        assert!(
-            !legacy_file.exists(),
-            "legacy file should be cleaned up after import"
-        );
 
-        // Second read comes from the DB (legacy file is gone).
-        let state = read_session(root_str, "legacy-sid");
-        assert!(state.is_some());
+        // Legacy file stays on disk (read-only fallback, no DB drain).
+        assert!(legacy_file.exists());
     }
 
     #[test]
@@ -874,27 +1235,20 @@ mod tests {
     }
 
     #[test]
-    fn test_write_to_db_clears_legacy_file() {
+    fn test_touch_promotes_legacy_to_buffer() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         init_git_repo(root);
         let root_str = root.to_str().unwrap();
 
-        // Create a legacy file, then touch the session (should promote).
         let legacy_dir = root.join(".git").join("oobo-sessions");
         std::fs::create_dir_all(&legacy_dir).unwrap();
         let legacy = ActiveSession::new("drain-sid", "claude", None, None);
         let legacy_file = legacy_dir.join("drain-sid.json");
-        std::fs::write(
-            &legacy_file,
-            serde_json::to_string_pretty(&legacy).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(&legacy_file, serde_json::to_string_pretty(&legacy).unwrap()).unwrap();
 
-        // Mutating path goes: read (imports + drains) → mutate → write.
         touch_session(root_str, "drain-sid", None).unwrap();
-        assert!(!legacy_file.exists());
         assert!(read_session(root_str, "drain-sid").is_some());
     }
 }

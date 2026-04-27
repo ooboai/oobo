@@ -94,8 +94,6 @@ pub struct ServerConfig {
     pub url: String,
     #[serde(default)]
     pub api_key: String,
-    #[serde(default)]
-    pub sync: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,7 +178,6 @@ impl Default for ServerConfig {
         Self {
             url: default_server_url(),
             api_key: String::new(),
-            sync: false,
         }
     }
 }
@@ -233,7 +230,7 @@ impl Default for UpdateConfig {
 
 impl Config {
     pub fn config_path() -> PathBuf {
-        crate::paths::oobo_home().join("config.toml")
+        crate::paths::oobo_home().join("config")
     }
 
     pub fn log_dir() -> PathBuf {
@@ -244,20 +241,28 @@ impl Config {
     /// `OOBO_SECRET_KEY` env var overrides the persisted `api_key` when set.
     pub fn load_or_default() -> Self {
         let path = Self::config_path();
-        let mut cfg = if path.exists() {
-            match fs::read(&path) {
+        let legacy_path = crate::paths::oobo_home().join("config.toml");
+        let effective_path = if path.exists() {
+            path
+        } else if legacy_path.exists() {
+            legacy_path
+        } else {
+            path
+        };
+        let mut cfg = if effective_path.exists() {
+            match fs::read(&effective_path) {
                 Ok(bytes) => {
                     let contents = strip_utf8_bom(&bytes);
                     match toml::from_str(contents) {
                         Ok(cfg) => cfg,
                         Err(e) => {
-                            eprintln!("oobo: warning: invalid config at {}: {e}", path.display());
-                            Self::default()
-                        }
-                    }
+                    eprintln!("anchor: warning: invalid config at {}: {e}", effective_path.display());
+                    Self::default()
                 }
-                Err(e) => {
-                    eprintln!("oobo: warning: cannot read {}: {e}", path.display());
+            }
+        }
+        Err(e) => {
+                    eprintln!("anchor: warning: cannot read {}: {e}", effective_path.display());
                     Self::default()
                 }
             }
@@ -292,7 +297,7 @@ impl Config {
         if self.has_any_key() {
             use std::os::unix::fs::PermissionsExt;
             if let Err(e) = fs::set_permissions(&path, fs::Permissions::from_mode(0o600)) {
-                eprintln!("oobo: warning: could not set config permissions: {e}");
+                eprintln!("anchor: warning: could not set config permissions: {e}");
             }
         }
 
@@ -315,12 +320,6 @@ impl Config {
             || !self.droid.api_key.is_empty()
             || !self.junie.api_key.is_empty()
             || !self.amp.api_key.is_empty()
-    }
-
-    /// True when sync is enabled and an API key is available.
-    #[allow(dead_code)]
-    pub fn should_sync(&self) -> bool {
-        self.server.sync && !self.server.api_key.is_empty()
     }
 
     /// True if the server is configured with a non-default API key.
@@ -413,7 +412,7 @@ pub fn find_real_git() -> Option<String> {
         }
         if let Ok(resolved) = fs::canonicalize(line) {
             let name = resolved.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name == "oobo" || name == "oobo.exe" {
+            if name == "anchor" || name == "anchor.exe" || name == "oobo" || name == "oobo.exe" {
                 continue;
             }
         }
@@ -445,8 +444,6 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.server.url, "https://api.oobo.ai");
         assert!(cfg.server.api_key.is_empty());
-        assert!(!cfg.server.sync);
-        assert!(!cfg.should_sync());
         assert!(!cfg.git.alias_enabled);
         assert!(cfg.cursor.enabled);
         assert!(cfg.claude.enabled);
@@ -467,7 +464,6 @@ mod tests {
             server: ServerConfig {
                 url: "https://my.server.com".into(),
                 api_key: "test_key_123".into(),
-                sync: true,
             },
             git: GitConfig {
                 real_git_path: "/usr/bin/git".into(),
@@ -534,8 +530,6 @@ mod tests {
         let deserialized: Config = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.server.url, "https://my.server.com");
         assert_eq!(deserialized.server.api_key, "test_key_123");
-        assert!(deserialized.server.sync);
-        assert!(deserialized.should_sync());
         assert!(deserialized.git.alias_enabled);
         assert!(!deserialized.cursor.enabled);
         assert!(deserialized.claude.enabled);

@@ -7,7 +7,6 @@
 
 use crate::cli::OutputMode;
 use crate::config::Config;
-use crate::db::Db;
 
 const RESERVED_SCOPES: &[&str] = &["default", "project"];
 const RESERVED_VERBS: &[&str] = &["set", "unset"];
@@ -81,7 +80,7 @@ pub fn parse_args(args: &[String]) -> Result<Parsed, String> {
 
     if args.len() > idx + 2 {
         return Err(format!(
-            "too many arguments (got {}): oobo settings [scope] [verb] <key> [value]",
+            "too many arguments (got {}): anchor settings [scope] [verb] <key> [value]",
             args.len()
         ));
     }
@@ -128,7 +127,13 @@ pub fn run(cfg: &Config, args: &[String], mode: OutputMode) -> Result<i32, Strin
 
     match parsed.verb {
         Verb::Get => run_get(cfg, parsed.scope, parsed.key.as_deref(), mode),
-        Verb::Set => run_set(cfg, parsed.scope, parsed.key.as_deref(), parsed.value.as_deref(), mode),
+        Verb::Set => run_set(
+            cfg,
+            parsed.scope,
+            parsed.key.as_deref(),
+            parsed.value.as_deref(),
+            mode,
+        ),
         Verb::Unset => run_unset(cfg, parsed.scope, parsed.key.as_deref(), mode),
     }
 }
@@ -187,12 +192,13 @@ fn show_project(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
     let overrides: Vec<(String, String, String)> = VALID_KEYS
         .iter()
         .filter_map(|k| {
-            read_project(&ps, k).map(|v| (k.to_string(), "project".to_string(), mask_if_secret(k, &v)))
+            read_project(&ps, k)
+                .map(|v| (k.to_string(), "project".to_string(), mask_if_secret(k, &v)))
         })
         .collect();
     if overrides.is_empty() {
         println!("no project overrides set. showing defaults:");
-        println!("  run: oobo settings default");
+        println!("  run: anchor settings default");
         return Ok(0);
     }
     print_rows(&overrides, mode);
@@ -259,14 +265,14 @@ fn run_set(
     let key = match key {
         Some(k) => k,
         None => {
-            eprintln!("error: 'set' requires a key: oobo settings [scope] set <key> <value>");
+            eprintln!("error: 'set' requires a key: anchor settings [scope] set <key> <value>");
             return Ok(2);
         }
     };
     let value = match value {
         Some(v) => v,
         None => {
-            eprintln!("error: 'set' requires a value: oobo settings [scope] set <key> <value>");
+            eprintln!("error: 'set' requires a value: anchor settings [scope] set <key> <value>");
             return Ok(2);
         }
     };
@@ -274,13 +280,13 @@ fn run_set(
         eprintln!("error: {e}");
         return Ok(2);
     }
-    if let Err(e) = validate_value(key, value) {
-        eprintln!("error: {e}");
-        return Ok(2);
-    }
 
     match scope.unwrap_or(Scope::Default) {
         Scope::Default => {
+            if let Err(e) = validate_value(key, value) {
+                eprintln!("error: {e}");
+                return Ok(2);
+            }
             let mut updated = cfg.clone();
             write_default(&mut updated, key, value);
             updated.save()?;
@@ -301,20 +307,29 @@ fn run_set(
             }
         }
         Scope::Project => {
-            let project_id = match current_project_id(cfg) {
-                Some(id) => id,
+            let (project_root, project_id) = match current_project_context(cfg) {
+                Some(context) => context,
                 None => {
                     eprintln!("error: 'project' scope requires being inside a git repo.");
                     return Ok(1);
                 }
             };
-            let db = Db::open()?;
-            let mut settings = db.get_project_settings(&project_id).unwrap_or_default();
-            write_project(&mut settings, key, value);
-            db.set_project_settings(&project_id, &settings)?;
+            if let Err(e) = validate_project_key(key) {
+                eprintln!("error: {e}");
+                return Ok(2);
+            }
+            if let Err(e) = validate_project_value(key, value) {
+                eprintln!("error: {e}");
+                return Ok(2);
+            }
+            write_project_setting(&project_root, &project_id, key, value)?;
+            let project_label = project_label(&project_root, &project_id);
             match mode {
                 OutputMode::Agent => {
-                    println!("set project {project_id} {key} {}", mask_if_secret(key, value));
+                    println!(
+                        "set project {project_label} {key} {}",
+                        mask_if_secret(key, value)
+                    );
                 }
                 OutputMode::Json => {
                     let json = serde_json::json!({
@@ -328,7 +343,7 @@ fn run_set(
                 }
                 OutputMode::Tui => {
                     println!(
-                        "set project ({project_id}): {key} = {}",
+                        "set project ({project_label}): {key} = {}",
                         mask_if_secret(key, value)
                     );
                 }
@@ -350,7 +365,7 @@ fn run_unset(
     let key = match key {
         Some(k) => k,
         None => {
-            eprintln!("error: 'unset' requires a key: oobo settings [scope] unset <key>");
+            eprintln!("error: 'unset' requires a key: anchor settings [scope] unset <key>");
             return Ok(2);
         }
     };
@@ -378,25 +393,29 @@ fn run_unset(
             }
         }
         Scope::Project => {
-            let project_id = match current_project_id(cfg) {
-                Some(id) => id,
+            let (project_root, project_id) = match current_project_context(cfg) {
+                Some(context) => context,
                 None => {
                     eprintln!("error: 'project' scope requires being inside a git repo.");
                     return Ok(1);
                 }
             };
-            let db = Db::open()?;
-            let mut settings = db.get_project_settings(&project_id).unwrap_or_default();
-            let had = read_project(&settings, key).is_some();
-            unset_project(&mut settings, key);
-            db.set_project_settings(&project_id, &settings)?;
+            if let Err(e) = validate_project_key(key) {
+                eprintln!("error: {e}");
+                return Ok(2);
+            }
+            let had = current_project_settings(cfg)
+                .and_then(|settings| read_project(&settings, key))
+                .is_some();
+            unset_project_setting(&project_root, &project_id, key)?;
             if !had {
                 println!("no project override for '{key}' to unset.");
                 return Ok(0);
             }
             let def = read_default(cfg, key).unwrap_or_else(|| "(unset)".to_string());
+            let project_label = project_label(&project_root, &project_id);
             match mode {
-                OutputMode::Agent => println!("unset project {project_id} {key}"),
+                OutputMode::Agent => println!("unset project {project_label} {key}"),
                 OutputMode::Json => {
                     let json = serde_json::json!({
                         "action": "unset",
@@ -408,7 +427,7 @@ fn run_unset(
                 }
                 OutputMode::Tui => {
                     println!(
-                        "unset project ({project_id}): {key}. falling back to default: {}",
+                        "unset project ({project_label}): {key}. falling back to default: {}",
                         mask_if_secret(key, &def)
                     );
                 }
@@ -458,6 +477,33 @@ fn validate_value(key: &str, value: &str) -> Result<(), String> {
     }
 }
 
+fn validate_project_key(key: &str) -> Result<(), String> {
+    match key {
+        "key" | "remote" | "transparency" => Ok(()),
+        "tools.experimental" | "setup.scan_roots" => Err(format!(
+            "'{key}' is a default-only setting; use `anchor settings default set {key} ...`"
+        )),
+        _ => validate_key(key),
+    }
+}
+
+fn validate_project_value(key: &str, value: &str) -> Result<(), String> {
+    match key {
+        // Project `remote` is the Git remote target for the anchor orphan
+        // branch. It can be a remote name (`origin`, `oobo`) or a full Git URL.
+        "remote" => {
+            if !value.trim().is_empty() && !value.chars().any(char::is_whitespace) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "invalid value for project 'remote': expected Git remote name or URL, got '{value}'"
+                ))
+            }
+        }
+        _ => validate_value(key, value),
+    }
+}
+
 fn read_default(cfg: &Config, key: &str) -> Option<String> {
     match key {
         "key" => {
@@ -502,7 +548,14 @@ fn unset_default(cfg: &mut Config, key: &str) {
     }
 }
 
-fn read_project(ps: &crate::db::projects::ProjectSettings, key: &str) -> Option<String> {
+#[derive(Default)]
+struct ProjectSettings {
+    api_key: Option<String>,
+    remote: Option<String>,
+    transparency: Option<String>,
+}
+
+fn read_project(ps: &ProjectSettings, key: &str) -> Option<String> {
     match key {
         "key" => ps.api_key.clone().filter(|s| !s.is_empty()),
         "remote" => ps.remote.clone().filter(|s| !s.is_empty()),
@@ -511,22 +564,56 @@ fn read_project(ps: &crate::db::projects::ProjectSettings, key: &str) -> Option<
     }
 }
 
-fn write_project(ps: &mut crate::db::projects::ProjectSettings, key: &str, value: &str) {
+fn write_project_setting(
+    project_root: &str,
+    project_id: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), String> {
     match key {
-        "key" => ps.api_key = Some(value.to_string()),
-        "remote" => ps.remote = Some(value.to_string()),
-        "transparency" => ps.transparency = Some(value.to_string()),
-        _ => {}
+        "remote" | "transparency" => {
+            let mut cfg = load_project_config_for_write(project_root, project_id)?;
+            match key {
+                "remote" => cfg.anchors.remote = value.to_string(),
+                "transparency" => cfg.privacy.transparency = Some(value.to_string()),
+                _ => {}
+            }
+            cfg.save(project_root)
+        }
+        "key" => {
+            eprintln!("anchor: warning: project-scoped API keys require the global config. Use `anchor settings set key <value>` instead.");
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }
 
-fn unset_project(ps: &mut crate::db::projects::ProjectSettings, key: &str) {
+fn unset_project_setting(project_root: &str, project_id: &str, key: &str) -> Result<(), String> {
     match key {
-        "key" => ps.api_key = None,
-        "remote" => ps.remote = None,
-        "transparency" => ps.transparency = None,
-        _ => {}
+        "remote" | "transparency" => {
+            let mut cfg = load_project_config_for_write(project_root, project_id)?;
+            match key {
+                "remote" => cfg.anchors.remote.clear(),
+                "transparency" => cfg.privacy.transparency = None,
+                _ => {}
+            }
+            cfg.save(project_root)
+        }
+        "key" => Ok(()),
+        _ => Ok(()),
     }
+}
+
+fn load_project_config_for_write(
+    project_root: &str,
+    project_id: &str,
+) -> Result<crate::project_config::ProjectConfig, String> {
+    let mut cfg = crate::project_config::ProjectConfig::load(project_root)?
+        .unwrap_or_else(|| crate::project_config::ProjectConfig::for_project(project_id));
+    if cfg.project.id.is_empty() {
+        cfg.project.id = project_id.to_string();
+    }
+    Ok(cfg)
 }
 
 // ── Effective merge ─────────────────────────────────────────────────────────
@@ -534,7 +621,7 @@ fn unset_project(ps: &mut crate::db::projects::ProjectSettings, key: &str) {
 fn effective_value(
     cfg: &Config,
     key: &str,
-    project_settings: Option<&crate::db::projects::ProjectSettings>,
+    project_settings: Option<&ProjectSettings>,
 ) -> (String, String) {
     if let Some(ps) = project_settings {
         if let Some(v) = read_project(ps, key) {
@@ -547,15 +634,35 @@ fn effective_value(
 
 // ── Project context ─────────────────────────────────────────────────────────
 
-fn current_project_id(cfg: &Config) -> Option<String> {
+fn current_project_context(cfg: &Config) -> Option<(String, String)> {
     let root = crate::git::proxy::project_root(cfg)?;
-    Some(crate::project::id_for_root(&root))
+    let id = crate::project::id_for_root(&root);
+    Some((root, id))
 }
 
-fn current_project_settings(cfg: &Config) -> Option<crate::db::projects::ProjectSettings> {
-    let id = current_project_id(cfg)?;
-    let db = Db::open().ok()?;
-    db.get_project_settings(&id).ok()
+fn project_label(project_root: &str, fallback_id: &str) -> String {
+    std::path::Path::new(project_root)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(fallback_id)
+        .to_string()
+}
+
+fn current_project_settings(cfg: &Config) -> Option<ProjectSettings> {
+    let (root, _id) = current_project_context(cfg)?;
+    let mut settings = ProjectSettings::default();
+    if let Ok(Some(project_cfg)) = crate::project_config::ProjectConfig::load(&root) {
+        if !project_cfg.anchors.remote.is_empty() {
+            settings.remote = Some(project_cfg.anchors.remote);
+        }
+        if let Some(transparency) = project_cfg.privacy.transparency {
+            if !transparency.is_empty() {
+                settings.transparency = Some(transparency);
+            }
+        }
+    }
+    Some(settings)
 }
 
 // ── Secret masking ──────────────────────────────────────────────────────────
@@ -578,10 +685,7 @@ fn print_rows(rows: &[(String, String, String)], mode: OutputMode) {
         OutputMode::Json => {
             let mut map = serde_json::Map::new();
             for (k, s, v) in rows {
-                map.insert(
-                    k.clone(),
-                    serde_json::json!({ "source": s, "value": v }),
-                );
+                map.insert(k.clone(), serde_json::json!({ "source": s, "value": v }));
             }
             let json = serde_json::json!({ "effective": map });
             crate::utils::print_json(&json);
@@ -592,8 +696,8 @@ fn print_rows(rows: &[(String, String, String)], mode: OutputMode) {
             }
         }
         OutputMode::Tui => {
-            println!("{:<22} {:<10} {}", "key", "source", "value");
-            println!("{:<22} {:<10} {}", "────", "──────", "─────");
+            println!("{:<22} {:<10} value", "key", "source");
+            println!("{:<22} {:<10} ─────", "────", "──────");
             for (k, s, v) in rows {
                 println!("{k:<22} {s:<10} {v}");
             }
@@ -699,7 +803,8 @@ mod tests {
 
     #[test]
     fn test_mask_key() {
-        assert_eq!(mask_if_secret("key", "sk_abcdefghij1234"), "sk_**********1234");
+        let api_key = format!("{}{}", "sk_", "abcdefghij1234");
+        assert_eq!(mask_if_secret("key", &api_key), "sk_**********1234");
         assert_eq!(mask_if_secret("remote", "https://x"), "https://x");
     }
 
@@ -715,5 +820,25 @@ mod tests {
         assert!(validate_value("remote", "https://x").is_ok());
         assert!(validate_value("remote", "http://x").is_ok());
         assert!(validate_value("remote", "not a url").is_err());
+    }
+
+    #[test]
+    fn test_validate_project_value_remote() {
+        assert!(validate_project_value("remote", "origin").is_ok());
+        assert!(validate_project_value("remote", "oobo").is_ok());
+        assert!(validate_project_value("remote", "git@github.com:org/repo-oobo.git").is_ok());
+        assert!(validate_project_value("remote", "https://github.com/org/repo-oobo.git").is_ok());
+        assert!(validate_project_value("remote", "not a url").is_err());
+    }
+
+    #[test]
+    fn test_default_key_only_sets_api_key() {
+        let mut cfg = Config::default();
+
+        write_default(&mut cfg, "key", "sk_test");
+        assert_eq!(cfg.server.api_key, "sk_test");
+
+        unset_default(&mut cfg, "key");
+        assert!(cfg.server.api_key.is_empty());
     }
 }

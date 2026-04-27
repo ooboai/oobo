@@ -143,13 +143,6 @@ pub mod transcript {
         None
     }
 
-    pub fn count_messages(_project_path: &str, session_id: &str) -> u32 {
-        match find_transcript_path("", session_id) {
-            Some(p) => parse_messages(&p).len() as u32,
-            None => 0,
-        }
-    }
-
     pub fn parse_messages(path: &Path) -> Vec<Message> {
         let content = fs::read_to_string(path).unwrap_or_default();
 
@@ -270,11 +263,6 @@ pub mod transcript {
         }
 
         messages
-    }
-
-    pub fn read_transcript(path: &Path, max_messages: u32) -> String {
-        let messages = parse_messages(path);
-        crate::utils::format_transcript(&messages, max_messages, "Assistant")
     }
 }
 
@@ -480,7 +468,6 @@ pub mod telemetry {
         };
 
         Some(NativeStats {
-            model,
             input_tokens: Some(input_tokens),
             output_tokens: Some(output_tokens),
             cache_read_tokens: if cache_read > 0 {
@@ -499,7 +486,7 @@ pub mod telemetry {
         })
     }
 
-    /// Return global stats from all telemetry events.
+    #[allow(dead_code)]
     pub fn global_stats() -> Option<(u64, u64, u64, u64, usize)> {
         if !has_telemetry_log() {
             return None;

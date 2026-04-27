@@ -1,0 +1,10 @@
+[
+  {
+    "role": "user",
+    "text": "Explain why cache invalidation fails"
+  },
+  {
+    "role": "assistant",
+    "text": "The stale cache entry survives because the commit path updates metadata before deleting the key."
+  }
+]

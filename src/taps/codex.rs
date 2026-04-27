@@ -91,7 +91,11 @@ struct CumulativeTokens {
 
 impl CumulativeTokens {
     fn zero() -> Self {
-        Self { input: 0, output: 0, cache_read: 0 }
+        Self {
+            input: 0,
+            output: 0,
+            cache_read: 0,
+        }
     }
 }
 
@@ -272,7 +276,8 @@ fn ingest_file(
             &mut summary,
         );
         summary.warnings.push(
-            "codex: trailing assistant activity with no closing token_count — tokens unknown".into(),
+            "codex: trailing assistant activity with no closing token_count — tokens unknown"
+                .into(),
         );
     }
 
@@ -337,7 +342,10 @@ fn extract_cumulative(payload: Option<&Value>) -> CumulativeTokens {
         None => return CumulativeTokens::zero(),
     };
     CumulativeTokens {
-        input: total.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0),
+        input: total
+            .get("input_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0),
         output: total
             .get("output_tokens")
             .and_then(|v| v.as_i64())
@@ -374,7 +382,11 @@ fn parse_ts_ms(v: &Value) -> Option<i64> {
 }
 
 fn positive(n: i64) -> Option<i64> {
-    if n > 0 { Some(n) } else { None }
+    if n > 0 {
+        Some(n)
+    } else {
+        None
+    }
 }
 
 fn clip_preview(s: &str) -> String {

@@ -1,24 +1,13 @@
 //! Persistent storage for hook-session state.
 //!
-//! Three backends, tried in order:
+//! Two backends, tried in order:
 //!
-//! 1. **SQLite `active_sessions` table** — primary. One row per
-//!    `(project_id, session_id)` with first-class `tool`, `started_at`,
-//!    and `parent_session_id` columns. Used whenever a project can be
-//!    resolved from `project_root`.
-//! 2. **Buffer files** — `~/.oobo/tmp/hook-buffer/<sid>.json`. Fallback
-//!    when no project can be resolved (typical case: Cursor starts a
-//!    session before `git init` has been run, or the DB is transiently
-//!    unavailable).
-//! 3. **Legacy `.git/oobo-sessions/<sid>.json`** — read-only. Files
-//!    written by oobo 0.1.x. Lazily imported into the DB on first hit
-//!    and then deleted.
+//! 1. **Buffer files** — `~/.oobo/tmp/hook-buffer/<sid>.json`. Primary
+//!    write target.
+//! 2. **Legacy `.git/oobo-sessions/<sid>.json`** — read-only. Files
+//!    written by oobo 0.1.x.
 //!
-//! Write path: always try DB first, fall through to the buffer on any
-//! failure (including "no project root"). On a successful DB write, any
-//! lingering buffer or legacy file for the same session is cleaned up.
-//!
-//! Read path: DB → buffer → legacy (imports legacy on hit).
+//! Read path: buffer → legacy.
 
 use std::fs;
 use std::io::Write as _;
@@ -58,51 +47,24 @@ fn sanitize(id: &str) -> &str {
 
 /// Read a session's state from whichever backend has it.
 pub fn read(project_root: &str, session_id: &str) -> Option<ActiveSession> {
-    if !project_root.is_empty() {
-        if let Some(state) = read_from_db(project_root, session_id) {
-            return Some(state);
-        }
-    }
     if let Some(state) = read_from_buffer(session_id) {
         return Some(state);
     }
     if !project_root.is_empty() {
         if let Some(state) = read_from_legacy(project_root, session_id) {
-            // Lazy-import: persist to DB and drop the legacy file.
-            if write_to_db(project_root, session_id, &state).is_ok() {
-                let _ = fs::remove_file(legacy_path(project_root, session_id));
-            }
             return Some(state);
         }
     }
     None
 }
 
-/// Write a session's state. Prefers the DB when a project can be
-/// resolved; otherwise writes to the pre-git-init buffer file.
-///
-/// On a successful DB write, any buffer or legacy file for the same
-/// session is removed to avoid drift.
-pub fn write(
-    project_root: &str,
-    session_id: &str,
-    state: &ActiveSession,
-) -> std::io::Result<()> {
-    if !project_root.is_empty() {
-        if write_to_db(project_root, session_id, state).is_ok() {
-            let _ = fs::remove_file(buffer_path(session_id));
-            let _ = fs::remove_file(legacy_path(project_root, session_id));
-            return Ok(());
-        }
-    }
+/// Write a session's state to the buffer file.
+pub fn write(_project_root: &str, session_id: &str, state: &ActiveSession) -> std::io::Result<()> {
     write_to_buffer(session_id, state)
 }
 
 /// True if a session's state exists in any backend.
 pub fn exists(project_root: &str, session_id: &str) -> bool {
-    if !project_root.is_empty() && db_exists(project_root, session_id) {
-        return true;
-    }
     if buffer_path(session_id).exists() {
         return true;
     }
@@ -112,47 +74,18 @@ pub fn exists(project_root: &str, session_id: &str) -> bool {
 /// Remove a session's state from every backend.
 pub fn remove(project_root: &str, session_id: &str) {
     if !project_root.is_empty() {
-        let _ = delete_from_db(project_root, session_id);
         let _ = fs::remove_file(legacy_path(project_root, session_id));
     }
     let _ = fs::remove_file(buffer_path(session_id));
 }
 
-/// All active sessions associated with `project_root`. Merges DB rows
-/// with any remaining legacy files for the same project. The buffer
-/// directory is scanned too — any session whose payload records a
-/// matching worktree is included.
+/// All active sessions associated with `project_root`. Merges legacy
+/// files with buffer files whose worktree matches.
 pub fn list_for_project(project_root: &str) -> Vec<ActiveSession> {
     let mut out: Vec<ActiveSession> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // DB rows for this project.
-    if !project_root.is_empty() {
-        if let Ok(db) = crate::db::Db::open() {
-            let pid = match crate::project::ensure_stable(&db, project_root) {
-                Ok(id) => id,
-                Err(_) => crate::project::id_for_root(project_root),
-            };
-            if let Ok(mut stmt) = db
-                .conn
-                .prepare("SELECT session_id, state_json FROM active_sessions WHERE project_id = ?1")
-            {
-                if let Ok(rows) = stmt.query_map([&pid], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                }) {
-                    for r in rows.flatten() {
-                        if let Ok(state) = serde_json::from_str::<ActiveSession>(&r.1) {
-                            if seen.insert(state.session_id.clone()) {
-                                out.push(state);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Legacy files for this project (not yet imported).
+    // Legacy files for this project.
     if !project_root.is_empty() {
         let dir = legacy_dir(project_root);
         if let Ok(entries) = fs::read_dir(&dir) {
@@ -172,7 +105,7 @@ pub fn list_for_project(project_root: &str) -> Vec<ActiveSession> {
         }
     }
 
-    // Buffer files — include any whose worktree matches.
+    // Buffer files.
     let dir = buffer_dir();
     if let Ok(entries) = fs::read_dir(&dir) {
         for entry in entries.flatten() {
@@ -219,100 +152,7 @@ pub fn cleanup_buffer(max_age_secs: i64) {
     }
 }
 
-// ── DB backend ─────────────────────────────────────────────────────────
-
-fn with_db<T>(f: impl FnOnce(&crate::db::Db) -> T) -> Option<T> {
-    crate::db::Db::open().ok().map(|db| f(&db))
-}
-
-fn resolve_project_id(db: &crate::db::Db, project_root: &str) -> Option<String> {
-    if project_root.is_empty() {
-        return None;
-    }
-    crate::project::ensure_stable(db, project_root).ok()
-}
-
-fn read_from_db(project_root: &str, session_id: &str) -> Option<ActiveSession> {
-    with_db(|db| {
-        let pid = resolve_project_id(db, project_root)?;
-        let payload: String = db
-            .conn
-            .query_row(
-                "SELECT state_json FROM active_sessions \
-                 WHERE project_id = ?1 AND session_id = ?2",
-                rusqlite::params![&pid, session_id],
-                |row| row.get(0),
-            )
-            .ok()?;
-        serde_json::from_str::<ActiveSession>(&payload).ok()
-    })
-    .flatten()
-}
-
-fn db_exists(project_root: &str, session_id: &str) -> bool {
-    with_db(|db| {
-        let Some(pid) = resolve_project_id(db, project_root) else {
-            return false;
-        };
-        db.conn
-            .query_row(
-                "SELECT 1 FROM active_sessions \
-                 WHERE project_id = ?1 AND session_id = ?2",
-                rusqlite::params![&pid, session_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .is_ok()
-    })
-    .unwrap_or(false)
-}
-
-fn write_to_db(
-    project_root: &str,
-    session_id: &str,
-    state: &ActiveSession,
-) -> Result<(), String> {
-    let db = crate::db::Db::open().map_err(|e| format!("open db: {e}"))?;
-    let pid =
-        resolve_project_id(&db, project_root).ok_or_else(|| "no project_id".to_string())?;
-    let payload = serde_json::to_string(state).map_err(|e| format!("serialize: {e}"))?;
-    db.conn
-        .execute(
-            "INSERT INTO active_sessions \
-             (session_id, project_id, tool, started_at, last_event_at, state_json, parent_session_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
-             ON CONFLICT(project_id, session_id) DO UPDATE SET \
-               state_json = excluded.state_json, \
-               last_event_at = excluded.last_event_at, \
-               tool = excluded.tool",
-            rusqlite::params![
-                session_id,
-                &pid,
-                &state.agent,
-                state.started_at,
-                state.updated_at,
-                &payload,
-                Option::<&str>::None,
-            ],
-        )
-        .map_err(|e| format!("upsert active_session: {e}"))?;
-    Ok(())
-}
-
-fn delete_from_db(project_root: &str, session_id: &str) -> Result<(), String> {
-    let db = crate::db::Db::open().map_err(|e| format!("open db: {e}"))?;
-    let Some(pid) = resolve_project_id(&db, project_root) else {
-        return Ok(());
-    };
-    db.conn
-        .execute(
-            "DELETE FROM active_sessions WHERE project_id = ?1 AND session_id = ?2",
-            rusqlite::params![&pid, session_id],
-        )
-        .map_err(|e| format!("delete active_session: {e}"))?;
-    Ok(())
-}
-
-// ── Buffer backend (pre-git-init + DB-failure fallback) ────────────────
+// ── Buffer backend ─────────────────────────────────────────────────────
 
 fn read_from_buffer(session_id: &str) -> Option<ActiveSession> {
     let path = buffer_path(session_id);
@@ -324,8 +164,7 @@ fn write_to_buffer(session_id: &str, state: &ActiveSession) -> std::io::Result<(
     let dir = buffer_dir();
     fs::create_dir_all(&dir)?;
     let path = buffer_path(session_id);
-    let json = serde_json::to_string_pretty(state)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let json = serde_json::to_string_pretty(state).map_err(std::io::Error::other)?;
     atomic_write_json(&path, &json)
 }
 
@@ -386,6 +225,11 @@ mod tests {
             subagent_runs: None,
             thinking_duration_ms: None,
             compact_count: None,
+            current_turn_index: 0,
+            current_turn_started_at: None,
+            current_turn_hook_events: None,
+            current_turn_tool_calls: None,
+            last_turn_snapshot_id: None,
             started_at: 1,
             updated_at: 1,
         }

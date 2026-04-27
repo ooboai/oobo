@@ -1,4 +1,4 @@
-# Contributing to oobo
+# Contributing to anchor
 
 Thanks for your interest in contributing! We welcome contributions from the community.
 
@@ -6,7 +6,7 @@ Thanks for your interest in contributing! We welcome contributions from the comm
 >
 > - Star the project
 > - Share it with colleagues who use AI coding tools
-> - Report bugs or request features via [issues](https://github.com/ooboai/oobo/issues)
+> - Report bugs or request features via [issues](https://github.com/ooboai/anchor/issues)
 > - Improve the documentation
 
 ## Code of Conduct
@@ -17,16 +17,16 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 ### Report Bugs
 
-If you encounter a bug, [open an issue](https://github.com/ooboai/oobo/issues/new?labels=bug) with:
+If you encounter a bug, [open an issue](https://github.com/ooboai/anchor/issues/new?labels=bug) with:
 
 - What you expected to happen
 - What actually happened
 - Steps to reproduce
-- Your OS and oobo version (`oobo --version`)
+- Your OS and anchor version (`anchor --version`)
 
 ### Suggest Features
 
-Have an idea? [Open a feature request](https://github.com/ooboai/oobo/issues/new?labels=enhancement). Before creating a new issue, check if one already exists.
+Have an idea? [Open a feature request](https://github.com/ooboai/anchor/issues/new?labels=enhancement). Before creating a new issue, check if one already exists.
 
 ### Contribute Code
 
@@ -49,8 +49,8 @@ Have an idea? [Open a feature request](https://github.com/ooboai/oobo/issues/new
 
 ```bash
 # Clone your fork
-git clone https://github.com/YOUR_USERNAME/oobo.git
-cd oobo
+git clone https://github.com/YOUR_USERNAME/anchor.git
+cd anchor
 
 # Build
 cargo build
@@ -69,13 +69,13 @@ cargo run -- dash
 
 ### Project Overview
 
-oobo is a Rust binary that acts as a transparent git decorator. Key modules:
+anchor is a Rust binary that acts as a transparent git decorator. Key modules:
 
 | Module | Purpose |
 |--------|---------|
 | `src/cli.rs` | Command-line argument parsing and routing |
 | `src/git/` | Git decorator, write operation detection, interceptor, orphan branch |
-| `src/tools/cursor/` | Cursor IDE local data extraction (SQLite, transcripts) |
+| `src/tools/cursor/` | Cursor IDE local data extraction (transcripts) |
 | `src/tools/claude/` | Claude Code local data extraction (JSONL sessions) |
 | `src/tools/vscode_fork.rs` | Shared VS Code fork extraction (Copilot, contrib/Windsurf, contrib/Trae) |
 | `src/tools/aider.rs` | Aider chat history (markdown) |
@@ -89,9 +89,8 @@ oobo is a Rust binary that acts as a transparent git decorator. Key modules:
 | `src/tools/contrib/` | Community-maintained adapters gated behind `tools.experimental` (Windsurf, Trae, Kiro, Junie, Amp) |
 | `src/core/` | Domain types: anchor, message, session, tool trait |
 | `src/commands/` | CLI subcommands (23 commands) |
-| `src/analytics/` | Token computation, attribution, git activity |
-| `src/db/` | SQLite persistence and migrations |
-| `src/remote/` | Anchor sync via `/anchors` API (ingest, verify, health) |
+| `src/attribution/` | Token computation, turn caching, code attribution |
+| `src/remote/` | Remote search API (`/anchors/search`, `/anchors/health`) |
 | `src/session.rs` | Multi-source session dispatch |
 | `src/tui/` | Ratatui terminal UI for interactive commands |
 | `src/config.rs` | Configuration file management |
@@ -132,4 +131,4 @@ We try to give you the opportunity to make changes yourself, but may make minor 
 
 ## License
 
-By contributing to oobo, you agree that your contributions will be dual licensed under the [Apache License 2.0](LICENSE-APACHE) and [MIT License](LICENSE-MIT).
+By contributing to anchor, you agree that your contributions will be dual licensed under the [Apache License 2.0](LICENSE-APACHE) and [MIT License](LICENSE-MIT).

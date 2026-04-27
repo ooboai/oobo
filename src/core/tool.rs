@@ -48,13 +48,18 @@ pub trait Tool: Send + Sync {
         }
     }
 
-    /// Count messages without full parsing.
-    fn count_messages(&self, project_path: &str, session_id: &str) -> u32;
+    #[allow(dead_code)]
+    fn count_messages(&self, project_path: &str, session_id: &str) -> u32 {
+        self.parse_messages_by_id(project_path, session_id).len() as u32
+    }
 
-    /// Read transcript as human-readable formatted text.
-    fn read_transcript(&self, path: &Path, max_messages: u32) -> String;
+    #[allow(dead_code)]
+    fn read_transcript(&self, path: &Path, max_messages: u32) -> String {
+        let messages = self.parse_messages(path);
+        crate::utils::format_transcript(&messages, max_messages, "Assistant")
+    }
 
-    /// Read transcript by session ID directly (for tools that use a shared DB).
+    #[allow(dead_code)]
     fn read_transcript_by_id(
         &self,
         project_path: &str,

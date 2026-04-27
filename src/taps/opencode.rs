@@ -152,9 +152,7 @@ fn ingest_modern(
             .map(|n| n.len() as i64)
             .unwrap_or(0);
 
-        let preview = text_by_message
-            .get(&msg_id)
-            .map(|t| clip_preview(t));
+        let preview = text_by_message.get(&msg_id).map(|t| clip_preview(t));
 
         let ts_ms = normalize_ts(ts);
 
@@ -353,7 +351,11 @@ fn ingest_legacy(
 }
 
 fn normalize_ts(ts: i64) -> i64 {
-    if ts > 1_000_000_000_000 { ts } else { ts * 1000 }
+    if ts > 1_000_000_000_000 {
+        ts
+    } else {
+        ts * 1000
+    }
 }
 
 fn clip_preview(s: &str) -> String {
@@ -398,8 +400,10 @@ mod tests {
         let p = tmp.path().join("opencode.db");
         let conn = Connection::open(&p).unwrap();
         modern_schema(&conn);
-        conn.execute("INSERT INTO project VALUES ('p', '/tmp', 0, 0)", []).unwrap();
-        conn.execute("INSERT INTO session VALUES ('s', 'p', 't', 1000, 2000)", []).unwrap();
+        conn.execute("INSERT INTO project VALUES ('p', '/tmp', 0, 0)", [])
+            .unwrap();
+        conn.execute("INSERT INTO session VALUES ('s', 'p', 't', 1000, 2000)", [])
+            .unwrap();
         conn.execute(
             r#"INSERT INTO message VALUES ('m1', 's', 1000, 1000, '{"role":"user"}')"#,
             [],

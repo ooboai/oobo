@@ -24,6 +24,7 @@ pub fn normalize_path(p: &str) -> String {
 }
 
 /// Get the git project root for the current working directory.
+#[allow(dead_code)]
 pub fn git_project_root() -> String {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     std::process::Command::new(git)
@@ -48,36 +49,33 @@ pub fn git_project_root() -> String {
         })
 }
 
-/// The root oobo configuration directory (`~/.oobo`).
+/// The root oobo configuration directory.
+///
+/// Resolution order:
+/// 1. `$OOBO_HOME` (explicit override)
+/// 2. `~/.oobo/` (legacy — used if it already exists)
+/// 3. `~/.config/oobo/` (XDG default)
 pub fn oobo_home() -> PathBuf {
     if let Ok(v) = std::env::var("OOBO_HOME") {
         return PathBuf::from(v);
     }
-    dirs::home_dir()
+    let home = dirs::home_dir()
         .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
         .or_else(|| std::env::var("USERPROFILE").ok().map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".oobo")
-}
+        .unwrap_or_else(|| PathBuf::from("."));
 
-/// Directory for the oobo SQLite database (`~/.oobo/db/`).
-pub fn oobo_db_dir() -> PathBuf {
-    oobo_home().join("db")
-}
+    let legacy = home.join(".oobo");
+    if legacy.exists() {
+        return legacy;
+    }
 
-/// Path to the oobo SQLite database file (`~/.oobo/db/oobo.db`).
-pub fn oobo_db_path() -> PathBuf {
-    oobo_db_dir().join("oobo.db")
-}
-
-/// Directory for per-project data (`~/.oobo/projects/`).
-pub fn oobo_projects_dir() -> PathBuf {
-    oobo_home().join("projects")
+    home.join(".config").join("oobo")
 }
 
 /// Directory for a specific project (`~/.oobo/projects/{slug}/`).
+#[cfg(test)]
 pub fn oobo_project_dir(project_path: &str) -> PathBuf {
-    oobo_projects_dir().join(slug_from_path(project_path))
+    oobo_home().join("projects").join(slug_from_path(project_path))
 }
 
 /// Ensure a directory exists, creating it and all parents if needed.
@@ -149,14 +147,8 @@ mod tests {
             return;
         }
         let home = oobo_home();
-        assert!(home.to_string_lossy().contains(".oobo"));
-    }
-
-    #[test]
-    fn test_oobo_db_path_structure() {
-        let db = oobo_db_path();
-        assert!(db.to_string_lossy().contains("db"));
-        assert!(db.to_string_lossy().ends_with("oobo.db"));
+        let s = home.to_string_lossy();
+        assert!(s.contains("oobo"), "expected 'oobo' in path: {s}");
     }
 
     #[test]

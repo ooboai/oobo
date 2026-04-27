@@ -26,7 +26,7 @@ A clear and concise description of what you expected to happen.
 **Additional context**
 Add any other context, logs, or screenshots about the problem here.
 
-**`oobo inspect` output**
+**Diagnostics**
 ```
-<paste output of `oobo inspect` here>
+<paste `oobo --version --json`, relevant command output, and any lines from ~/.oobo/logs/hooks-debug.log>
 ```

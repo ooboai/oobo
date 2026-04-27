@@ -42,9 +42,9 @@
 //!   `is_subagent` / `parent_session_id` from the `sessions` table;
 //!   that's M4's job.
 
-pub mod auto_backfill;
+#[cfg(test)]
 pub mod inference;
-pub mod inference_runner;
+pub mod turn_store;
 
 use crate::core::contribution::{Contribution, LinkType};
 use crate::core::turn::TurnTokens;
@@ -197,7 +197,6 @@ pub fn compute_windows(
     out
 }
 
-pub mod backfill;
 pub mod runner;
 
 #[cfg(test)]
@@ -297,10 +296,7 @@ mod tests {
 
     #[test]
     fn sessions_newer_than_first_anchor_skipped() {
-        let turns = vec![
-            turn("s1", 0, Some(100), 10),
-            turn("s2", 0, Some(500), 99),
-        ];
+        let turns = vec![turn("s1", 0, Some(100), 10), turn("s2", 0, Some(500), 99)];
         let anchors = vec![AttrAnchor {
             commit_hash: "c1".into(),
             committed_at_ms: 300,
@@ -421,10 +417,7 @@ mod tests {
 
     #[test]
     fn idempotent_when_rerun_on_same_inputs() {
-        let turns = vec![
-            turn("s1", 0, Some(100), 10),
-            turn("s1", 1, Some(200), 20),
-        ];
+        let turns = vec![turn("s1", 0, Some(100), 10), turn("s1", 1, Some(200), 20)];
         let anchors = vec![AttrAnchor {
             commit_hash: "c1".into(),
             committed_at_ms: 300,

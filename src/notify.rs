@@ -70,7 +70,7 @@ pub fn send(title: &str, message: &str) {
 #[cfg(target_os = "macos")]
 fn macos_notifier_path() -> std::path::PathBuf {
     paths::oobo_home()
-        .join("Oobo.app")
+        .join("Anchor.app")
         .join("Contents")
         .join("MacOS")
         .join("oobo-notify")
@@ -78,7 +78,7 @@ fn macos_notifier_path() -> std::path::PathBuf {
 
 #[cfg(target_os = "macos")]
 fn ensure_macos_notifier() -> Result<(), String> {
-    let app_dir = paths::oobo_home().join("Oobo.app");
+    let app_dir = paths::oobo_home().join("Anchor.app");
     let contents = app_dir.join("Contents");
     let macos_dir = contents.join("MacOS");
     let resources = contents.join("Resources");
@@ -93,9 +93,9 @@ fn ensure_macos_notifier() -> Result<(), String> {
     <key>CFBundleIdentifier</key>
     <string>dev.oobo.notifications</string>
     <key>CFBundleName</key>
-    <string>oobo</string>
+    <string>Anchor</string>
     <key>CFBundleDisplayName</key>
-    <string>oobo</string>
+    <string>Anchor</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>
