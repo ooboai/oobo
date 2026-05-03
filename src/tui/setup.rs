@@ -66,12 +66,9 @@ const STEP_COUNT: usize = 3;
 
 struct ToolToggle {
     config_key: &'static str,
-    #[allow(dead_code)]
     display_name: &'static str,
-    #[allow(dead_code)]
     category: &'static str,
     enabled: bool,
-    #[allow(dead_code)]
     detected: bool,
 }
 
@@ -110,7 +107,7 @@ impl Wizard {
             })
             .collect();
 
-        tools.sort_by_key(|t| if t.category == "ide" { 0 } else { 1 });
+        tools.sort_by_key(|t| i32::from(t.category != "ide"));
 
         let mut projects = scan.project_choices.clone();
         for p in &mut projects {
@@ -174,7 +171,7 @@ pub fn run_setup_wizard(cfg: &Config, scan: ScanInfo) -> Result<Option<SetupOutc
 
         if let Some(key) = crate::tui::next_key(crate::tui::KEY_POLL).map_err(|e| e.to_string())? {
             match handle_key(&mut wiz, key.code) {
-                Action::Continue => continue,
+                Action::Continue => {}
                 Action::Save(cfg) => break Ok(Some(*cfg)),
                 Action::Cancel => break Ok(None),
             }
@@ -249,7 +246,7 @@ fn render(f: &mut Frame, wiz: &Wizard) {
 
     let step_label = wiz.step.label();
     let title = format!(
-        " anchor setup · {step_label} ({}/{STEP_COUNT}) ",
+        " oobo setup · {step_label} ({}/{STEP_COUNT}) ",
         wiz.step.index() + 1
     );
     let block = Block::bordered().title(Line::from(vec![Span::styled(
@@ -278,11 +275,11 @@ fn render_welcome(f: &mut Frame, area: ratatui::layout::Rect, wiz: &Wizard) {
 
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(""),
-        Line::from(Span::styled("  Welcome to anchor.", bold)),
+        Line::from(Span::styled("  Welcome to oobo.", bold)),
         Line::from(""),
         Line::from(vec![
             Span::styled("  ", dim),
-            Span::raw("anchor enriches your git commits with AI session tracking,"),
+            Span::raw("oobo enriches your git commits with AI session tracking,"),
         ]),
         Line::from(vec![
             Span::styled("  ", dim),
@@ -309,23 +306,7 @@ fn render_welcome(f: &mut Frame, area: ratatui::layout::Rect, wiz: &Wizard) {
         lines.push(Line::from(""));
     }
 
-    if !wiz.scan.detected.is_empty() {
-        lines.push(Line::from(Span::styled("  Detected tools:", dim)));
-        for (key, count) in &wiz.scan.detected {
-            let display = wiz
-                .tools
-                .iter()
-                .find(|t| t.config_key == key)
-                .map(|t| t.display_name)
-                .unwrap_or(key.as_str());
-            lines.push(Line::from(vec![
-                Span::styled("    ✓ ", green),
-                Span::raw(format!("{display:<16}")),
-                Span::styled(format!("{count} session(s)"), dim),
-            ]));
-        }
-        lines.push(Line::from(""));
-    } else {
+    if wiz.scan.detected.is_empty() {
         lines.push(Line::from(Span::styled(
             "  No AI tool sessions detected yet.",
             dim,
@@ -334,6 +315,21 @@ fn render_welcome(f: &mut Frame, area: ratatui::layout::Rect, wiz: &Wizard) {
             "  You can enable tools in the next step.",
             dim,
         )));
+        lines.push(Line::from(""));
+    } else {
+        lines.push(Line::from(Span::styled("  Detected tools:", dim)));
+        for (key, count) in &wiz.scan.detected {
+            let display = wiz
+                .tools
+                .iter()
+                .find(|t| t.config_key == key)
+                .map_or(key.as_str(), |t| t.display_name);
+            lines.push(Line::from(vec![
+                Span::styled("    ✓ ", green),
+                Span::raw(format!("{display:<16}")),
+                Span::styled(format!("{count} session(s)"), dim),
+            ]));
+        }
         lines.push(Line::from(""));
     }
 
@@ -373,11 +369,11 @@ fn render_projects(f: &mut Frame, area: ratatui::layout::Rect, wiz: &Wizard) {
 
     if wiz.projects.is_empty() {
         lines.push(Line::from(Span::styled(
-            "  No projects found. anchor will discover projects as you use AI tools.",
+            "  No projects found. oobo will discover projects as you use AI tools.",
             dim,
         )));
         lines.push(Line::from(Span::styled(
-            "  Enable any repo later with `anchor enable` from inside it.",
+            "  Enable any repo later with `oobo enable` from inside it.",
             dim,
         )));
     } else {

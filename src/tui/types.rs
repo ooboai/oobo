@@ -1,6 +1,8 @@
 use ratatui::text::Line;
 use ratatui::widgets::ListState;
 
+use crate::feed::{FeedRow, RowKind};
+
 #[derive(Clone)]
 pub struct AnchorRow {
     pub kind: MemoryKind,
@@ -13,15 +15,49 @@ pub struct AnchorRow {
     pub session_count: usize,
     pub files: usize,
     pub tool_calls: usize,
-    pub turn_index: Option<i64>,
     pub session_id: Option<String>,
     pub parent_anchor: Option<String>,
+    pub worktree_hint: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MemoryKind {
     Anchor,
     ShadowAnchor,
+}
+
+impl From<FeedRow> for AnchorRow {
+    fn from(r: FeedRow) -> Self {
+        let subject = r
+            .intent
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                if r.subject.is_empty() {
+                    "(no subject)".to_string()
+                } else {
+                    r.subject.clone()
+                }
+            });
+        AnchorRow {
+            kind: match r.kind {
+                RowKind::Anchor => MemoryKind::Anchor,
+                RowKind::Shadow => MemoryKind::ShadowAnchor,
+            },
+            sha: r.id,
+            timestamp: r.timestamp,
+            subject,
+            intent: r.intent,
+            tool: r.tool,
+            tokens: if r.tokens > 0 { Some(r.tokens) } else { None },
+            session_count: r.session_count,
+            files: r.files,
+            tool_calls: r.tool_calls,
+            session_id: r.session_id,
+            parent_anchor: r.parent_anchor,
+            worktree_hint: r.worktree_hint,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -73,9 +109,17 @@ impl TimeWindow {
 pub(super) enum View {
     Feed(FeedState),
     Transcript(TranscriptState),
-    Search(SearchState),
+    Diff(DiffState),
     Picker(PickerState),
     Help,
+}
+
+/// Scrollable commit diff rendered in-TUI (replaces git-show shell-out).
+pub(super) struct DiffState {
+    pub(super) sha: String,
+    pub(super) subject: String,
+    pub(super) lines: Vec<Line<'static>>,
+    pub(super) scroll: u16,
 }
 
 pub(super) struct FeedState {
@@ -93,15 +137,11 @@ pub(super) struct TranscriptState {
     pub(super) filter_open: bool,
     pub(super) match_lines: Vec<usize>,
     pub(super) match_cursor: usize,
+    /// Line indices where tool-call messages begin (for t/T navigation).
+    pub(super) tool_call_lines: Vec<usize>,
+    pub(super) tool_call_cursor: usize,
 }
 
-pub(super) struct SearchState {
-    pub(super) query: String,
-    pub(super) global: bool,
-    pub(super) results: Vec<crate::commands::search::Hit>,
-    pub(super) list: ListState,
-    pub(super) running: bool,
-}
 
 /// Generic modal picker used for session and file selection.
 pub(super) struct PickerState {

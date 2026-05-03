@@ -71,24 +71,23 @@ pub(super) fn render_message(out: &mut Vec<Line<'static>>, m: &crate::core::mess
                 in_code_block = false;
                 code_lang.clear();
                 continue;
-            } else {
-                code_lang = raw_line
-                    .trim_start()
-                    .trim_start_matches('`')
-                    .trim()
-                    .to_string();
-                let label = if code_lang.is_empty() {
-                    "  ┌─── code".to_string()
-                } else {
-                    format!("  ┌─── {code_lang}")
-                };
-                out.push(Line::from(Span::styled(
-                    label,
-                    Style::default().fg(Color::DarkGray),
-                )));
-                in_code_block = true;
-                continue;
             }
+            code_lang = raw_line
+                .trim_start()
+                .trim_start_matches('`')
+                .trim()
+                .to_string();
+            let label = if code_lang.is_empty() {
+                "  ┌─── code".to_string()
+            } else {
+                format!("  ┌─── {code_lang}")
+            };
+            out.push(Line::from(Span::styled(
+                label,
+                Style::default().fg(Color::DarkGray),
+            )));
+            in_code_block = true;
+            continue;
         }
 
         if in_code_block {
@@ -290,7 +289,7 @@ pub(super) fn draw_transcript(frame: &mut ratatui::Frame<'_>, ts: &TranscriptSta
         .map(|(i, line)| {
             if ts.match_lines.contains(&i) {
                 let mut new = line.clone();
-                for span in new.spans.iter_mut() {
+                for span in &mut new.spans {
                     span.style = span.style.bg(Color::Yellow).fg(Color::Black);
                 }
                 new

@@ -1,37 +1,6 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 
-#[allow(dead_code)]
-pub(super) fn display_path(path: &str) -> String {
-    if let Ok(home) = std::env::var("HOME") {
-        if let Some(rest) = path.strip_prefix(&home) {
-            return format!("~{rest}");
-        }
-    }
-    path.to_string()
-}
-
-#[allow(dead_code)]
-pub(super) fn short_agent_label(source: &str) -> &str {
-    let s = source.to_lowercase();
-    if s.contains("claude") {
-        "claude"
-    } else if s.contains("cursor") {
-        "cursor"
-    } else if s.contains("codex") {
-        "codex"
-    } else if s.contains("copilot") {
-        "copilot"
-    } else if s.contains("gemini") {
-        "gemini"
-    } else if s.contains("aider") {
-        "aider"
-    } else {
-        // Best-effort: show first 8 chars of whatever source label is.
-        source
-    }
-}
-
 /// Check if a line starts with "1. ", "2. ", etc. and return the rest.
 pub(super) fn strip_numbered_prefix(s: &str) -> Option<&str> {
     let bytes = s.as_bytes();
@@ -109,14 +78,4 @@ pub(super) fn short_sha(sha: &str) -> String {
 
 pub(super) fn relative_time(ts: i64) -> String {
     crate::utils::relative_time(ts)
-}
-
-pub(super) fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        format!("{s:<max$}")
-    } else {
-        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-        out.push('…');
-        out
-    }
 }
