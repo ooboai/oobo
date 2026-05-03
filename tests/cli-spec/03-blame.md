@@ -1,8 +1,8 @@
-# `anchor blame`
+# `oobo blame`
 
 Per-line attribution: who (or which AI tool) wrote each line of a file, at a given commit.
 
-**Strict superset of `git blame`.** Every `git blame` flag is supported and produces identical results to `git blame` for the same flags — plus an additional `ai/human` attribution column. If you `alias git=anchor`, typing `git blame` delegates here and you get more info, never less.
+**Strict superset of `git blame`.** Every `git blame` flag is supported and produces identical results to `git blame` for the same flags — plus an additional `ai/human` attribution column. If you `alias git=oobo`, typing `git blame` delegates here and you get more info, never less.
 
 Positional args:
 - `<file>` — required path to a tracked file, relative to repo root or absolute.
@@ -10,7 +10,7 @@ Positional args:
 
 Passthrough flags from `git blame` (not exhaustive): `-L <range>`, `-w`, `--abbrev=N`, `-M`, `-C`, `--root`, `--incremental`, `--line-porcelain`, `--porcelain`, `-s`, `-e`, `--date=<fmt>`, `--since=<date>`, `--until=<date>`, `-b`. These are forwarded verbatim to the underlying git invocation.
 
-anchor-specific flags:
+oobo-specific flags:
 - `--no-ai` — strip the AI attribution column; emit pure `git blame` output.
 
 ---
@@ -18,7 +18,7 @@ anchor-specific flags:
 ## Pretty / TTY mode
 
 ### Invocation
-`anchor blame src/main.rs`
+`oobo blame src/main.rs`
 
 **Context:** inside a repo, file exists in HEAD.
 
@@ -40,7 +40,7 @@ a1b2c3d  claude   (Teddy 2m)   5  }
 ## Agent mode
 
 ### Invocation
-`anchor blame src/main.rs --agent`
+`oobo blame src/main.rs --agent`
 
 **Behavior:** Flat columns, one line per source line. Columns:
 
@@ -66,7 +66,7 @@ a1b2c3d claude Teddy     5  }
 ## JSON mode
 
 ### Invocation
-`anchor blame src/main.rs --json`
+`oobo blame src/main.rs --json`
 
 **Behavior:** Emit a JSON document with an ordered array of line entries.
 
@@ -91,26 +91,26 @@ a1b2c3d claude Teddy     5  }
 ## Git-blame flag passthrough
 
 ### `-L <start>,<end>`
-`anchor blame -L 10,20 src/main.rs`
+`oobo blame -L 10,20 src/main.rs`
 
 **Behavior:** Like `git blame -L 10,20` plus the AI column. Only lines 10–20 are emitted.
 
 ### `-w` (ignore whitespace)
-`anchor blame -w src/main.rs`
+`oobo blame -w src/main.rs`
 
 **Behavior:** Forwarded to git. AI attribution follows whichever commit git attributes the line to.
 
 ### `--porcelain`
-`anchor blame --porcelain src/main.rs`
+`oobo blame --porcelain src/main.rs`
 
 **Behavior:** Emit git's porcelain format UNCHANGED — no extra AI column, because porcelain is intended for machine parsing and must round-trip. This mode is for scripts that already parse `git blame --porcelain`. To get machine-readable AI attribution, use `--json` instead.
 
 **Exit code:** `0`.
 
 ### `--no-ai`
-`anchor blame --no-ai src/main.rs`
+`oobo blame --no-ai src/main.rs`
 
-**Behavior:** Emit output byte-for-byte identical to `git blame src/main.rs`. No AI column, no extra processing. This is the "I'm scripting against git blame and don't want anchor noise" escape hatch.
+**Behavior:** Emit output byte-for-byte identical to `git blame src/main.rs`. No AI column, no extra processing. This is the "I'm scripting against git blame and don't want oobo noise" escape hatch.
 
 **Example output:**
 ```
@@ -126,22 +126,22 @@ d4e5f6g (Teddy 18m)  3)     let config = load_config();
 ## Commit argument
 
 ### Invocation
-`anchor blame src/main.rs a1b2c3d`
+`oobo blame src/main.rs a1b2c3d`
 
 **Behavior:** Blame the file at the specified commit, not at HEAD.
 
 ### Invocation
-`anchor blame src/main.rs main`
+`oobo blame src/main.rs main`
 
 **Behavior:** Blame at the tip of `main` branch.
 
 ### Invocation
-`anchor blame src/main.rs v1.0.0`
+`oobo blame src/main.rs v1.0.0`
 
 **Behavior:** Blame at the `v1.0.0` tag.
 
 ### Unknown commit-ish
-`anchor blame src/main.rs nothere`
+`oobo blame src/main.rs nothere`
 
 **Example output (stderr):**
 ```
@@ -154,7 +154,7 @@ fatal: no such ref: nothere
 ## Error cases
 
 ### File not tracked / not exists
-`anchor blame src/nothing.rs`
+`oobo blame src/nothing.rs`
 
 **Example output (stderr):**
 ```
@@ -163,7 +163,7 @@ fatal: no such path src/nothing.rs in HEAD
 **Exit code:** `128`.
 
 ### Outside a repo
-`anchor blame any-file` (from `$HOME`)
+`oobo blame any-file` (from `$HOME`)
 
 **Example output (stderr):**
 ```
@@ -172,7 +172,7 @@ fatal: not a git repository (or any of the parent directories): .git
 **Exit code:** `128`.
 
 ### Disabled project
-`anchor blame src/main.rs` inside a repo where `.oobo/config` has `[project].enabled = false`.
+`oobo blame src/main.rs` inside a repo where `.oobo/config` has `[project].enabled = false`.
 
 **Behavior:** Works exactly like `git blame`. The AI column is present but every cell is `-` (we still know which commit touched each line; we just don't attribute AI authorship).
 
@@ -188,7 +188,7 @@ a1b2c3d - Teddy     2      let args = parse_args();
 
 ## Invariants
 
-- `anchor blame --no-ai $file` output is byte-for-byte identical to `git blame $file`.
-- `anchor blame --porcelain $file` output is byte-for-byte identical to `git blame --porcelain $file`.
-- For any file with zero AI sessions linked to any of its commits, `anchor blame $file` differs from `git blame $file` only by added `-` columns on each line (or no difference with `--no-ai`).
-- `anchor blame $file --agent` never contains ANSI escape codes.
+- `oobo blame --no-ai $file` output is byte-for-byte identical to `git blame $file`.
+- `oobo blame --porcelain $file` output is byte-for-byte identical to `git blame --porcelain $file`.
+- For any file with zero AI sessions linked to any of its commits, `oobo blame $file` differs from `git blame $file` only by added `-` columns on each line (or no difference with `--no-ai`).
+- `oobo blame $file --agent` never contains ANSI escape codes.

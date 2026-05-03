@@ -1,35 +1,32 @@
-# `anchor anchors`
+# Bare `oobo` — memory feed
 
 See the memory: committed anchors plus local restorable working memory for the
-current repo. Alias: `anchor a`. This is the flagship view. `anchor anchors show
-<sha>` is the drill-down for committed anchors.
+current repo. This is the flagship view. Bare `oobo` (with optional `--agent`,
+`--json`, and filter flags) is the primary entry point. `oobo anchor show <sha>` is
+the drill-down for committed anchors.
 
-Positional arg is a subcommand (`show`) or nothing.
+Filter flags (global on `Cli`):
 
-Common flags:
-
-- `--limit N` (default `50`) — how many anchors to return.
+- `-n, --limit N` (default `50`) — how many anchors to return.
 - `--since <timestamp|duration>` — only anchors at or after this point. Accepts ISO-8601 (`2026-04-22T00:00:00Z`) or relative (`24h`, `7d`, `1mo`).
 - `--tool <name>` — filter by tool (claude, cursor, gemini, codex, ...).
-- `--project <name|path>` — filter to a specific project. Valid only outside a repo (inside, the current repo is implied).
 
 ---
 
 ## List — TTY / pretty mode
 
 ### Invocation
-`anchor anchors`
+`oobo`
 
 **Context:** inside an enabled repo with anchors.
 
 **Behavior:** Full-screen interactive memory timeline. Inside a repo, committed
 anchors and working memory are shown together. Anchors represent committed
-memory; working memory rows are uncommitted restorable points. Outside a repo, only
-committed anchors are listed across tracked projects.
+memory; working memory rows are uncommitted restorable points.
 
 **Example output (shape):**
 ```
-anchor / my-project  memory
+oobo / my-project  memory
 branch main  tree clean  anchors origin
 3 committed  1 working   window all   tracking on
 
@@ -44,7 +41,7 @@ branch main  tree clean  anchors origin
 ## List — agent mode
 
 ### Invocation
-`anchor anchors --agent`
+`oobo --agent`
 
 **Behavior:** Fixed-column, one line per memory item. Inside a repo this can
 include both `anchor` and `shadow` rows. `shadow` is the stable machine label
@@ -73,7 +70,7 @@ anchor a1b2c3d    18m  add rate limiter                         gemini   31k  2s
 ## List — JSON mode
 
 ### Invocation
-`anchor anchors --json`
+`oobo --json`
 
 **Behavior:** Emit a flat JSON array (no envelope). Each item has `"type":
 "anchor"` or `"shadow_anchor"`. Anchor items include committed-anchor fields;
@@ -135,8 +132,8 @@ Per-working-memory shape:
 
 ## Filters
 
-### `--limit N`
-`anchor anchors --agent --limit 3`
+### `-n N` / `--limit N`
+`oobo --agent -n 3`
 
 **Behavior:** Emit at most N rows. `N = 0` → empty output, exit `0` (not an error).
 
@@ -148,47 +145,31 @@ d4e5f6g 18m  add rate limiter                         gemini 31k  2s
 ```
 
 ### `--since <duration>`
-`anchor anchors --agent --since 24h`
+`oobo --agent --since 24h`
 
 **Behavior:** Only anchors with `timestamp >= now() - 24h`. Accepts `s`, `m`, `h`, `d`, `w`, `mo`, `y` suffixes. Invalid duration → exit `2` with error on stderr.
 
 ### `--since <ISO-8601>`
-`anchor anchors --agent --since 2026-04-01T00:00:00Z`
+`oobo --agent --since 2026-04-01T00:00:00Z`
 
 **Behavior:** Parse with chrono. Invalid ISO string → exit `2`.
 
 ### `--tool <name>`
-`anchor anchors --agent --tool claude`
+`oobo --agent --tool claude`
 
 **Behavior:** Only anchors whose `tools` array contains the given tool. Case-insensitive exact match.
 
 ### Combined filters
-`anchor anchors --agent --tool claude --since 7d --limit 10`
+`oobo --agent --tool claude --since 7d -n 10`
 
 **Behavior:** AND semantics. Filters compose.
 
-### `--project` outside a repo
-`anchor anchors --agent --project oobo-cli`
-
-**Behavior:** From anywhere (not inside a repo), show anchors for the named project. Resolved by project name first, then by path. Ambiguous name → exit `2` with `error: multiple projects match 'oobo-cli'` and a listing.
-
-### `--project` inside a repo
-`anchor anchors --project other-project`
-
-**Behavior:** ERROR. Inside a repo the project is implied; `--project` is rejected.
-
-**Example output (stderr):**
-```
-error: --project is not allowed inside a repo (current project is '$PROJECT_NAME')
-```
-**Exit code:** `2`.
-
 ---
 
-## Drill-down — `anchors show <sha>`
+## Drill-down — `oobo anchor show <sha>`
 
 ### Invocation
-`anchor anchors show a1b2c3d`
+`oobo anchor show a1b2c3d`
 
 **Behavior:** Show ONE anchor in depth. Pretty mode prints a paged document with sections: commit metadata, the commit diff (abbreviated by default), linked sessions (one collapsible block each), tokens + cost breakdown, per-line attribution.
 
@@ -219,7 +200,7 @@ DIFF
 
 **Exit code:** `0` on clean quit.
 
-### `anchor anchors show <sha> --agent`
+### `oobo anchor show <sha> --agent`
 
 **Behavior:** Flat, minimal. One section per line with `key: value` shape. Transcript is NOT inlined in agent mode — the session ID is emitted so the agent can fetch it separately if needed.
 
@@ -239,7 +220,7 @@ sessions:
 
 **Exit code:** `0`.
 
-### `anchor anchors show <sha> --json`
+### `oobo anchor show <sha> --json`
 
 **Behavior:** Full anchor object (same shape as list entries but with full `body`, full transcript per session, and any extra fields like `diff_summary`, `files_changed`, `hunks`).
 
@@ -250,7 +231,7 @@ sessions:
 ## Error cases
 
 ### Unknown SHA
-`anchor anchors show nothere`
+`oobo anchor show nothere`
 
 **Example output (stderr):**
 ```
@@ -258,34 +239,24 @@ error: no anchor found for 'nothere'
 ```
 **Exit code:** `1`.
 
-### Ambiguous SHA prefix
-`anchor anchors show a1`
+### Outside a repo
+`oobo` (from `$HOME`)
+
+**Behavior:** Print a hint to cd into a repo. No feed is shown.
 
 **Example output (stderr):**
 ```
-error: '' matches multiple anchors:
-  a1b2c3d  fix auth middleware
-  a1f7e2c  refactor token store
+oobo: not inside a git repository.
+      cd into a project and run 'oobo enable', or 'oobo setup' to get started.
 ```
 **Exit code:** `1`.
 
-### Outside a repo without `--project`
-`anchor anchors` (from `$HOME`)
-
-**Behavior:** Aggregate across all tracked projects. Each row carries a leading `project` column (agent/pretty) or a `"project"` string field (json). The envelope keys are NOT added in this mode — output stays a flat array in `--json`.
-
-**Example output (`--agent`):**
-```
-oobo-cli   a1b2c3d 2m   fix auth middleware        claude 12k  1s
-my-app     d4e5f6g 18m  add rate limiter           gemini 31k  2s
-```
-
 ### Disabled project
-`anchor anchors` inside a repo where `.oobo/config` has `[project].enabled = false`.
+`oobo` inside a repo where `.oobo/config` has `[project].enabled = false`.
 
 **Example output (pretty):**
 ```
-anchor is disabled for this project. run: anchor enable
+oobo is disabled for this project. run: oobo enable
 ```
 **Exit code:** `0`.
 
@@ -293,8 +264,9 @@ anchor is disabled for this project. run: anchor enable
 
 ## Invariants
 
-- Bare `anchor --agent` inside a repo ≡ `anchor anchors --agent --limit 50` byte-for-byte.
+- Bare `oobo --agent` inside a repo produces the agent-mode feed (default limit 50).
 - The `sha` column in `--agent` output is always 7 chars.
 - The `--agent` output never contains ANSI escape codes.
 - The `--json` output is always valid per `jq '.'`.
-- `anchors show <prefix>` where prefix uniquely identifies an anchor succeeds; ambiguous prefixes fail with a listing.
+- `oobo anchor show <prefix>` where prefix uniquely identifies an anchor succeeds; ambiguous prefixes fail with a listing.
+- `oobo` outside a repo always exits `1` with a hint.

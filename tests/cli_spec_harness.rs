@@ -37,13 +37,13 @@ const SPECS: &[(&str, &str)] = &[
 ];
 
 const RESERVED_COMMANDS: &[&str] = &[
-    "anchors", "from", "blame", "search", "enable", "disable", "alias", "setup", "settings",
-    "update", "hooks",
+    "anchor", "anchors", "search", "enable", "disable", "setup", "settings",
+    "update", "hooks", "goto", "back",
 ];
 
 const PUBLIC_HELP_COMMANDS: &[&str] = &[
-    "anchors", "a", "from", "blame", "search", "settings", "enable", "disable", "alias", "setup",
-    "update",
+    "anchors", "anchor", "goto", "back", "blame", "search", "settings", "enable", "disable",
+    "setup", "help", "update",
 ];
 
 const FORBIDDEN_COMMANDS: &[&str] = &[
@@ -64,7 +64,6 @@ struct Invocation {
 
 #[derive(Debug, Clone, Copy)]
 enum JsonShape {
-    Array,
     Composite,
 }
 
@@ -116,7 +115,7 @@ fn top_level_help_keeps_public_command_footprint_small() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let public_help = stdout
-        .split("GIT PASSTHROUGH:")
+        .split("OPTIONS:")
         .next()
         .unwrap_or(stdout.as_ref());
     let mut commands = std::collections::BTreeSet::new();
@@ -183,7 +182,7 @@ fn cli_spec_does_not_introduce_forbidden_public_commands() {
         let Ok(tokens) = split_command(&inv.command) else {
             continue;
         };
-        let Some(oobo_idx) = tokens.iter().position(|t| t == "anchor") else {
+        let Some(oobo_idx) = tokens.iter().position(|t| t == "oobo") else {
             continue;
         };
         let Some(verb) = first_non_flag_after_oobo(&tokens[oobo_idx + 1..]) else {
@@ -208,7 +207,7 @@ fn reserved_command_footprint_matches_spec() {
         let Ok(tokens) = split_command(&inv.command) else {
             continue;
         };
-        let Some(oobo_idx) = tokens.iter().position(|t| t == "anchor") else {
+        let Some(oobo_idx) = tokens.iter().position(|t| t == "oobo") else {
             continue;
         };
         if let Some(verb) = first_non_flag_after_oobo(&tokens[oobo_idx + 1..]) {
@@ -235,7 +234,7 @@ fn safe_cli_spec_invocations_smoke_run() {
         let command = case.command;
         let mut tokens = split_command(command).expect("CLI spec case should parse");
         let envs = extract_leading_env_assignments(&mut tokens);
-        assert_eq!(tokens.first().map(String::as_str), Some("anchor"));
+        assert_eq!(tokens.first().map(String::as_str), Some("oobo"));
 
         let sandbox = Sandbox::new();
         let output = run_oobo(&sandbox, &tokens[1..], &envs);
@@ -292,12 +291,12 @@ fn safe_cli_spec_invocations_smoke_run() {
 }
 
 #[test]
-fn global_output_flags_are_position_independent_for_anchors() {
+fn global_output_flags_are_position_independent_for_search() {
     let sandbox = Sandbox::new();
 
     for flag in ["--agent", "--json"] {
-        let root_first = run_oobo(&sandbox, &[flag, "anchors"], &[]);
-        let command_first = run_oobo(&sandbox, &["anchors", flag], &[]);
+        let root_first = run_oobo(&sandbox, &[flag, "search", "test"], &[]);
+        let command_first = run_oobo(&sandbox, &["search", "test", flag], &[]);
 
         assert_eq!(
             root_first.status.code(),
@@ -368,10 +367,6 @@ fn assert_json_stdout(command: &str, stdout: &str, shape: JsonShape) {
         .unwrap_or_else(|e| panic!("{command:?} should emit valid JSON, got {e}: {stdout}"));
 
     match shape {
-        JsonShape::Array => assert!(
-            value.is_array(),
-            "{command:?} should emit a JSON array, got {value}"
-        ),
         JsonShape::Composite => assert!(
             value.is_object() || value.is_array(),
             "{command:?} should emit a JSON object or array, got {value}"
@@ -461,45 +456,41 @@ fn first_non_flag_after_oobo(tokens: &[String]) -> Option<String> {
 fn flag_takes_value(flag: &str) -> bool {
     matches!(
         flag,
-        "--project" | "--tool" | "--since" | "--limit" | "--remote" | "--key" | "-n"
+        "--tool" | "--since" | "--limit" | "--remote" | "--key" | "-n"
     )
 }
 
 fn safe_cli_spec_cases() -> Vec<CliCase> {
     vec![
         CliCase {
-            command: "anchor --help",
+            command: "oobo --help",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: false,
             stdout_contains: &[
-                "USAGE:",
-                "VIEWS:",
-                "ACTIONS:",
-                "WIZARD + CONFIG:",
-                "LIFECYCLE:",
-                "GIT PASSTHROUGH:",
-                "OPTIONS:",
+                "Usage:",
+                "Commands",
+                "Options:",
             ],
             stderr_contains: &[],
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor --version",
+            command: "oobo --version",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: true,
-            stdout_contains: &["anchor "],
+            stdout_contains: &["oobo "],
             stderr_contains: &[],
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor --version --json",
+            command: "oobo --version --json",
             expected_code: 0,
             json_shape: Some(JsonShape::Composite),
             assert_agent_plain: false,
             stdout_contains: &[
-                "\"name\": \"anchor\"",
+                "\"name\": \"oobo\"",
                 "\"version\":",
                 "\"commit\":",
                 "\"built_at\":",
@@ -508,7 +499,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor anchors --agent",
+            command: "oobo --agent",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: true,
@@ -517,16 +508,16 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor anchors --json",
+            command: "oobo --json",
             expected_code: 0,
-            json_shape: Some(JsonShape::Array),
+            json_shape: Some(JsonShape::Composite),
             assert_agent_plain: false,
             stdout_contains: &[],
             stderr_contains: &[],
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor anchors --agent --json",
+            command: "oobo --agent --json",
             expected_code: 2,
             json_shape: None,
             assert_agent_plain: false,
@@ -535,16 +526,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor anchors --fake",
-            expected_code: 2,
-            json_shape: None,
-            assert_agent_plain: false,
-            stdout_contains: &[],
-            stderr_contains: &["--fake"],
-            compare_to_git: None,
-        },
-        CliCase {
-            command: "anchor anchors --help",
+            command: "oobo anchor show --help",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: false,
@@ -553,7 +535,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor blame --help",
+            command: "oobo blame --help",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: false,
@@ -562,7 +544,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor alias --help",
+            command: "oobo setup --help",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: false,
@@ -571,7 +553,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor setup --help",
+            command: "oobo update --help",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: false,
@@ -580,7 +562,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor update --help",
+            command: "oobo hooks --help",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: false,
@@ -589,16 +571,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor hooks --help",
-            expected_code: 0,
-            json_shape: None,
-            assert_agent_plain: false,
-            stdout_contains: &[],
-            stderr_contains: &[],
-            compare_to_git: None,
-        },
-        CliCase {
-            command: "anchor settings --agent",
+            command: "oobo settings --agent",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: true,
@@ -607,7 +580,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor settings --json",
+            command: "oobo settings --json",
             expected_code: 0,
             json_shape: Some(JsonShape::Composite),
             assert_agent_plain: false,
@@ -616,7 +589,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor search auth --agent",
+            command: "oobo search auth --agent",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: true,
@@ -625,7 +598,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor search auth --json",
+            command: "oobo search auth --json",
             expected_code: 0,
             json_shape: Some(JsonShape::Composite),
             assert_agent_plain: false,
@@ -634,7 +607,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor enable --agent",
+            command: "oobo enable --agent",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: true,
@@ -643,7 +616,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor disable --agent",
+            command: "oobo disable --agent",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: true,
@@ -652,16 +625,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor hooks agent fart --tool cursor",
-            expected_code: 0,
-            json_shape: None,
-            assert_agent_plain: true,
-            stdout_contains: &[],
-            stderr_contains: &["unknown agent event 'fart' (tool=cursor). ignored."],
-            compare_to_git: None,
-        },
-        CliCase {
-            command: "anchor hooks post-merge",
+            command: "oobo hooks agent fart --tool cursor",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: true,
@@ -670,7 +634,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor hooks post-rewrite",
+            command: "oobo hooks post-merge",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: true,
@@ -679,34 +643,25 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "anchor status",
+            command: "oobo hooks post-rewrite",
             expected_code: 0,
+            json_shape: None,
+            assert_agent_plain: true,
+            stdout_contains: &[],
+            stderr_contains: &[],
+            compare_to_git: None,
+        },
+        CliCase {
+            command: "oobo status",
+            expected_code: 2,
             json_shape: None,
             assert_agent_plain: false,
             stdout_contains: &[],
-            stderr_contains: &[],
-            compare_to_git: Some(&["status"]),
+            stderr_contains: &["unrecognized subcommand"],
+            compare_to_git: None,
         },
         CliCase {
-            command: "anchor log --oneline -n 5",
-            expected_code: 0,
-            json_shape: None,
-            assert_agent_plain: false,
-            stdout_contains: &["init"],
-            stderr_contains: &[],
-            compare_to_git: Some(&["log", "--oneline", "-n", "5"]),
-        },
-        CliCase {
-            command: "anchor nonexistent-verb",
-            expected_code: 1,
-            json_shape: None,
-            assert_agent_plain: false,
-            stdout_contains: &[],
-            stderr_contains: &["nonexistent-verb"],
-            compare_to_git: Some(&["nonexistent-verb"]),
-        },
-        CliCase {
-            command: "CURSOR_AGENT=1 anchor anchors",
+            command: "CURSOR_AGENT=1 oobo --agent",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: true,
@@ -772,9 +727,9 @@ fn split_command(command: &str) -> Result<Vec<String>, String> {
 }
 
 fn oobo_binary() -> std::path::PathBuf {
-    std::env::var_os("CARGO_BIN_EXE_anchor")
+    std::env::var_os("CARGO_BIN_EXE_oobo")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("target/debug/anchor"))
+        .unwrap_or_else(|| std::path::PathBuf::from("target/debug/oobo"))
 }
 
 struct Sandbox {

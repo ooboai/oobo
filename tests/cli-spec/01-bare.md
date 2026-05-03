@@ -1,23 +1,23 @@
-# Bare `anchor` — no subcommand
+# Bare `oobo` — no subcommand
 
-Resolves along two dimensions: (1) inside a git repo or not, (2) output mode (pretty / agent / json). That's the "four quadrants".
+Bare `oobo` is the primary feed command. It resolves along two dimensions: (1) inside a git repo or not, (2) output mode (pretty / agent / json). Outside a repo it always shows a hint.
 
-`anchor` alone is NEVER forwarded to `git`. Git passthrough only applies to `anchor <git-verb>` forms (see `10-git-passthrough.md`). Someone typing `anchor` with no args is asking for anchor, not for `git`'s usage banner.
+Filter flags (`-n`, `--since`, `--tool`) are global and apply to bare `oobo` directly.
 
 ---
 
 ## Inside a git repo, pretty mode (TTY, no flags, no agent env)
 
 ### Invocation
-`anchor`
+`oobo`
 
-**Context:** `$CWD` is inside a git repo that is `enabled` in anchor. TTY attached. No agent env vars.
+**Context:** `$CWD` is inside a git repo that is `enabled` in oobo. TTY attached. No agent env vars.
 
-**Behavior:** Open the anchor-feed TUI. Keys: `↑` / `↓` navigate, `Enter` drills into `anchors show <sha>` view, `/` opens search, `q` quits. Header shows aggregate stats (anchors, tokens, AI%). If the project is disabled, show the disabled-banner variant (see below).
+**Behavior:** Open the anchor-feed TUI. Keys: `↑` / `↓` navigate, `Enter` drills into `oobo anchor show <sha>` view, `/` opens search, `q` quits. Header shows aggregate stats (anchors, tokens, AI%). If the project is disabled, show the disabled-banner variant (see below).
 
 **Example output (screen buffer, shape):**
 ```
-┌─ anchor · myrepo ───────────── 847 anchors · 1.2M tok · 42% AI ─────┐
+┌─ oobo · myrepo ───────────── 847 anchors · 1.2M tok · 42% AI ─────┐
 │                                                                   │
 │  ● 2m    fix auth middleware               claude · 12k · 1 sess  │
 │  ● 18m   add rate limiter                  gemini · 31k · 2 sess  │
@@ -32,18 +32,18 @@ Resolves along two dimensions: (1) inside a git repo or not, (2) output mode (pr
 
 ### Disabled-project variant
 
-**Behavior:** Same TUI shell, but the header shows `· DISABLED ·` in place of stats, and the body shows a one-screen explanation + hint: "Run `anchor enable` to start tracking, or `anchor setup` to pick which projects to track."
+**Behavior:** Same TUI shell, but the header shows `· DISABLED ·` in place of stats, and the body shows a one-screen explanation + hint: "Run `oobo enable` to start tracking, or `oobo setup` to pick which projects to track."
 
 ---
 
 ## Inside a git repo, agent mode
 
 ### Invocation
-`anchor --agent`
+`oobo --agent`
 
 **Context:** inside a git repo, enabled.
 
-**Behavior:** Byte-for-byte identical to `anchor anchors --agent --limit 50`. Minimal one-line-per-anchor listing. See `02-anchors.md` for full column spec.
+**Behavior:** Minimal one-line-per-anchor listing (default limit 50). See `02-anchors.md` for full column spec.
 
 **Example output:**
 ```
@@ -62,9 +62,9 @@ e1f2d3c 3h   extract payment adapter    cursor 28k 1s
 ## Inside a git repo, JSON mode
 
 ### Invocation
-`anchor --json`
+`oobo --json`
 
-**Behavior:** Byte-for-byte identical to `anchor anchors --json --limit 50`. Full structured anchor list for this repo.
+**Behavior:** Full structured anchor list for this repo (default limit 50).
 
 **Example output:**
 ```json
@@ -96,108 +96,32 @@ e1f2d3c 3h   extract payment adapter    cursor 28k 1s
 
 ---
 
-## Outside any repo, pretty mode (TTY)
+## Outside any repo
 
 ### Invocation
-`anchor` (from `$HOME`, or anywhere not inside a git repo)
+`oobo` (from `$HOME`, or anywhere not inside a git repo)
 
-**Behavior:** Open the cross-project TUI — a feed of all tracked projects across all repos on this machine, grouped by recent activity. Same four keys.
+**Behavior:** Print an error message with a hint to cd into a repo.
 
-**Example output (screen buffer, shape):**
+**Example output (stderr):**
 ```
-┌─ anchor · 12 projects ───────────── 2.1k anchors · 4.3M tok · 51% AI ──┐
-│                                                                      │
-│  oobo-cli        2m   847 anchors · 1.2M · 42% AI                    │
-│  my-app          4h   120 anchors · 230k · 68% AI                    │
-│  work-api        1d   412 anchors · 880k · 35% AI (disabled)         │
-│                                                                      │
-└─ ↑↓ nav · enter open project · / search · q quit ───────────────────┘
+oobo: not inside a git repository.
+      cd into a project and run 'oobo enable', or 'oobo setup' to get started.
 ```
 
-**Exit code:** `0`.
-
-### Zero projects tracked
-
-**Behavior:** Display a one-line welcome and point to setup. No TUI.
-
-**Example output:**
-```
-anchor: no projects tracked yet. run:
-
-    anchor setup
-
-to discover projects and AI sessions on this machine.
-```
-
-**Exit code:** `0`.
-
----
-
-## Outside any repo, agent mode
-
-### Invocation
-`anchor --agent` (from `$HOME`)
-
-**Behavior:** One line per tracked project. Columns: project name, last-activity relative time, anchor count, total tokens, AI percentage, enabled/disabled flag.
-
-**Example output:**
-```
-oobo-cli     2m   847 1.2M 42% on
-my-app       4h   120 230k 68% on
-work-api     1d   412 880k 35% off
-```
-
-**Exit code:** `0`.
-
-### Zero projects tracked
-
-**Example output:**
-```
-no projects tracked. run: anchor setup
-```
-**Exit code:** `0`.
-
----
-
-## Outside any repo, JSON mode
-
-### Invocation
-`anchor --json` (from `$HOME`)
-
-**Example output:**
+**JSON mode (`oobo --json`):**
 ```json
-{
-  "projects": [
-    {
-      "id": "0f5c...",
-      "name": "oobo-cli",
-      "path": "/Users/example/dev/oobo-cli",
-      "remote": "git@github.com:me/oobo-cli.git",
-      "enabled": true,
-      "last_activity": "{timestamp}",
-      "stats": { "anchors": 847, "tokens": 1200000, "ai_pct": 42 }
-    }
-  ],
-  "stats": { "projects": 12, "anchors": 2100, "tokens": 4300000, "ai_pct": 51 }
-}
+{ "error": "not inside a git repository", "hint": "oobo setup" }
 ```
 
-**Exit code:** `0`.
-
-### Zero projects tracked
-
-**Example output:**
-```json
-{ "projects": [], "stats": { "projects": 0, "anchors": 0, "tokens": 0, "ai_pct": 0 } }
-```
-**Exit code:** `0`.
+**Exit code:** `1`.
 
 ---
 
 ## Inside a repo that was moved / renamed
 
 ### Invocation
-`anchor` (after the project folder was renamed from `/a/b` to `/a/c`)
+`oobo` (after the project folder was renamed from `/a/b` to `/a/c`)
 
 **Behavior:** Project is resolved by `remote_url` first, then `initial_commit_sha` — NOT by path. The old row is found, its `primary_path` is updated to the new location, and the old path is appended to `historical_paths`. No user-visible churn; the TUI opens as normal with all prior anchors intact.
 
@@ -208,8 +132,9 @@ no projects tracked. run: anchor setup
 
 ## Invariants
 
-- `anchor --agent` in a repo ≡ `anchor anchors --agent --limit 50` (byte-for-byte).
-- `anchor --json` in a repo ≡ `anchor anchors --json --limit 50` (byte-for-byte).
-- `anchor > /tmp/out.txt` in a repo → non-TTY → `--agent` output written to the file.
-- `anchor` NEVER forwards to `git` (passthrough applies only to `anchor <verb>` forms).
-- Running `anchor` on a disabled project NEVER emits a TUI or refreshes the index.
+- `oobo --agent` in a repo produces agent-mode anchor listing (default limit 50).
+- `oobo --json` in a repo produces JSON anchor listing (default limit 50).
+- `oobo > /tmp/out.txt` in a repo → non-TTY → `--agent` output written to the file.
+- Unknown subcommands produce clap errors (no git passthrough).
+- Running `oobo` on a disabled project NEVER emits a TUI or refreshes the index.
+- Running `oobo` outside a repo always exits `1` with a hint message.

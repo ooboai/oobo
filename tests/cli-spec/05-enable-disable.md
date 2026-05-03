@@ -1,4 +1,4 @@
-# `anchor enable` / `anchor disable`
+# `oobo enable` / `oobo disable`
 
 Per-project toggle. Imperative verbs — NOT a settings key. The source of truth is the project folder:
 
@@ -12,31 +12,31 @@ No positional args. No flags on either verb (other than the global `--agent` / `
 
 ---
 
-## `anchor enable`
+## `oobo enable`
 
 ### Inside an enabled repo (already on)
 
 #### Invocation
-`anchor enable`
+`oobo enable`
 
 **Behavior:** Idempotent. Print one line confirming the state; no config rewrite.
 
 **Example output:**
 ```
-anchor is already enabled for '$PROJECT_NAME'.
+oobo is already enabled for '$PROJECT_NAME'.
 ```
 **Exit code:** `0`.
 
 ### Inside a disabled repo
 
 #### Invocation
-`anchor enable`
+`oobo enable`
 
 **Behavior:** Set `[project].enabled` back to `true` in `.oobo/config` (omitted on disk because it is the default). Trigger a background reindex. Print confirmation.
 
 **Example output:**
 ```
-anchor enabled for '$PROJECT_NAME'. indexing sessions in the background.
+oobo enabled for '$PROJECT_NAME'. indexing sessions in the background.
 ```
 **Exit code:** `0`.
 
@@ -45,23 +45,23 @@ anchor enabled for '$PROJECT_NAME'. indexing sessions in the background.
 - Detached thread scans tool-session paths and enriches the DB.
 - Git hooks (`post-commit`, `pre-push`, `post-merge`, `post-rewrite`) installed if not already.
 
-### Inside a brand-new repo (never seen by anchor)
+### Inside a brand-new repo (never seen by oobo)
 
 #### Invocation
-`anchor enable`
+`oobo enable`
 
 **Behavior:** Create `.oobo/config` with a stable project id. Create/cache the project row if missing. Install hooks. Kick off initial index.
 
 **Example output:**
 ```
-anchor enabled for '$PROJECT_NAME' (new project).
+oobo enabled for '$PROJECT_NAME' (new project).
 ```
 **Exit code:** `0`.
 
 ### Agent / JSON modes
 
 #### Invocation
-`anchor enable --agent`
+`oobo enable --agent`
 
 **Example output:**
 ```
@@ -70,7 +70,7 @@ enabled $PROJECT_NAME
 **Exit code:** `0`.
 
 #### Invocation
-`anchor enable --json`
+`oobo enable --json`
 
 **Example output:**
 ```json
@@ -80,18 +80,18 @@ enabled $PROJECT_NAME
 
 ---
 
-## `anchor disable`
+## `oobo disable`
 
 ### Inside an enabled repo
 
 #### Invocation
-`anchor disable`
+`oobo disable`
 
 **Behavior:** Set `[project].enabled = false` in `.oobo/config`. Stop auto-indexing and commit enrichment. Leave existing anchors intact (disable is reversible, no data deletion).
 
 **Example output:**
 ```
-anchor disabled for '$PROJECT_NAME'. existing anchors retained. run 'anchor enable' to resume.
+oobo disabled for '$PROJECT_NAME'. existing anchors retained. run 'oobo enable' to resume.
 ```
 **Exit code:** `0`.
 
@@ -102,20 +102,20 @@ anchor disabled for '$PROJECT_NAME'. existing anchors retained. run 'anchor enab
 ### Inside an already-disabled repo
 
 #### Invocation
-`anchor disable`
+`oobo disable`
 
 **Behavior:** Idempotent.
 
 **Example output:**
 ```
-anchor is already disabled for '$PROJECT_NAME'.
+oobo is already disabled for '$PROJECT_NAME'.
 ```
 **Exit code:** `0`.
 
 ### Agent / JSON modes
 
 #### Invocation
-`anchor disable --json`
+`oobo disable --json`
 
 **Example output:**
 ```json
@@ -130,15 +130,15 @@ anchor is already disabled for '$PROJECT_NAME'.
 ### Outside a git repo
 
 #### Invocation
-`anchor enable` (from `$HOME`)
+`oobo enable` (from `$HOME`)
 
 **Example output (stderr):**
 ```
-error: not a git repository. cd into a repo first, or use 'anchor setup' to manage multiple projects.
+error: not a git repository. cd into a repo first, or use 'oobo setup' to manage multiple projects.
 ```
 **Exit code:** `1`.
 
-#### Same for `anchor disable`
+#### Same for `oobo disable`
 
 ### Git repo with no remote AND no commits yet
 
@@ -146,7 +146,7 @@ error: not a git repository. cd into a repo first, or use 'anchor setup' to mana
 
 **Example output:**
 ```
-anchor enabled for '$PROJECT_NAME' (warning: no remote and no commits yet; project identity will stabilize after first commit).
+oobo enabled for '$PROJECT_NAME' (warning: no remote and no commits yet; project identity will stabilize after first commit).
 ```
 **Exit code:** `0`.
 
@@ -154,15 +154,15 @@ anchor enabled for '$PROJECT_NAME' (warning: no remote and no commits yet; proje
 
 ## First-TTY banner
 
-Not a command per se — a side effect of *any* anchor invocation in a new enabled repo where the banner has not yet been shown.
+Not a command per se — a side effect of *any* oobo invocation in a new enabled repo where the banner has not yet been shown.
 
-### Context: first `anchor anchors` (or any view command) in a brand-new enabled repo
+### Context: first `oobo` (or any view command) in a brand-new enabled repo
 
 **Behavior:** Before the normal output, print a single one-shot banner to stderr:
 
 **Example output (stderr, once):**
 ```
-anchor: tracking this repo. disable: anchor disable
+oobo: tracking this repo. disable: oobo disable
 ```
 
 After display, record the local one-shot state. Never emit again for this project on that machine.
@@ -173,9 +173,9 @@ After display, record the local one-shot state. Never emit again for this projec
 
 ## Invariants
 
-- `anchor enable` is idempotent: running it twice is indistinguishable from running it once in side-effect terms (no duplicate hooks, no duplicate rows).
-- `anchor disable` NEVER deletes anchors or sessions.
-- A disabled project continues to appear in `anchor` (bare, outside repo) cross-project view, marked disabled.
+- `oobo enable` is idempotent: running it twice is indistinguishable from running it once in side-effect terms (no duplicate hooks, no duplicate rows).
+- `oobo disable` NEVER deletes anchors or sessions.
+- A disabled project retains its anchors and sessions; `oobo enable` resumes tracking.
 - The banner is shown AT MOST ONCE per project per machine.
 - Both verbs accept `--agent` and `--json`.
 - Neither verb takes positional args; passing any → exit `2` with clap error.

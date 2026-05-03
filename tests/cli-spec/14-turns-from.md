@@ -1,63 +1,67 @@
-# `anchor from`
+# `oobo goto` / `oobo back`
 
-Explicit loading for anchors and working memory. Working memory is captured
-into hidden Git refs and is visible through `anchor anchors`; it is read-only
-unless the user runs `anchor from ... --load`.
-
----
-
-## `anchor from turn`
-
-### Preview
-
-#### Invocation
-`anchor from turn t123 --agent`
-
-**Behavior:** Preview the turn. Does not mutate the worktree.
-
-**Exit code:** `0` when found.
-
-### Load
-
-#### Invocation
-`anchor from turn t123 --load --agent`
-
-**Behavior:** Load the turn snapshot into the worktree. Refuses to overwrite a
-dirty worktree unless `--force` is present. The next captured turn records
-`restored_from` so continuation after a load stays traceable. If captured
-memory exists, anchor materializes it under the Git-local `oobo-state/from`
-directory and reports the path in loaded output.
-
-**Exit code:** `0` when loaded, `1` when blocked or missing.
+Time-travel between turns and commits. Working memory (turns) is captured
+into hidden Git refs and is visible through bare `oobo`; it is read-only
+unless the user runs `oobo goto <id>`.
 
 ---
 
-## `anchor from anchor`
-
-### Preview
+## `oobo goto <turn-id>`
 
 #### Invocation
-`anchor from anchor HEAD --agent`
+`oobo goto t123abc`
 
-**Behavior:** Preview the anchor/commit tree. Does not mutate the worktree.
+**Behavior:** Load the turn snapshot into the worktree. If the worktree has
+uncommitted changes, they are automatically stashed. Records the current HEAD
+so `oobo back` can return. Does not move HEAD — only updates the index and
+worktree.
 
-**Exit code:** `0` when found.
+**Exit code:** `0` when loaded, `1` when blocked or not found.
 
-### Load
+---
+
+## `oobo goto <commit-sha>`
 
 #### Invocation
-`anchor from anchor HEAD --load --agent`
+`oobo goto abc123`
 
-**Behavior:** Load the anchor commit tree into the worktree. Refuses to
-overwrite a dirty worktree unless `--force` is present. The next captured turn
-records `restored_from=anchor:<commit>`.
+**Behavior:** Load the commit's tree into the worktree. Auto-stashes if dirty.
+Records the return point for `oobo back`.
 
-**Exit code:** `0` when loaded, `1` when blocked or missing.
+**Exit code:** `0` when loaded, `1` when blocked or not found.
+
+---
+
+## `oobo back`
+
+#### Invocation
+`oobo back`
+
+**Behavior:** Return to the state before the last `goto`. Restores the original
+HEAD tree and pops the auto-stash if one was created. Refuses to run if the
+worktree has changes since the goto (commit or stash them first).
+
+**Exit code:** `0` on success, `1` if nothing to return to or worktree is dirty.
+
+---
+
+## `oobo goto --no-stash`
+
+#### Invocation
+`oobo goto t123abc --no-stash`
+
+**Behavior:** Fails if the worktree has uncommitted changes instead of auto-stashing.
+
+**Exit code:** `1` when dirty.
+
+---
 
 ## Invariants
 
-- `anchor anchors` is the only public memory listing.
-- `anchor from ...` is preview-only unless `--load` is explicit.
-- Dirty worktrees are protected unless `--force` is explicit.
+- Bare `oobo` is the only public memory listing.
+- `oobo goto` auto-stashes by default (safe for the user).
+- `oobo back` restores the previous state cleanly.
 - Loading a turn or anchor does not move `HEAD`; it only updates the index and
   worktree.
+- The return state is stored in `.git/oobo-state/goto-return.json`.
+- Only one level of goto is tracked (a second goto overwrites the return point).

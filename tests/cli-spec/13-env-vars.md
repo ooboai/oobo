@@ -1,12 +1,12 @@
 # Environment variables
 
-Variables that change anchor's behavior. Part of the public contract — tests, scripts, and integrations depend on them. Any change to one of these is a breaking change.
+Variables that change oobo's behavior. Part of the public contract — tests, scripts, and integrations depend on them. Any change to one of these is a breaking change.
 
 ## User-facing
 
 ### `OOBO_HOME`
 
-Override the base directory for anchor's local state.
+Override the base directory for oobo's local state.
 
 - **Default:** `$HOME/.oobo`.
 - **When set:** config, db, logs, skills, and backups all live under `$OOBO_HOME/` instead.
@@ -15,13 +15,13 @@ Override the base directory for anchor's local state.
 
 Example:
 ```bash
-OOBO_HOME=/tmp/oobo-sandbox anchor setup --non-interactive
+OOBO_HOME=/tmp/oobo-sandbox oobo setup --non-interactive
 ls /tmp/oobo-sandbox/
 # → config.toml  db/  logs/
 ```
 
 Invariants:
-- When unset, anchor uses `$HOME/.oobo`.
+- When unset, oobo uses `$HOME/.oobo`.
 - When set but directory is not writable → exit `1` with `error: OOBO_HOME is not writable: <path>`.
 - Must be an absolute path; relative paths are rejected with exit `2`.
 
@@ -29,14 +29,14 @@ Invariants:
 
 ### `NO_COLOR`
 
-Standard cross-tool convention. When set (to any value, even empty string), anchor emits no ANSI color codes in pretty mode.
+Standard cross-tool convention. When set (to any value, even empty string), oobo emits no ANSI color codes in pretty mode.
 
 - **Default:** unset (colors on).
 - Affects ALL commands.
 
 Example:
 ```bash
-NO_COLOR=1 anchor anchors   # plain output, no colors
+NO_COLOR=1 oobo   # plain output, no colors
 ```
 
 Invariants:
@@ -54,7 +54,7 @@ Enable verbose debug logging on stderr and in log files.
 
 Example:
 ```bash
-OOBO_DEBUG=1 anchor anchors 2>anchor.log
+OOBO_DEBUG=1 oobo 2>oobo.log
 ```
 
 When set:
@@ -63,7 +63,7 @@ When set:
 
 Invariants:
 - Does NOT change stdout. Tests relying on stdout match aren't broken by this.
-- Takes precedence over `RUST_LOG` if both are set for the anchor binary.
+- Takes precedence over `RUST_LOG` if both are set for the oobo binary.
 
 ---
 
@@ -78,12 +78,12 @@ Provide the API key for this process without writing it to disk.
 
 Example:
 ```bash
-OOBO_SECRET_KEY=sk_... anchor search "auth" --remote
+OOBO_SECRET_KEY=sk_... oobo search "auth" --remote
 ```
 
 Invariants:
 - Empty `OOBO_SECRET_KEY` is ignored.
-- The value is never printed unmasked by `anchor settings`.
+- The value is never printed unmasked by `oobo settings`.
 - The environment value wins over persisted default and project keys for the current process.
 
 ---
@@ -109,7 +109,7 @@ Any of these env vars, set to a non-empty value, implicitly forces `--agent` mod
 - `CONTINUE_SESSION` / `CONTINUE_IDE`
 - `AICOMMITS`
 
-Rationale: when anchor is invoked by an AI tool, token-efficient output is always the right default.
+Rationale: when oobo is invoked by an AI tool, token-efficient output is always the right default.
 
 Invariants:
 - Auto-detection is a soft nudge; explicit `--interactive` overrides it.
@@ -117,18 +117,18 @@ Invariants:
 
 ---
 
-## Internal (set by anchor itself)
+## Internal (set by oobo itself)
 
-These are NOT meant to be set manually; they're part of anchor's re-entry and test machinery.
+These are NOT meant to be set manually; they're part of oobo's re-entry and test machinery.
 
 ### `OOBO_INTERCEPTED`
 
-Marker that anchor sets when it shells out to `git` from within its own commit/push interceptor. The installed git hooks check for this and no-op if present, preventing infinite recursion.
+Marker that oobo sets when it shells out to `git` from within its own commit/push interceptor. The installed git hooks check for this and no-op if present, preventing infinite recursion.
 
 - **Set by:** `crate::git::interceptor::on_write_op`, `crate::git::proxy::run_and_intercept`.
-- **Read by:** `anchor hooks post-commit`, `anchor hooks pre-push`.
+- **Read by:** `oobo hooks post-commit`, `oobo hooks pre-push`.
 
-If a user manually sets this in their shell, anchor's hooks become no-ops — useful for reproducing bugs where hooks cause interference.
+If a user manually sets this in their shell, oobo's hooks become no-ops — useful for reproducing bugs where hooks cause interference.
 
 ### `OOBO_SKIP_UPDATE_CHECK`
 
@@ -154,7 +154,7 @@ Opt-in marker used by the test harness and by `tests/cli-spec/run.sh`. When set:
 ### Isolated test invocation
 
 ```bash
-OOBO_HOME=$(mktemp -d) OOBO_TEST=1 NO_COLOR=1 anchor settings set key sk_test
+OOBO_HOME=$(mktemp -d) OOBO_TEST=1 NO_COLOR=1 oobo settings set key sk_test
 ```
 
 This is the canonical shape for every invocation the `tests/cli-spec/run.sh` harness will perform: isolated home, silent banners, no colors.
@@ -162,7 +162,7 @@ This is the canonical shape for every invocation the `tests/cli-spec/run.sh` har
 ### Debugging a missed anchor
 
 ```bash
-OOBO_DEBUG=1 anchor hooks post-commit 2>&1 | tee /tmp/oobo-commit.log
+OOBO_DEBUG=1 oobo hooks post-commit 2>&1 | tee /tmp/oobo-commit.log
 ```
 
 Shows the full trace of project resolution, session matching, and orphan-branch write.
@@ -170,15 +170,15 @@ Shows the full trace of project resolution, session matching, and orphan-branch 
 ### Forcing agent mode in an SSH session
 
 ```bash
-CURSOR_AGENT=1 ssh user@host 'cd repo && anchor anchors'
-# The remote anchor emits --agent-style output despite having no local TTY hint.
+CURSOR_AGENT=1 ssh user@host 'cd repo && oobo'
+# The remote oobo emits --agent-style output despite having no local TTY hint.
 ```
 
 ---
 
 ## Invariants
 
-- `OOBO_HOME` takes precedence over `$HOME`-derived defaults for EVERY file anchor writes.
+- `OOBO_HOME` takes precedence over `$HOME`-derived defaults for EVERY file oobo writes.
 - `NO_COLOR` and `--agent` both independently disable ANSI escapes.
 - Agent env vars only auto-flip to `--agent`, never to `--json`.
 - `OOBO_INTERCEPTED` set in the user's environment disables all write-path hooks — NEVER recommend setting it except for debugging.
