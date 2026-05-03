@@ -1,23 +1,23 @@
 [package]
-name = "anchor"
+name = "oobo"
 version = "1.0.0-rc.1"
 edition = "2021"
 authors = ["Oobo Contributors"]
 description = "Git decorator for humans and agents — captures AI sessions, tokens, costs, and code attribution alongside your commits"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/ooboai/anchor"
+repository = "https://github.com/ooboai/oobo"
 homepage = "https://oobo.ai"
 readme = "README.md"
 keywords = ["git", "ai", "developer-tools", "attribution", "cli"]
 categories = ["command-line-utilities", "development-tools"]
-documentation = "https://docs.rs/anchor"
+documentation = "https://docs.rs/oobo"
 
 [lib]
 name = "oobo"
 path = "src/lib.rs"
 
 [[bin]]
-name = "anchor"
+name = "oobo"
 path = "src/main.rs"
 
 [dependencies]
@@ -26,7 +26,8 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+tokio = { version = "1", features = ["rt", "macros"] }
 dirs = "6"
 chrono = { version = "0.4", features = ["serde"] }
 url = "2"
@@ -36,6 +37,9 @@ tiktoken-rs = "0.6"
 thiserror = "2"
 regex = "1"
 tempfile = "3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }
