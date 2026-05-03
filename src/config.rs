@@ -154,7 +154,7 @@ impl Default for TransparencyConfig {
 }
 
 fn default_transparency_mode() -> String {
-    "off".to_string()
+    "on".to_string()
 }
 
 fn default_scan_interval() -> u64 {
@@ -256,13 +256,13 @@ impl Config {
                     match toml::from_str(contents) {
                         Ok(cfg) => cfg,
                         Err(e) => {
-                    eprintln!("anchor: warning: invalid config at {}: {e}", effective_path.display());
+                    tracing::warn!(path = %effective_path.display(), %e, "invalid config");
                     Self::default()
                 }
             }
         }
         Err(e) => {
-                    eprintln!("anchor: warning: cannot read {}: {e}", effective_path.display());
+                    tracing::warn!(path = %effective_path.display(), %e, "cannot read config");
                     Self::default()
                 }
             }
@@ -297,7 +297,7 @@ impl Config {
         if self.has_any_key() {
             use std::os::unix::fs::PermissionsExt;
             if let Err(e) = fs::set_permissions(&path, fs::Permissions::from_mode(0o600)) {
-                eprintln!("anchor: warning: could not set config permissions: {e}");
+                tracing::warn!(%e, "could not set config permissions");
             }
         }
 
@@ -333,8 +333,8 @@ impl Config {
     /// orphan branch. Anchor metadata is always written regardless of this setting.
     pub fn transparency_mode(&self) -> crate::core::anchor::TransparencyMode {
         match self.transparency.mode.as_str() {
-            "on" | "full" | "full_transparency" => crate::core::anchor::TransparencyMode::On,
-            _ => crate::core::anchor::TransparencyMode::Off,
+            "off" | "none" | "disabled" => crate::core::anchor::TransparencyMode::Off,
+            _ => crate::core::anchor::TransparencyMode::On,
         }
     }
 
@@ -371,13 +371,9 @@ impl Config {
 
     /// Check if a repo path is in the ignored list.
     pub fn is_ignored(&self, project_root: &str) -> bool {
-        let canonical = std::fs::canonicalize(project_root)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| project_root.to_string());
+        let canonical = std::fs::canonicalize(project_root).map_or_else(|_| project_root.to_string(), |p| p.to_string_lossy().to_string());
         self.ignored_repos.iter().any(|p| {
-            let c = std::fs::canonicalize(p)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| p.clone());
+            let c = std::fs::canonicalize(p).map_or_else(|_| p.clone(), |p| p.to_string_lossy().to_string());
             c == canonical
         })
     }
@@ -412,7 +408,7 @@ pub fn find_real_git() -> Option<String> {
         }
         if let Ok(resolved) = fs::canonicalize(line) {
             let name = resolved.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name == "anchor" || name == "anchor.exe" || name == "oobo" || name == "oobo.exe" {
+            if name == "oobo" || name == "oobo.exe" {
                 continue;
             }
         }
@@ -594,9 +590,7 @@ mod tests {
         cfg.ignored_repos.push(canonical.clone());
         assert!(cfg.is_ignored(&path));
         cfg.ignored_repos.retain(|p| {
-            let c = std::fs::canonicalize(p)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| p.clone());
+            let c = std::fs::canonicalize(p).map_or_else(|_| p.clone(), |p| p.to_string_lossy().to_string());
             c != canonical
         });
         assert!(!cfg.is_ignored(&path));
@@ -690,10 +684,10 @@ mod tests {
 
     #[test]
     fn test_config_partial_toml_with_only_continue() {
-        let toml_str = r#"
+        let toml_str = r"
 [continue]
 enabled = false
-"#;
+";
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert!(!cfg.continue_dev.enabled);
         assert!(cfg.kiro.enabled);

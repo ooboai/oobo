@@ -103,6 +103,8 @@ impl ProjectConfig {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
 
+        ensure_gitignore(dir);
+
         let content = toml::to_string_pretty(self)
             .map_err(|e| format!("cannot serialize project config: {e}"))?;
         let tmp_path = path.with_extension("tmp");
@@ -128,8 +130,7 @@ pub fn is_enabled(project_root: &str) -> bool {
     ProjectConfig::load(project_root)
         .ok()
         .flatten()
-        .map(|cfg| cfg.project.enabled)
-        .unwrap_or(false)
+        .is_some_and(|cfg| cfg.project.enabled)
 }
 
 pub fn set_enabled(project_root: &str, project_id: &str, enabled: bool) -> Result<bool, String> {
@@ -170,6 +171,7 @@ fn default_true() -> bool {
     true
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_true(value: &bool) -> bool {
     *value
 }
@@ -177,6 +179,25 @@ fn is_true(value: &bool) -> bool {
 fn strip_utf8_bom(data: &[u8]) -> &str {
     let stripped = data.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(data);
     std::str::from_utf8(stripped).unwrap_or("")
+}
+
+/// Ensure `.oobo/.gitignore` exists so ephemeral data is never committed.
+///
+/// Only `config` is intended to be version-controlled (shared team settings).
+/// Everything else — caches, temp files — stays local.
+fn ensure_gitignore(oobo_dir: &Path) {
+    let gi = oobo_dir.join(".gitignore");
+    if gi.exists() {
+        return;
+    }
+    let _ = std::fs::write(
+        gi,
+        "# Managed by oobo — do not edit.\n\
+         # Only config is intended to be committed.\n\
+         *\n\
+         !.gitignore\n\
+         !config\n",
+    );
 }
 
 #[cfg(test)]

@@ -23,32 +23,6 @@ pub fn normalize_path(p: &str) -> String {
     }
 }
 
-/// Get the git project root for the current working directory.
-#[allow(dead_code)]
-pub fn git_project_root() -> String {
-    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    std::process::Command::new(git)
-        .args(["rev-parse", "--show-toplevel"])
-        .stdin(std::process::Stdio::null())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .replace('\r', "")
-                .trim()
-                .to_string()
-        })
-        .unwrap_or_else(|| {
-            std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default()
-        })
-}
-
 /// The root oobo configuration directory.
 ///
 /// Resolution order:
@@ -70,12 +44,6 @@ pub fn oobo_home() -> PathBuf {
     }
 
     home.join(".config").join("oobo")
-}
-
-/// Directory for a specific project (`~/.oobo/projects/{slug}/`).
-#[cfg(test)]
-pub fn oobo_project_dir(project_path: &str) -> PathBuf {
-    oobo_home().join("projects").join(slug_from_path(project_path))
 }
 
 /// Ensure a directory exists, creating it and all parents if needed.
@@ -149,12 +117,6 @@ mod tests {
         let home = oobo_home();
         let s = home.to_string_lossy();
         assert!(s.contains("oobo"), "expected 'oobo' in path: {s}");
-    }
-
-    #[test]
-    fn test_oobo_project_dir() {
-        let dir = oobo_project_dir("/Users/alice/dev/project");
-        assert!(dir.to_string_lossy().ends_with("Users-alice-dev-project"));
     }
 
     #[test]

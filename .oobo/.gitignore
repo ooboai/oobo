@@ -1,0 +1,5 @@
+# Managed by oobo — do not edit.
+# Only config is intended to be committed.
+*
+!.gitignore
+!config

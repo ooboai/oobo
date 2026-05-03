@@ -10,8 +10,7 @@
 //!    least one commit, stable across moves.
 //!
 //! This module is the single source of truth for `project_id` derivation.
-//! Callers should use [`derive_id`] and [`ensure_stable`] rather than
-//! re-implementing the logic.
+//! Callers should use [`id_for_root`] rather than re-implementing the logic.
 
 /// Canonicalize a git remote URL so the SSH and HTTPS forms produce the
 /// same key.
@@ -78,48 +77,12 @@ fn detect_remote_for(root: &str) -> Option<String> {
     }
 }
 
-#[allow(dead_code)]
-fn detect_initial_commit(root: &str) -> Option<String> {
-    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let output = std::process::Command::new(&git)
-        .args(["rev-list", "--max-parents=0", "HEAD"])
-        .current_dir(root)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&output.stdout);
-    s.lines()
-        .last()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-}
-
 /// Resolve the stable project id for `root` without requiring a Config
 /// or Db. Uses the git remote when available, falls back to a path-based
 /// id. Safe to call in hooks, scanners, and read-only code paths.
 pub fn id_for_root(root: &str) -> String {
     let remote = detect_remote_for(root);
     derive_id(remote.as_deref(), root)
-}
-
-/// True if a project path looks like a temp dir or no longer exists on disk.
-#[cfg(test)]
-pub fn is_stale_path(path: &str) -> bool {
-    if path.is_empty() {
-        return true;
-    }
-    let tmp_prefixes = [
-        "/tmp/",
-        "/var/folders/",
-        "/private/tmp/",
-        "/private/var/folders/",
-    ];
-    if tmp_prefixes.iter().any(|p| path.starts_with(p)) {
-        return true;
-    }
-    !std::path::Path::new(path).exists()
 }
 
 #[cfg(test)]

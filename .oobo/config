@@ -1,0 +1,9 @@
+schema_version = 1
+
+[project]
+id = "r:github.com/ooboai/oobo"
+
+[anchors]
+
+[privacy]
+transparency = "off"
