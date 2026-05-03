@@ -1,46 +1,52 @@
 # Commands
 
-Current command reference for `anchor` 1.0. Commands support global `--agent`, `--json`, and `--interactive` output-mode flags unless noted.
+Current command reference for `oobo` 1.0. Commands support global `--agent`, `--json`, and `--interactive` output-mode flags. Filter flags (`-n`, `--since`, `--tool`) are also global.
 
-Any command not listed here is forwarded to git unchanged.
-
-## Commit Memory
+## Memory Feed (bare command)
 
 ```bash
-anchor anchors --agent                               # Compact enriched commit log
-anchor anchors --json                                # Structured anchor summaries
-anchor anchors -n 20 --since 7d --tool cursor        # Filter anchors
-anchor a --agent -n 5                                # Short alias for anchors
-anchor anchors show <sha> --json                     # Full anchor detail
+oobo --agent                                       # Compact enriched commit log
+oobo --json                                        # Structured anchor summaries
+oobo -n 20 --since 7d --tool cursor                # Filter anchors
+oobo --agent -n 5                                  # Short and sweet
+```
+
+Equivalent to `oobo anchors`. Shows a scrollable TUI in interactive mode, or a flat list in agent/JSON mode.
+
+## Anchor Show — drill into a commit
+
+```bash
+oobo anchor show <sha> --agent                     # Compact anchor detail
+oobo anchor show <sha> --json                      # Full anchor detail
 ```
 
 ## Blame / Attribution
 
 ```bash
-anchor blame src/main.rs                             # Git blame with AI attribution
-anchor blame src/main.rs abc123                      # Blame at a specific commit
-anchor blame src/main.rs --no-ai                     # Pure git blame
-anchor blame src/main.rs --json                      # Structured per-line output
+oobo blame src/main.rs                             # Git blame with AI attribution
+oobo blame src/main.rs abc123                       # Blame at a specific commit
+oobo blame src/main.rs --no-ai                      # Pure git blame
+oobo blame src/main.rs --json                       # Structured per-line output
 ```
 
-## Continue / Handoff
+## Time Travel — Goto / Back
 
 ```bash
-anchor from turn <id>                              # Preview working-memory snapshot
-anchor from turn <id> --load                       # Load snapshot into worktree
-anchor from anchor <sha>                           # Preview committed anchor tree
-anchor from anchor <sha> --load                    # Load anchor tree into worktree
+oobo goto <turn-id-or-commit-sha>                  # Travel to a turn or commit
+oobo goto <id> --no-stash                          # Fail if worktree is dirty
+oobo back                                          # Return to where you were
 ```
 
-Loads are preview-first and refuse dirty worktrees unless `--force` is explicit.
+`goto` auto-stashes dirty changes, loads the target tree, and records a return
+point. `back` restores the original HEAD and pops the stash.
 
 ## Search
 
 ```bash
-anchor search "auth bug" --agent                     # Search current project
-anchor search "auth bug" --global --agent            # Search all projects
-anchor search "auth" --since 7d --tool claude        # Filter by time/tool
-anchor search "auth" --project oobo-cli --json       # Explicit project scope
+oobo search "auth bug" --agent                     # Search current project
+oobo search "auth bug" --global --agent            # Search all projects
+oobo search "auth" --since 7d --tool claude        # Filter by time/tool
+oobo search "auth" --project oobo-cli --json       # Explicit project scope
 ```
 
 Search is local-first. With an API key, default search merges local and remote results; use `--local`, `--remote`, or `--both` to force a source.
@@ -48,49 +54,54 @@ Search is local-first. With an API key, default search merges local and remote r
 ## Project Tracking
 
 ```bash
-anchor enable                                        # Enable anchor in the current repo
-anchor disable                                       # Disable anchor in the current repo
-anchor                                               # In repo: anchor TUI; outside repo: project picker
+oobo enable                                        # Enable oobo in the current repo
+oobo disable                                       # Disable oobo in the current repo
+oobo                                               # Anchors TUI (must be inside an enabled repo)
 ```
 
-Disabled projects are recorded in `.oobo/config` with `[project].enabled = false`; git hooks, background indexing, and capture paths stay quiet there.
+Disabled projects are recorded in `.oobo/config` with `[project].enabled = false`; git hooks and capture stay quiet.
 
 ## Setup / Maintenance
 
 ```bash
-anchor setup                                         # Onboard, select projects, install hooks
-anchor setup --non-interactive                       # CI-safe defaults
-anchor setup --reindex                               # Force reindex of enabled projects
-anchor setup --repair                                # Reinstall hooks + repair local metadata
-anchor setup --uninstall-alias                       # Remove git=anchor shell alias
-anchor update                                        # Self-update
-anchor update --check                                # Check only
+oobo setup                                         # Onboard, select projects, install hooks
+oobo setup --non-interactive                       # CI-safe defaults
+oobo setup --reindex                               # Force reindex of enabled projects
+oobo setup --repair                                # Reinstall hooks + repair local metadata
+oobo update                                        # Self-update
+oobo update --check                                # Check only
 ```
 
-Interactive setup lets users choose which scanned projects anchor should track.
+Interactive setup discovers git repos and lets users choose which to enable.
 
 ## Settings / Remote
 
 ```bash
-anchor settings                                      # Show effective settings
-anchor settings set key <api_key>                    # Store remote API key
-anchor settings unset key                            # Remove persisted API key
-anchor settings set remote https://oobo.example.com  # Point to self-hosted server
-anchor settings set transparency on                  # Enable redacted transcript sync
-anchor settings set setup.scan_roots ~/dev,~/work    # Configure setup scan roots
+oobo settings                                      # Show effective settings
+oobo settings set key <api_key>                    # Store remote API key
+oobo settings unset key                            # Remove persisted API key
+oobo settings set remote https://oobo.example.com  # Point to self-hosted server
+oobo settings set transparency on                  # Enable transcript sync (default: on)
 ```
 
-A non-empty default API key is used for remote search. `anchor settings unset key` removes the persisted key. `OOBO_SECRET_KEY` overrides the persisted key for the current process only. There is no cloud upload pipeline; team sync is Git-first via the orphan branch.
+A non-empty default API key is used for remote search. `oobo settings unset key` removes the persisted key. `OOBO_SECRET_KEY` overrides the persisted key for the current process only. There is no cloud upload pipeline; team sync is Git-first via the orphan branch.
 
-## Alias
+## Help
 
 ```bash
-anchor alias install                                 # Add alias git=anchor to shell rc
-anchor alias uninstall                               # Remove the alias
+oobo help                                          # List all help topics
+oobo help anchors                                  # What anchors are and how they work
+oobo help search                                   # Search syntax and cloud configuration
+oobo help blame                                    # Reading the AI attribution overlay
+oobo help hooks                                    # Git and agent hooks explained
+oobo help config                                   # All settings explained
+oobo help keyboard                                 # TUI keybindings reference
 ```
+
+Built-in documentation, always available offline. Works in all output modes.
 
 ## Version
 
 ```bash
-anchor --version                                     # Print version
+oobo --version                                     # Print version
 ```

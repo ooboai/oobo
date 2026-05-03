@@ -1,4 +1,4 @@
-# Contributing to anchor
+# Contributing to oobo
 
 Thanks for your interest in contributing! We welcome contributions from the community.
 
@@ -6,7 +6,7 @@ Thanks for your interest in contributing! We welcome contributions from the comm
 >
 > - Star the project
 > - Share it with colleagues who use AI coding tools
-> - Report bugs or request features via [issues](https://github.com/ooboai/anchor/issues)
+> - Report bugs or request features via [issues](https://github.com/ooboai/oobo/issues)
 > - Improve the documentation
 
 ## Code of Conduct
@@ -17,16 +17,16 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 ### Report Bugs
 
-If you encounter a bug, [open an issue](https://github.com/ooboai/anchor/issues/new?labels=bug) with:
+If you encounter a bug, [open an issue](https://github.com/ooboai/oobo/issues/new?labels=bug) with:
 
 - What you expected to happen
 - What actually happened
 - Steps to reproduce
-- Your OS and anchor version (`anchor --version`)
+- Your OS and oobo version (`oobo --version`)
 
 ### Suggest Features
 
-Have an idea? [Open a feature request](https://github.com/ooboai/anchor/issues/new?labels=enhancement). Before creating a new issue, check if one already exists.
+Have an idea? [Open a feature request](https://github.com/ooboai/oobo/issues/new?labels=enhancement). Before creating a new issue, check if one already exists.
 
 ### Contribute Code
 
@@ -49,8 +49,8 @@ Have an idea? [Open a feature request](https://github.com/ooboai/anchor/issues/n
 
 ```bash
 # Clone your fork
-git clone https://github.com/YOUR_USERNAME/anchor.git
-cd anchor
+git clone https://github.com/YOUR_USERNAME/oobo.git
+cd oobo
 
 # Build
 cargo build
@@ -63,13 +63,13 @@ cargo clippy --all-targets
 cargo fmt --check
 
 # Run with arguments
-cargo run -- sessions
-cargo run -- dash
+cargo run -- anchors
+cargo run -- anchor show <sha>
 ```
 
 ### Project Overview
 
-anchor is a Rust binary that acts as a transparent git decorator. Key modules:
+oobo is a Rust binary that acts as a transparent git decorator. Key modules:
 
 | Module | Purpose |
 |--------|---------|
@@ -131,4 +131,4 @@ We try to give you the opportunity to make changes yourself, but may make minor 
 
 ## License
 
-By contributing to anchor, you agree that your contributions will be dual licensed under the [Apache License 2.0](LICENSE-APACHE) and [MIT License](LICENSE-MIT).
+By contributing to oobo, you agree that your contributions will be dual licensed under the [Apache License 2.0](LICENSE-APACHE) and [MIT License](LICENSE-MIT).

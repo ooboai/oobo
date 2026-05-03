@@ -4,8 +4,8 @@ Oobo is open-source software published by [NoCode Inc](https://nocode.inc).
 
 | Property | Detail |
 |----------|--------|
-| Source code | Public at [github.com/ooboai/anchor](https://github.com/ooboai/anchor) — Apache 2.0 / MIT dual-licensed |
-| Security policy | [SECURITY.md](https://github.com/ooboai/anchor/blob/main/SECURITY.md) — responsible disclosure, safe harbor |
+| Source code | Public at [github.com/ooboai/oobo](https://github.com/ooboai/oobo) — Apache 2.0 / MIT dual-licensed |
+| Security policy | [SECURITY.md](https://github.com/ooboai/oobo/blob/main/SECURITY.md) — responsible disclosure, safe harbor |
 | Privacy policy | [oobo.ai/privacy](https://oobo.ai/privacy) |
 | Read-only | Never writes to AI tool directories — only reads session metadata (timestamps, model names, token counts) |
 | Local-first | All data stays in `~/.oobo/`. Nothing leaves the machine unless the user explicitly configures sync |
@@ -21,7 +21,7 @@ Cursor, Claude Code, Gemini CLI, Codex CLI, OpenCode, GitHub Copilot Chat, Winds
 
 ## Architecture
 
-Anchor is a git decorator that intercepts commits, enriches them with anchor metadata (linked sessions, agent/human attribution, diff stats, token counts), and stores everything on the `oobo/anchors/v1` orphan branch. No database — purely git-native.
+Oobo is a git decorator that intercepts commits, enriches them with anchor metadata (linked sessions, agent/human attribution, diff stats, token counts), and stores everything on the `oobo/anchors/v1` orphan branch. Anchor data is git-native; a lightweight local SQLite cache under `~/.oobo/` accelerates lookups but is fully rebuildable from git.
 
 ## Agent Configuration
 
