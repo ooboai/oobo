@@ -124,7 +124,7 @@ pub struct FileChange {
 }
 
 /// Anchor metadata — the enriched commit primitive.
-/// One per commit, stored on the orphan branch and in local SQLite.
+/// One per commit, stored on the orphan branch (`oobo/anchors/v1`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Anchor {
     /// Version of the portable anchor metadata schema.
@@ -255,8 +255,8 @@ pub fn detect_interactions(
     let mut file_map: HashMap<&str, Vec<(&str, bool, bool)>> = HashMap::new();
 
     for s in sessions {
-        let edited_set: HashSet<&str> = s.edited.iter().map(|f| f.as_str()).collect();
-        let read_set: HashSet<&str> = s.read.iter().map(|f| f.as_str()).collect();
+        let edited_set: HashSet<&str> = s.edited.iter().map(std::string::String::as_str).collect();
+        let read_set: HashSet<&str> = s.read.iter().map(std::string::String::as_str).collect();
 
         for f in &s.edited {
             let is_read = read_set.contains(f.as_str());
@@ -374,6 +374,12 @@ pub struct SessionLink {
     /// Number of context compaction events during this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_count: Option<u32>,
+    /// Total context tokens used by the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u64>,
+    /// Context window size configured for the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window_size: Option<u64>,
 
     #[serde(default)]
     pub is_subagent: bool,
@@ -677,6 +683,8 @@ mod tests {
             bash_commands: None,
             thinking_duration_ms: None,
             compact_count: None,
+            context_tokens: None,
+            context_window_size: None,
             is_subagent: false,
             parent_session_id: None,
             subagent_type: None,

@@ -70,7 +70,6 @@ pub struct Turn {
     pub source: String,
 
     /// 0-based monotonic index within the session.
-    #[allow(dead_code)]
     pub turn_index: i64,
 
     pub role: TurnRole,
@@ -264,19 +263,19 @@ impl Turn {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         let prime: u64 = 0x0000_0100_0000_01B3;
         for b in source.as_bytes() {
-            h ^= *b as u64;
+            h ^= u64::from(*b);
             h = h.wrapping_mul(prime);
         }
-        h ^= b'|' as u64;
+        h ^= u64::from(b'|');
         h = h.wrapping_mul(prime);
         for b in session_id.as_bytes() {
-            h ^= *b as u64;
+            h ^= u64::from(*b);
             h = h.wrapping_mul(prime);
         }
-        h ^= b'|' as u64;
+        h ^= u64::from(b'|');
         h = h.wrapping_mul(prime);
         for b in turn_index.to_le_bytes() {
-            h ^= b as u64;
+            h ^= u64::from(b);
             h = h.wrapping_mul(prime);
         }
         format!("{h:016x}")
@@ -330,7 +329,7 @@ pub fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let prime: u64 = 0x0000_0100_0000_01B3;
     for b in bytes {
-        h ^= *b as u64;
+        h ^= u64::from(*b);
         h = h.wrapping_mul(prime);
     }
     h

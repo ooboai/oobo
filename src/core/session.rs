@@ -2,15 +2,17 @@
 #[derive(Debug, Clone)]
 pub struct Session {
     pub session_id: String,
-    #[allow(dead_code)]
+    /// Display name (e.g. "Refactor auth module"). Populated by adapters;
+    /// used for future session listing/search features.
     pub name: String,
-    #[allow(dead_code)]
+    /// Mode label from the tool (e.g. "agent", "composer", "ask").
+    /// Carried for future filtering and analytics.
     pub mode: String,
     pub created_at: Option<i64>,
     pub updated_at: Option<i64>,
     pub project_path: String,
-    /// Retained for future workspace-aware features.
-    #[allow(dead_code)]
+    /// Workspace directory from the tool. Needed for multi-root
+    /// workspace support (planned).
     pub workspace_dir: String,
     pub source: String,
     /// Parent session ID if this is a subagent session.
