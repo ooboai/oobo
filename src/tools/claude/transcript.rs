@@ -207,7 +207,7 @@ pub fn parse_rich_transcript_lines<'a>(
                             .to_string();
                         let is_error = part
                             .get("is_error")
-                            .and_then(|v| v.as_bool())
+                            .and_then(serde_json::Value::as_bool)
                             .unwrap_or(false);
                         let output =
                             extract_tool_result_output(part).map(|s| truncate_str(&s, 500));
@@ -393,19 +393,19 @@ pub fn extract_stats(path: &Path) -> Option<crate::remote::payload::SessionStats
                 if let Some(usage) = msg.get("usage") {
                     input_tokens += usage
                         .get("input_tokens")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
                     output_tokens += usage
                         .get("output_tokens")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
                     cache_read_tokens += usage
                         .get("cache_read_input_tokens")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
                     cache_creation_tokens += usage
                         .get("cache_creation_input_tokens")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
                 }
 
@@ -446,11 +446,11 @@ pub fn extract_stats(path: &Path) -> Option<crate::remote::payload::SessionStats
                 if let Some(usage) = result.get("usage") {
                     input_tokens += usage
                         .get("input_tokens")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
                     output_tokens += usage
                         .get("output_tokens")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
                 }
             }
@@ -490,18 +490,6 @@ pub fn extract_stats(path: &Path) -> Option<crate::remote::payload::SessionStats
         files_touched,
         tool_call_count,
     })
-}
-
-/// Convenience wrapper for callers that have (project_path, session_id)
-/// instead of a direct file path. Kept for API consistency with other
-/// tool modules (codex, gemini, copilot, opencode).
-#[allow(dead_code)]
-pub(crate) fn stats_for_session(
-    project_path: &str,
-    session_id: &str,
-) -> Option<crate::remote::payload::SessionStats> {
-    let path = find_transcript_path(project_path, session_id)?;
-    extract_stats(&path)
 }
 
 /// Extract native telemetry suitable for the analytics pipeline.

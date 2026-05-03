@@ -58,7 +58,7 @@ fn session_from_jsonl(path: &Path) -> Option<Session> {
         }
 
         // Track timestamps
-        if let Some(ts) = entry.get("timestamp").and_then(|v| v.as_i64()) {
+        if let Some(ts) = entry.get("timestamp").and_then(serde_json::Value::as_i64) {
             if created_at.is_none() {
                 created_at = Some(ts);
             }
@@ -190,7 +190,7 @@ pub mod transcript {
                 messages.push(Message {
                     role: role.to_string(),
                     text,
-                    timestamp_ms: entry.get("timestamp").and_then(|v| v.as_i64()),
+                    timestamp_ms: entry.get("timestamp").and_then(serde_json::Value::as_i64),
                 });
             }
         }

@@ -120,12 +120,9 @@ fn ingest_file(
     let mut prev_cum = CumulativeTokens::zero();
 
     for (lineno, line_res) in reader.lines().enumerate() {
-        let line = match line_res {
-            Ok(l) => l,
-            Err(_) => {
-                summary.turns_skipped += 1;
-                continue;
-            }
+        let line = if let Ok(l) = line_res { l } else {
+            summary.turns_skipped += 1;
+            continue;
         };
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -152,7 +149,7 @@ fn ingest_file(
                     model = payload
                         .and_then(|p| p.get("model"))
                         .and_then(|m| m.as_str())
-                        .map(|s| s.to_string());
+                        .map(std::string::ToString::to_string);
                 }
             }
             "event_msg" => {
@@ -172,7 +169,7 @@ fn ingest_file(
                             &mut turn_index,
                             &mut accum,
                             None,
-                            &model,
+                            model.as_ref(),
                             sink,
                             &mut summary,
                         );
@@ -217,7 +214,7 @@ fn ingest_file(
                             &mut turn_index,
                             &mut accum,
                             Some(delta),
-                            &model,
+                            model.as_ref(),
                             sink,
                             &mut summary,
                         );
@@ -271,7 +268,7 @@ fn ingest_file(
             &mut turn_index,
             &mut accum,
             None,
-            &model,
+            model.as_ref(),
             sink,
             &mut summary,
         );
@@ -289,7 +286,7 @@ fn flush_assistant(
     turn_index: &mut i64,
     accum: &mut AssistantAccum,
     tokens: Option<TurnTokens>,
-    model: &Option<String>,
+    model: Option<&String>,
     sink: &mut dyn TurnSink,
     summary: &mut TapSummary,
 ) {
@@ -316,7 +313,7 @@ fn flush_assistant(
         role: TurnRole::Assistant,
         started_at: accum.first_ts_ms,
         ended_at: accum.last_ts_ms.or(accum.first_ts_ms),
-        model: model.clone(),
+        model: model.cloned(),
         tokens: tokens.unwrap_or_default(),
         cost_usd: None,
         tool_call_count: accum.tool_call_count,
@@ -344,15 +341,15 @@ fn extract_cumulative(payload: Option<&Value>) -> CumulativeTokens {
     CumulativeTokens {
         input: total
             .get("input_tokens")
-            .and_then(|v| v.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .unwrap_or(0),
         output: total
             .get("output_tokens")
-            .and_then(|v| v.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .unwrap_or(0),
         cache_read: total
             .get("cached_input_tokens")
-            .and_then(|v| v.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .unwrap_or(0),
     }
 }
@@ -364,7 +361,7 @@ fn extract_message_text(payload: Option<&Value>) -> Option<String> {
         .filter_map(|item| {
             item.get("text")
                 .and_then(|t| t.as_str())
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
         })
         .collect();
     if parts.is_empty() {
@@ -378,7 +375,7 @@ fn parse_ts_ms(v: &Value) -> Option<i64> {
     v.get("timestamp")
         .and_then(|t| t.as_str())
         .and_then(crate::utils::parse_iso_timestamp)
-        .or_else(|| v.get("timestamp").and_then(|t| t.as_i64()))
+        .or_else(|| v.get("timestamp").and_then(serde_json::Value::as_i64))
 }
 
 fn positive(n: i64) -> Option<i64> {

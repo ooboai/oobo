@@ -67,7 +67,7 @@ fn ingest_db(
     if is_modern(&conn) {
         ingest_modern(&conn, session_id, sink)
     } else {
-        ingest_legacy(&conn, session_id, sink)
+        Ok(ingest_legacy(&conn, session_id, sink))
     }
 }
 
@@ -115,12 +115,9 @@ fn ingest_modern(
 
     for row in rows.flatten() {
         let (msg_id, ts, data_str) = row;
-        let v: serde_json::Value = match serde_json::from_str(&data_str) {
-            Ok(v) => v,
-            Err(_) => {
-                summary.turns_skipped += 1;
-                continue;
-            }
+        let v: serde_json::Value = if let Ok(v) = serde_json::from_str(&data_str) { v } else {
+            summary.turns_skipped += 1;
+            continue;
         };
 
         let role_str = v.get("role").and_then(|r| r.as_str()).unwrap_or("");
@@ -139,18 +136,17 @@ fn ingest_modern(
         let model = v
             .get("modelID")
             .and_then(|m| m.as_str())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
 
         let tokens = extract_modern_tokens(&v);
-        let cost_usd = v.get("cost").and_then(|c| c.as_f64());
+        let cost_usd = v.get("cost").and_then(serde_json::Value::as_f64);
 
         let tool_names = tool_names_by_message
             .get(&msg_id)
             .map(|names| names.join(","));
         let tool_call_count = tool_names_by_message
             .get(&msg_id)
-            .map(|n| n.len() as i64)
-            .unwrap_or(0);
+            .map_or(0, |n| n.len() as i64);
 
         let preview = text_by_message.get(&msg_id).map(|t| clip_preview(t));
 
@@ -193,11 +189,11 @@ fn extract_modern_tokens(v: &serde_json::Value) -> TurnTokens {
         Some(t) => t,
         None => return TurnTokens::default(),
     };
-    let input = tokens.get("input").and_then(|x| x.as_i64());
-    let output = tokens.get("output").and_then(|x| x.as_i64());
+    let input = tokens.get("input").and_then(serde_json::Value::as_i64);
+    let output = tokens.get("output").and_then(serde_json::Value::as_i64);
     let cache = tokens.get("cache");
-    let cache_read = cache.and_then(|c| c.get("read")).and_then(|x| x.as_i64());
-    let cache_creation = cache.and_then(|c| c.get("write")).and_then(|x| x.as_i64());
+    let cache_read = cache.and_then(|c| c.get("read")).and_then(serde_json::Value::as_i64);
+    let cache_creation = cache.and_then(|c| c.get("write")).and_then(serde_json::Value::as_i64);
     TurnTokens {
         input: input.filter(|n| *n > 0),
         cache_read: cache_read.filter(|n| *n > 0),
@@ -282,7 +278,7 @@ fn ingest_legacy(
     conn: &rusqlite::Connection,
     session_id: &str,
     sink: &mut dyn TurnSink,
-) -> Result<TapSummary, TapError> {
+) -> TapSummary {
     // Legacy OpenCode DBs store only session-level aggregates. The
     // cleanest honest answer is: no per-turn deltas exist in the
     // source, so the tap emits a single rolled-up assistant turn
@@ -296,21 +292,18 @@ fn ingest_legacy(
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
     );
 
-    let (prompt, completion, cost, created_at, updated_at) = match row {
-        Ok(t) => t,
-        Err(_) => {
-            summary
-                .warnings
-                .push(format!("opencode: legacy session {session_id} not found"));
-            return Ok(summary);
-        }
+    let (prompt, completion, cost, created_at, updated_at) = if let Ok(t) = row { t } else {
+        summary
+            .warnings
+            .push(format!("opencode: legacy session {session_id} not found"));
+        return summary;
     };
 
     if prompt == 0 && completion == 0 {
         summary.warnings.push(format!(
             "opencode: legacy session {session_id} has no token data"
         ));
-        return Ok(summary);
+        return summary;
     }
 
     let tokens = TurnTokens {
@@ -347,7 +340,7 @@ fn ingest_legacy(
         "opencode: legacy schema only exposes session-level aggregates; emitted one synthetic turn"
             .into(),
     );
-    Ok(summary)
+    summary
 }
 
 fn normalize_ts(ts: i64) -> i64 {

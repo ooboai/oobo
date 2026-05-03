@@ -12,8 +12,7 @@ fn map_subagent_type(type_id: u64) -> String {
     match type_id {
         0 => "generalPurpose".to_string(),
         1 => "shell".to_string(),
-        2 => "explore".to_string(),
-        3 => "explore".to_string(),
+        2 | 3 => "explore".to_string(),
         4 => "browser-use".to_string(),
         5 => "best-of-n-runner".to_string(),
         _ => format!("unknown-{type_id}"),
@@ -268,10 +267,10 @@ fn parse_composer_value(c: &serde_json::Value, project_path: &str, ws_dir: &str)
             let parent = info
                 .get("parentComposerId")
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
             let stype = info
                 .get("subagentType")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .map(map_subagent_type);
             Some((parent, stype))
         })
@@ -289,8 +288,8 @@ fn parse_composer_value(c: &serde_json::Value, project_path: &str, ws_dir: &str)
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        created_at: c.get("createdAt").and_then(|v| v.as_i64()),
-        updated_at: c.get("lastUpdatedAt").and_then(|v| v.as_i64()),
+        created_at: c.get("createdAt").and_then(serde_json::Value::as_i64),
+        updated_at: c.get("lastUpdatedAt").and_then(serde_json::Value::as_i64),
         project_path: project_path.to_string(),
         workspace_dir: ws_dir.to_string(),
         source: "composer".to_string(),

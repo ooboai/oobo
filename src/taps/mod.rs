@@ -41,6 +41,7 @@ pub struct TapSummary {
 }
 
 impl TapSummary {
+    #[must_use]
     pub fn merged(mut self, other: TapSummary) -> Self {
         self.turns_emitted += other.turns_emitted;
         self.turns_skipped += other.turns_skipped;
@@ -117,12 +118,10 @@ pub trait TurnTap {
 #[derive(Debug, Clone)]
 pub enum TapArtifact<'a> {
     /// Single file on disk (e.g. Claude JSONL, Codex JSONL, OpenCode JSONL).
-    #[allow(dead_code)]
     File(&'a std::path::Path),
     /// Primary file plus a set of known subagent files (Claude's
     /// `subagents/` convention). The tap emits explicit subagent
     /// links for each.
-    #[allow(dead_code)]
     FileWithSubagents {
         primary: &'a std::path::Path,
         subagents: &'a [(String, std::path::PathBuf)],

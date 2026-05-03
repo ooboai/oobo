@@ -45,7 +45,7 @@ fn session_from_rollout(path: &Path) -> Option<Session> {
             .get("timestamp")
             .and_then(|t| t.as_str())
             .and_then(crate::utils::parse_iso_timestamp)
-            .or_else(|| v.get("timestamp").and_then(|t| t.as_i64()));
+            .or_else(|| v.get("timestamp").and_then(serde_json::Value::as_i64));
 
         if created_at.is_none() {
             created_at = ts;
@@ -224,8 +224,7 @@ fn sessions_from_sqlite() -> Result<Vec<Session>, String> {
             let session_id = std::path::Path::new(&rollout_path)
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .map(|s| s.strip_prefix("rollout-").unwrap_or(s).to_string())
-                .unwrap_or(id);
+                .map_or(id, |s| s.strip_prefix("rollout-").unwrap_or(s).to_string());
 
             Ok(Session {
                 session_id,
@@ -250,7 +249,7 @@ fn sessions_from_sqlite() -> Result<Vec<Session>, String> {
 }
 
 pub mod transcript {
-    use super::*;
+    use super::{PathBuf, sessions_dir, Path, fs, Message};
 
     pub fn find_transcript_path(_project_path: &str, session_id: &str) -> Option<PathBuf> {
         let dir = sessions_dir()?;
@@ -381,7 +380,7 @@ pub mod transcript {
                 .get("timestamp")
                 .and_then(|t| t.as_str())
                 .and_then(crate::utils::parse_iso_timestamp)
-                .or_else(|| v.get("timestamp").and_then(|t| t.as_i64()));
+                .or_else(|| v.get("timestamp").and_then(serde_json::Value::as_i64));
 
             if let Some(t) = ts {
                 if first_ts.is_none() {
@@ -398,7 +397,7 @@ pub mod transcript {
                         model = payload
                             .get("model")
                             .and_then(|m| m.as_str())
-                            .map(|s| s.to_string());
+                            .map(std::string::ToString::to_string);
                     }
                 }
             }
@@ -412,15 +411,15 @@ pub mod transcript {
                             if let Some(total) = info.get("total_token_usage") {
                                 input_tokens = total
                                     .get("input_tokens")
-                                    .and_then(|v| v.as_u64())
+                                    .and_then(serde_json::Value::as_u64)
                                     .unwrap_or(input_tokens);
                                 output_tokens = total
                                     .get("output_tokens")
-                                    .and_then(|v| v.as_u64())
+                                    .and_then(serde_json::Value::as_u64)
                                     .unwrap_or(output_tokens);
                                 cache_read_tokens = total
                                     .get("cached_input_tokens")
-                                    .and_then(|v| v.as_u64())
+                                    .and_then(serde_json::Value::as_u64)
                                     .unwrap_or(cache_read_tokens);
                             }
                         }
@@ -501,7 +500,7 @@ pub mod transcript {
         first
             .get("slug")
             .and_then(|s| s.as_str())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
     }
 
     pub fn stats_for_session(
@@ -510,12 +509,6 @@ pub mod transcript {
     ) -> Option<crate::remote::payload::SessionStats> {
         let path = find_transcript_path("", session_id)?;
         extract_stats(&path)
-    }
-
-    #[allow(dead_code)]
-    pub fn read_transcript(path: &Path, max_messages: u32) -> String {
-        let messages = parse_messages(path);
-        crate::utils::format_transcript(&messages, max_messages, "Assistant")
     }
 }
 

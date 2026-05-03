@@ -203,16 +203,16 @@ fn extract_assistant_metadata(
     let model = msg
         .get("model")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
 
     let tokens = match msg.get("usage") {
         Some(u) => TurnTokens {
-            input: u.get("input_tokens").and_then(|v| v.as_i64()),
-            cache_read: u.get("cache_read_input_tokens").and_then(|v| v.as_i64()),
+            input: u.get("input_tokens").and_then(serde_json::Value::as_i64),
+            cache_read: u.get("cache_read_input_tokens").and_then(serde_json::Value::as_i64),
             cache_creation: u
                 .get("cache_creation_input_tokens")
-                .and_then(|v| v.as_i64()),
-            output: u.get("output_tokens").and_then(|v| v.as_i64()),
+                .and_then(serde_json::Value::as_i64),
+            output: u.get("output_tokens").and_then(serde_json::Value::as_i64),
         },
         None => TurnTokens::default(),
     };
@@ -234,7 +234,7 @@ fn extract_assistant_metadata(
                     // Claude currently reports thinking content but not
                     // ms; left as a reserved slot until the tool
                     // exposes the duration field.
-                    if let Some(ms) = part.get("thinking_ms").and_then(|v| v.as_i64()) {
+                    if let Some(ms) = part.get("thinking_ms").and_then(serde_json::Value::as_i64) {
                         thinking_ms = Some(thinking_ms.unwrap_or(0) + ms);
                     }
                 }
@@ -264,7 +264,7 @@ fn parse_timestamp(entry: &Value) -> Option<i64> {
             return Some(dt.timestamp_millis());
         }
     }
-    entry.get("timestamp").and_then(|v| v.as_i64())
+    entry.get("timestamp").and_then(serde_json::Value::as_i64)
 }
 
 /// Extract a short redacted preview suitable for the TUI / search.
@@ -282,7 +282,7 @@ fn extract_preview(entry: &Value, role: TurnRole) -> Option<String> {
                     .filter_map(|p| {
                         p.get("text")
                             .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
+                            .map(std::string::ToString::to_string)
                     })
                     .collect::<Vec<_>>()
                     .join(" "),
@@ -392,7 +392,7 @@ mod tests {
     fn malformed_lines_become_warnings_not_errors() {
         let f = fixture(&[
             r#"{"type":"user","message":{"content":"ok"}}"#,
-            r#"{ not json"#,
+            r"{ not json",
             r#"{"type":"assistant","message":{"usage":{"output_tokens":2},"content":[]}}"#,
         ]);
         let mut sink = MemorySink::default();

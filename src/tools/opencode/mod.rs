@@ -1,7 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use crate::tools::cursor::transcript::Message;
 use crate::tools::cursor::Session;
+
+mod legacy;
+pub mod transcript;
+
+pub(crate) use legacy::{sessions_from_legacy_db, stats_from_legacy_db};
 
 fn opencode_data_dir() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
@@ -46,14 +50,14 @@ pub fn find_db_path() -> Option<PathBuf> {
     None
 }
 
-enum DbSchema {
+pub(crate) enum DbSchema {
     /// Old schema: session table has prompt_tokens, completion_tokens, cost columns.
     Legacy,
     /// New schema (v1.2+): tokens live in message.data JSON, projects in separate table.
     Modern,
 }
 
-fn detect_schema(conn: &rusqlite::Connection) -> DbSchema {
+pub(crate) fn detect_schema(conn: &rusqlite::Connection) -> DbSchema {
     let has_project_table: bool = conn
         .query_row(
             "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='project'",
@@ -72,7 +76,6 @@ fn detect_schema(conn: &rusqlite::Connection) -> DbSchema {
 // Modern schema (v1.2+)
 
 fn sessions_from_modern_db(conn: &rusqlite::Connection, db_path: &Path) -> Vec<Session> {
-    // OpenCode uses `parent_id` in modern schema, `parent_session_id` in legacy.
     let has_parent_col = conn
         .prepare("SELECT parent_id FROM session LIMIT 0")
         .is_ok();
@@ -163,7 +166,7 @@ fn sessions_from_modern_db(conn: &rusqlite::Connection, db_path: &Path) -> Vec<S
 }
 
 /// Aggregate per-message native token data from message.data JSON.
-fn stats_from_modern_db(
+pub(crate) fn stats_from_modern_db(
     conn: &rusqlite::Connection,
     session_id: &str,
 ) -> Option<crate::remote::payload::SessionStats> {
@@ -209,11 +212,11 @@ fn stats_from_modern_db(
         }
 
         if let Some(tokens) = v.get("tokens") {
-            input_tokens += tokens.get("input").and_then(|v| v.as_u64()).unwrap_or(0);
-            output_tokens += tokens.get("output").and_then(|v| v.as_u64()).unwrap_or(0);
+            input_tokens += tokens.get("input").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            output_tokens += tokens.get("output").and_then(serde_json::Value::as_u64).unwrap_or(0);
             if let Some(cache) = tokens.get("cache") {
-                cache_read += cache.get("read").and_then(|v| v.as_u64()).unwrap_or(0);
-                cache_write += cache.get("write").and_then(|v| v.as_u64()).unwrap_or(0);
+                cache_read += cache.get("read").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                cache_write += cache.get("write").and_then(serde_json::Value::as_u64).unwrap_or(0);
             }
         }
 
@@ -221,7 +224,7 @@ fn stats_from_modern_db(
             model = v
                 .get("modelID")
                 .and_then(|m| m.as_str())
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
         }
 
         let finish = v.get("finish").and_then(|f| f.as_str()).unwrap_or("");
@@ -320,208 +323,9 @@ fn extract_files_touched(conn: &rusqlite::Connection, session_id: &str) -> Vec<S
     files
 }
 
-// Legacy schema (pre v1.2)
-
-/// Legacy token/cost data carried for test assertions; production callers discard it.
-#[allow(dead_code)]
-struct SessionMeta {
-    message_count: u32,
-    prompt_tokens: u64,
-    completion_tokens: u64,
-    cost: f64,
-}
-
-fn sessions_from_legacy_db(
-    conn: &rusqlite::Connection,
-    db_path: &Path,
-) -> Vec<(Session, SessionMeta)> {
-    let has_parent_col = conn
-        .prepare("SELECT parent_session_id FROM session LIMIT 0")
-        .is_ok();
-
-    let query = if has_parent_col {
-        "SELECT id, title, message_count, prompt_tokens, completion_tokens, \
-         cost, created_at, updated_at, parent_session_id \
-         FROM session ORDER BY updated_at DESC"
-    } else {
-        "SELECT id, title, message_count, prompt_tokens, completion_tokens, \
-         cost, created_at, updated_at \
-         FROM session ORDER BY updated_at DESC"
-    };
-
-    let mut stmt = match conn.prepare(query) {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-
-    let rows = stmt.query_map([], |row| {
-        let id: String = row.get(0)?;
-        let title: String = row.get(1)?;
-        let message_count: i64 = row.get(2)?;
-        let prompt_tokens: i64 = row.get(3)?;
-        let completion_tokens: i64 = row.get(4)?;
-        let cost: f64 = row.get(5)?;
-        let created_at: i64 = row.get(6)?;
-        let updated_at: i64 = row.get(7)?;
-        let parent_session_id: Option<String> = if has_parent_col {
-            row.get(8).ok().flatten()
-        } else {
-            None
-        };
-        Ok((
-            id,
-            title,
-            message_count,
-            prompt_tokens,
-            completion_tokens,
-            cost,
-            created_at,
-            updated_at,
-            parent_session_id,
-        ))
-    });
-
-    let rows = match rows {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut sessions = Vec::new();
-    for row in rows.flatten() {
-        let (
-            id,
-            title,
-            message_count,
-            prompt_tokens,
-            completion_tokens,
-            cost,
-            created_at,
-            updated_at,
-            parent_session_id,
-        ) = row;
-
-        let name = if title.is_empty() {
-            "OpenCode session".to_string()
-        } else {
-            crate::utils::truncate_name(&title, crate::utils::MAX_SESSION_NAME_LEN)
-        };
-
-        let created_ms = normalize_ts(created_at);
-        let updated_ms = normalize_ts(updated_at);
-
-        let meta = SessionMeta {
-            message_count: message_count as u32,
-            prompt_tokens: prompt_tokens as u64,
-            completion_tokens: completion_tokens as u64,
-            cost,
-        };
-
-        sessions.push((
-            Session {
-                session_id: id,
-                name,
-                mode: "opencode".to_string(),
-                created_at: Some(created_ms),
-                updated_at: Some(updated_ms),
-                project_path: String::new(),
-                workspace_dir: db_path
-                    .parent()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-                source: "opencode".to_string(),
-                parent_session_id,
-                subagent_type: None,
-            },
-            meta,
-        ));
-    }
-
-    sessions
-}
-
-fn stats_from_legacy_db(
-    conn: &rusqlite::Connection,
-    session_id: &str,
-) -> Option<crate::remote::payload::SessionStats> {
-    let row: (i64, i64, f64, i64, i64) = conn
-        .query_row(
-            "SELECT prompt_tokens, completion_tokens, cost, created_at, updated_at \
-             FROM session WHERE id = ?1",
-            [session_id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            },
-        )
-        .ok()?;
-
-    let (prompt_tokens, completion_tokens, _cost, created_at, updated_at) = row;
-
-    let created_ms = normalize_ts(created_at);
-    let updated_ms = normalize_ts(updated_at);
-    let duration_secs = if updated_ms > created_ms {
-        let secs = (updated_ms - created_ms) / 1000;
-        if secs > 0 {
-            Some(secs as u64)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let tool_call_count: u32 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM message WHERE session_id = ?1 AND role = 'tool'",
-            [session_id],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    let mut model: Option<String> = None;
-    if let Ok(content) = conn.query_row::<String, _, _>(
-        "SELECT content FROM message WHERE session_id = ?1 AND role = 'assistant' \
-         ORDER BY created_at ASC LIMIT 1",
-        [session_id],
-        |row| row.get(0),
-    ) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(m) = v.get("model").and_then(|v| v.as_str()) {
-                model = Some(m.to_string());
-            }
-        }
-    }
-
-    Some(crate::remote::payload::SessionStats {
-        model,
-        input_tokens: if prompt_tokens > 0 {
-            Some(prompt_tokens as u64)
-        } else {
-            None
-        },
-        output_tokens: if completion_tokens > 0 {
-            Some(completion_tokens as u64)
-        } else {
-            None
-        },
-        duration_secs,
-        files_touched: Vec::new(),
-        tool_call_count,
-        cache_read_tokens: None,
-        cache_creation_tokens: None,
-        is_estimated: false,
-        token_source: None,
-    })
-}
-
 // Helpers
 
-fn normalize_ts(ts: i64) -> i64 {
+pub(crate) fn normalize_ts(ts: i64) -> i64 {
     if ts > 1_000_000_000_000 {
         ts
     } else {
@@ -622,255 +426,6 @@ pub fn all_sessions() -> Result<Vec<Session>, String> {
 
     sessions.sort_by_key(|s| std::cmp::Reverse(s.sort_key()));
     Ok(sessions)
-}
-
-pub mod transcript {
-    use super::*;
-
-    pub fn find_transcript_path(_project_path: &str, session_id: &str) -> Option<PathBuf> {
-        let db_path = find_db_path()?;
-        let conn = crate::utils::open_db_readonly(&db_path).ok()?;
-
-        let exists: bool = conn
-            .query_row(
-                "SELECT COUNT(*) > 0 FROM message WHERE session_id = ?1",
-                [session_id],
-                |row| row.get(0),
-            )
-            .unwrap_or(false);
-
-        if exists {
-            Some(db_path)
-        } else {
-            None
-        }
-    }
-
-    pub fn parse_messages(path: &Path) -> Vec<Message> {
-        let session_id = match extract_session_id_from_context(path) {
-            Some(id) => id,
-            None => return Vec::new(),
-        };
-        parse_messages_for_session(path, &session_id)
-    }
-
-    pub fn parse_messages_for_session(db_path: &Path, session_id: &str) -> Vec<Message> {
-        let conn = match crate::utils::open_db_readonly(db_path) {
-            Ok(c) => c,
-            Err(_) => return Vec::new(),
-        };
-
-        match detect_schema(&conn) {
-            DbSchema::Modern => parse_modern_messages(&conn, session_id),
-            DbSchema::Legacy => parse_legacy_messages(&conn, session_id),
-        }
-    }
-
-    fn parse_modern_messages(conn: &rusqlite::Connection, session_id: &str) -> Vec<Message> {
-        let mut stmt = match conn
-            .prepare("SELECT data FROM message WHERE session_id = ?1 ORDER BY time_created ASC")
-        {
-            Ok(s) => s,
-            Err(_) => return Vec::new(),
-        };
-
-        let rows = match stmt.query_map([session_id], |row| {
-            let data: String = row.get(0)?;
-            Ok(data)
-        }) {
-            Ok(r) => r,
-            Err(_) => return Vec::new(),
-        };
-
-        let mut messages = Vec::new();
-        let msg_ids: Vec<String> = rows.filter_map(|r| r.ok()).collect();
-
-        for data_str in &msg_ids {
-            let v: serde_json::Value = match serde_json::from_str(data_str) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            let role = v.get("role").and_then(|r| r.as_str()).unwrap_or("");
-            if role != "user" && role != "assistant" {
-                continue;
-            }
-
-            messages.push(Message {
-                role: role.to_string(),
-                text: String::new(),
-                timestamp_ms: None,
-            });
-        }
-
-        let mut part_stmt = match conn.prepare(
-            "SELECT message_id, data FROM part WHERE session_id = ?1 ORDER BY time_created ASC",
-        ) {
-            Ok(s) => s,
-            Err(_) => return messages,
-        };
-
-        if let Ok(part_rows) = part_stmt.query_map([session_id], |row| {
-            let mid: String = row.get(0)?;
-            let data: String = row.get(1)?;
-            Ok((mid, data))
-        }) {
-            let mut msg_stmt = match conn.prepare(
-                "SELECT id, data FROM message WHERE session_id = ?1 ORDER BY time_created ASC",
-            ) {
-                Ok(s) => s,
-                Err(_) => return messages,
-            };
-            let msg_map: Vec<(String, String)> = match msg_stmt.query_map([session_id], |row| {
-                let id: String = row.get(0)?;
-                let data: String = row.get(1)?;
-                Ok((id, data))
-            }) {
-                Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-                Err(_) => return messages,
-            };
-
-            let mut msg_text: std::collections::HashMap<String, Vec<String>> =
-                std::collections::HashMap::new();
-
-            for row in part_rows.flatten() {
-                let (mid, data_str) = row;
-                let v: serde_json::Value = match serde_json::from_str(&data_str) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                let t = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                if t == "text" {
-                    if let Some(text) = v.get("text").and_then(|t| t.as_str()) {
-                        msg_text.entry(mid).or_default().push(text.to_string());
-                    }
-                }
-            }
-
-            let mut idx = 0;
-            for (mid, data_str) in &msg_map {
-                let v: serde_json::Value = match serde_json::from_str(data_str) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                let role = v.get("role").and_then(|r| r.as_str()).unwrap_or("");
-                if role != "user" && role != "assistant" {
-                    continue;
-                }
-                if idx < messages.len() {
-                    if let Some(texts) = msg_text.get(mid) {
-                        messages[idx].text = texts.join("\n");
-                    }
-                }
-                idx += 1;
-            }
-        }
-
-        messages.retain(|m| !m.text.is_empty());
-        messages
-    }
-
-    fn parse_legacy_messages(conn: &rusqlite::Connection, session_id: &str) -> Vec<Message> {
-        let mut stmt = match conn.prepare(
-            "SELECT role, content FROM message \
-             WHERE session_id = ?1 AND role IN ('user', 'assistant') \
-             ORDER BY created_at ASC",
-        ) {
-            Ok(s) => s,
-            Err(_) => return Vec::new(),
-        };
-
-        let rows = match stmt.query_map([session_id], |row| {
-            let role: String = row.get(0)?;
-            let content: String = row.get(1)?;
-            Ok((role, content))
-        }) {
-            Ok(r) => r,
-            Err(_) => return Vec::new(),
-        };
-
-        let mut messages = Vec::new();
-        for row in rows.flatten() {
-            let (role, content) = row;
-            let text = extract_text_content(&content);
-            if !text.is_empty() {
-                messages.push(Message {
-                    role,
-                    text,
-                    timestamp_ms: None,
-                });
-            }
-        }
-        messages
-    }
-
-    fn extract_text_content(content: &str) -> String {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(content) {
-            if let Some(arr) = v.as_array() {
-                let texts: Vec<&str> = arr
-                    .iter()
-                    .filter_map(|part| {
-                        let t = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                        if t == "text" {
-                            part.get("text").and_then(|v| v.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                if !texts.is_empty() {
-                    return texts.join("\n");
-                }
-            }
-            if let Some(s) = v.as_str() {
-                return s.to_string();
-            }
-        }
-        content.to_string()
-    }
-
-    fn extract_session_id_from_context(_db_path: &Path) -> Option<String> {
-        None
-    }
-
-    pub fn extract_stats(
-        db_path: &Path,
-        session_id: &str,
-    ) -> Option<crate::remote::payload::SessionStats> {
-        let conn = crate::utils::open_db_readonly(db_path).ok()?;
-
-        match detect_schema(&conn) {
-            DbSchema::Modern => stats_from_modern_db(&conn, session_id),
-            DbSchema::Legacy => stats_from_legacy_db(&conn, session_id),
-        }
-    }
-
-    pub fn stats_for_session(
-        _project_path: &str,
-        session_id: &str,
-    ) -> Option<crate::remote::payload::SessionStats> {
-        let db_path = find_db_path()?;
-        extract_stats(&db_path, session_id)
-    }
-
-    #[cfg(test)]
-    pub fn read_transcript(path: &Path, max_messages: u32) -> String {
-        let session_id = match extract_session_id_from_context(path) {
-            Some(id) => id,
-            None => return String::new(),
-        };
-        read_transcript_for_session(path, &session_id, max_messages)
-    }
-
-    #[cfg(test)]
-    pub fn read_transcript_for_session(
-        db_path: &Path,
-        session_id: &str,
-        max_messages: u32,
-    ) -> String {
-        let messages = parse_messages_for_session(db_path, session_id);
-        crate::utils::format_transcript(&messages, max_messages, "Assistant")
-    }
 }
 
 #[cfg(test)]

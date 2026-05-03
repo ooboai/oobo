@@ -42,14 +42,11 @@ pub struct ComposerSession {
     pub files_touched: Vec<String>,
     pub code_block_count: u32,
     pub is_agentic: bool,
+    pub model: Option<String>,
 }
 
 /// Extract native stats from a Cursor composerData entry.
 /// Uses the session timestamps for duration and counts code blocks as tool calls.
-///
-/// Note: Cursor does not store which model was used per-session, so model is
-/// always None here. Cost estimation for Cursor sessions is not possible
-/// without the Cursor usage API (which requires browser-session auth).
 pub fn extract_native_stats(session_id: &str) -> Option<NativeStats> {
     let session = read_composer_data(session_id)?;
 
@@ -151,7 +148,8 @@ pub fn preload_bubble_data_for(
                 json_extract(value, '$.createdAt') AS created,
                 json_extract(value, '$.thinking.text') AS thinking,
                 json_extract(value, '$.toolFormerData.name') AS tool_name,
-                json_extract(value, '$.toolFormerData.result') AS tool_result
+                json_extract(value, '$.toolFormerData.result') AS tool_result,
+                json_extract(value, '$.modelId') AS model_id
          FROM cursorDiskKV
          WHERE key >= ?1 AND key < ?2",
     ) {
@@ -173,6 +171,7 @@ pub fn preload_bubble_data_for(
                 row.get::<_, Option<String>>(6).unwrap_or(None),
                 row.get::<_, Option<String>>(7).unwrap_or(None),
                 row.get::<_, Option<String>>(8).unwrap_or(None),
+                row.get::<_, Option<String>>(9).unwrap_or(None),
             ))
         }) {
             Ok(r) => r,
@@ -183,7 +182,7 @@ pub fn preload_bubble_data_for(
         let mut bubble_count = 0u32;
 
         for row in rows {
-            let (btype, text_opt, inp, outp, created, thinking_opt, tool_name_opt, tool_result_opt) =
+            let (btype, text_opt, inp, outp, created, thinking_opt, tool_name_opt, tool_result_opt, model_id_opt) =
                 match row {
                     Ok(r) => r,
                     Err(_) => continue,
@@ -196,6 +195,14 @@ pub fn preload_bubble_data_for(
             };
 
             bubble_count += 1;
+
+            if role == "assistant" && entry.model.is_none() {
+                if let Some(m) = model_id_opt {
+                    if !m.is_empty() {
+                        entry.model = Some(m);
+                    }
+                }
+            }
 
             let text = text_opt.unwrap_or_default();
             let thinking_text = thinking_opt.unwrap_or_default();
@@ -257,6 +264,7 @@ pub struct BubbleSession {
     pub code_block_count: u32,
     pub tool_call_count: u32,
     pub is_agentic: bool,
+    pub model: Option<String>,
 }
 
 pub fn native_stats_from_bubble(session: &BubbleSession) -> NativeStats {
@@ -298,6 +306,24 @@ pub fn native_stats_from_session(session: &ComposerSession) -> NativeStats {
     }
 }
 
+/// Extract the model name from a Cursor session.
+/// Priority: bubble data modelId > composerData modelConfig.
+pub fn extract_model_name(session_id: &str) -> Option<String> {
+    let bubble_map = preload_bubble_data_for(&[session_id.to_string()]);
+    if let Some(bubble) = bubble_map.get(session_id) {
+        if bubble.model.is_some() {
+            return bubble.model.clone();
+        }
+    }
+    let composer_map = preload_composer_data_for(&[session_id.to_string()]);
+    if let Some(composer) = composer_map.get(session_id) {
+        if composer.model.is_some() {
+            return composer.model.clone();
+        }
+    }
+    None
+}
+
 fn parse_composer_session(data: &serde_json::Value) -> Option<ComposerSession> {
     let composer_id = data.get("composerId").and_then(|v| v.as_str())?.to_string();
 
@@ -319,8 +345,14 @@ fn parse_composer_session(data: &serde_json::Value) -> Option<ComposerSession> {
         .unwrap_or("")
         .to_string();
 
-    let created_at = data.get("createdAt").and_then(|v| v.as_i64());
-    let last_updated_at = data.get("lastUpdatedAt").and_then(|v| v.as_i64());
+    let created_at = data.get("createdAt").and_then(serde_json::Value::as_i64);
+    let last_updated_at = data.get("lastUpdatedAt").and_then(serde_json::Value::as_i64);
+
+    let model = data
+        .get("modelConfig")
+        .and_then(|v| v.get("modelName"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
     let conversation = data.get("conversation").and_then(|v| v.as_array());
 
@@ -331,7 +363,7 @@ fn parse_composer_session(data: &serde_json::Value) -> Option<ComposerSession> {
 
     if let Some(conv) = conversation {
         for msg in conv {
-            let msg_type = msg.get("type").and_then(|v| v.as_u64()).unwrap_or(0);
+            let msg_type = msg.get("type").and_then(serde_json::Value::as_u64).unwrap_or(0);
             let text = msg
                 .get("text")
                 .and_then(|v| v.as_str())
@@ -340,7 +372,7 @@ fn parse_composer_session(data: &serde_json::Value) -> Option<ComposerSession> {
 
             if msg
                 .get("isAgentic")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false)
             {
                 is_agentic = true;
@@ -407,6 +439,7 @@ fn parse_composer_session(data: &serde_json::Value) -> Option<ComposerSession> {
         files_touched,
         code_block_count,
         is_agentic,
+        model,
     })
 }
 
@@ -452,19 +485,19 @@ pub fn read_daily_code_stats() -> Vec<DailyCodeStats> {
                 date,
                 tab_suggested_lines: data
                     .get("tabSuggestedLines")
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0),
                 tab_accepted_lines: data
                     .get("tabAcceptedLines")
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0),
                 composer_suggested_lines: data
                     .get("composerSuggestedLines")
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0),
                 composer_accepted_lines: data
                     .get("composerAcceptedLines")
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0),
             });
         }
@@ -664,7 +697,7 @@ fn read_bubble_order(conn: &rusqlite::Connection, session_id: &str) -> Option<Ve
 }
 
 fn bubble_to_transcript_entry(data: &serde_json::Value) -> Option<serde_json::Value> {
-    let btype = data.get("type").and_then(|v| v.as_u64())?;
+    let btype = data.get("type").and_then(serde_json::Value::as_u64)?;
     let role = match btype {
         1 => "user",
         2 => "assistant",
@@ -691,7 +724,7 @@ fn bubble_to_transcript_entry(data: &serde_json::Value) -> Option<serde_json::Va
             if !think_text.is_empty() {
                 let mut think_obj = serde_json::Map::new();
                 think_obj.insert("text".into(), think_text.into());
-                if let Some(ms) = data.get("thinkingDurationMs").and_then(|v| v.as_u64()) {
+                if let Some(ms) = data.get("thinkingDurationMs").and_then(serde_json::Value::as_u64) {
                     think_obj.insert("duration_ms".into(), ms.into());
                 }
                 entry.insert("thinking".into(), think_obj.into());
@@ -720,8 +753,8 @@ fn bubble_to_transcript_entry(data: &serde_json::Value) -> Option<serde_json::Va
     }
 
     if let Some(tc) = data.get("tokenCount").and_then(|v| v.as_object()) {
-        let inp = tc.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let outp = tc.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let inp = tc.get("inputTokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        let outp = tc.get("outputTokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
         if inp > 0 || outp > 0 {
             entry.insert(
                 "tokens".into(),
@@ -747,12 +780,7 @@ fn summarize_tool_params(tool_name: &str, params: &serde_json::Value) -> serde_j
     let mut summary = serde_json::Map::new();
 
     match tool_name {
-        "edit_file_v2" => {
-            if let Some(path) = obj.get("relativeWorkspacePath") {
-                summary.insert("path".into(), path.clone());
-            }
-        }
-        "read_file_v2" => {
+        "edit_file_v2" | "read_file_v2" => {
             if let Some(path) = obj.get("relativeWorkspacePath") {
                 summary.insert("path".into(), path.clone());
             }

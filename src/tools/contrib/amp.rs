@@ -46,9 +46,7 @@ fn session_from_thread_file(path: &Path) -> Option<Session> {
         .or_else(|| data.get("name"))
         .or_else(|| data.get("summary"))
         .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN))
-        .unwrap_or_else(|| "Amp thread".to_string());
+        .filter(|s| !s.is_empty()).map_or_else(|| "Amp thread".to_string(), |s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN));
 
     let project_path = data
         .get("workingDirectory")
@@ -61,12 +59,12 @@ fn session_from_thread_file(path: &Path) -> Option<Session> {
     let created_at = data
         .get("createdAt")
         .or_else(|| data.get("created_at"))
-        .and_then(|v| v.as_i64());
+        .and_then(serde_json::Value::as_i64);
 
     let updated_at = data
         .get("updatedAt")
         .or_else(|| data.get("updated_at"))
-        .and_then(|v| v.as_i64());
+        .and_then(serde_json::Value::as_i64);
 
     let mtime = fs::metadata(path)
         .ok()

@@ -46,7 +46,7 @@ impl TurnTap for CursorTurnTap {
         sink: &mut dyn TurnSink,
     ) -> Result<TapSummary, TapError> {
         match artifact {
-            TapArtifact::SelfLookup => ingest_cursor_session(session_id, sink),
+            TapArtifact::SelfLookup => Ok(ingest_cursor_session(session_id, sink)),
             _ => Err(TapError::Other(
                 "cursor tap only supports TapArtifact::SelfLookup".into(),
             )),
@@ -57,7 +57,7 @@ impl TurnTap for CursorTurnTap {
 fn ingest_cursor_session(
     session_id: &str,
     sink: &mut dyn TurnSink,
-) -> Result<TapSummary, TapError> {
+) -> TapSummary {
     let mut summary = TapSummary::default();
     let bubbles = read_bubbles(session_id);
 
@@ -65,7 +65,7 @@ fn ingest_cursor_session(
         summary
             .warnings
             .push(format!("cursor: no bubbles for session {session_id}"));
-        return Ok(summary);
+        return summary;
     }
 
     // Monotonic 0-based index. Idempotent because Cursor's bubble
@@ -91,7 +91,7 @@ fn ingest_cursor_session(
         };
 
         let tool_names = b.tool_name.clone();
-        let tool_call_count = if b.tool_name.is_some() { 1 } else { 0 };
+        let tool_call_count = i64::from(b.tool_name.is_some());
         let preview = extract_preview(b);
 
         let raw_ref = format!("cursor-bubble:{session_id}#{turn_index}");
@@ -127,7 +127,7 @@ fn ingest_cursor_session(
             .push(format!("cursor: no usable bubbles in session {session_id}"));
     }
 
-    Ok(summary)
+    summary
 }
 
 /// Cursor occasionally records `-1` or `0` for rows it didn't bill

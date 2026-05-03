@@ -162,27 +162,26 @@ fn parse_aider_timestamp(s: &str) -> Option<i64> {
     let mi: u32 = time_parts[1].parse().ok()?;
     let s: u32 = time_parts[2].parse().ok()?;
 
-    let days = days_from_epoch(y, mo, d)?;
+    let days = days_from_epoch(y, mo, d);
     let secs = days * 86400 + i64::from(h) * 3600 + i64::from(mi) * 60 + i64::from(s);
     Some(secs * 1000)
 }
 
-fn days_from_epoch(y: i32, m: u32, d: u32) -> Option<i64> {
-    let y = y as i64;
-    let m = m as i64;
-    let d = d as i64;
+fn days_from_epoch(y: i32, m: u32, d: u32) -> i64 {
+    let y = i64::from(y);
+    let m = i64::from(m);
+    let d = i64::from(d);
     let y_adj = if m <= 2 { y - 1 } else { y };
     let m_adj = if m <= 2 { m + 9 } else { m - 3 };
     let era = y_adj / 400;
     let yoe = y_adj - era * 400;
     let doy = (153 * m_adj + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let civil = era * 146097 + doe - 719468;
-    Some(civil)
+    era * 146_097 + doe - 719_468
 }
 
 pub mod transcript {
-    use super::*;
+    use super::{PathBuf, history_path, Path, Message, fs};
 
     pub fn find_transcript_path(project_path: &str, _session_id: &str) -> Option<PathBuf> {
         let p = history_path(project_path);
@@ -283,8 +282,6 @@ pub mod analytics {
         time_secs: i64,
         prompt_tokens: u64,
         completion_tokens: u64,
-        #[allow(dead_code)]
-        cost: f64,
     }
 
     fn load_events_in_window(start_secs: i64, end_secs: i64) -> Vec<AiderEvent> {
@@ -313,7 +310,7 @@ pub mod analytics {
                 continue;
             }
 
-            let time = entry.get("time").and_then(|v| v.as_i64()).unwrap_or(0);
+            let time = entry.get("time").and_then(serde_json::Value::as_i64).unwrap_or(0);
             if time < start_secs || time >= end_secs {
                 continue;
             }
@@ -327,13 +324,12 @@ pub mod analytics {
                 time_secs: time,
                 prompt_tokens: props
                     .get("prompt_tokens")
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0),
                 completion_tokens: props
                     .get("completion_tokens")
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0),
-                cost: props.get("cost").and_then(|v| v.as_f64()).unwrap_or(0.0),
             });
         }
 
@@ -355,8 +351,7 @@ pub mod analytics {
         let start_ms = session_start_ms?;
         let start_secs = start_ms / 1000;
         let end_secs = session_end_ms
-            .map(|ms| ms / 1000)
-            .unwrap_or(start_secs + 86400);
+            .map_or(start_secs + 86400, |ms| ms / 1000);
 
         let events = load_events_in_window(start_secs, end_secs);
         if events.is_empty() {
@@ -386,41 +381,6 @@ pub mod analytics {
             files_touched: Vec::new(),
             tool_call_count: 0,
         })
-    }
-
-    #[allow(dead_code)]
-    pub fn global_stats() -> Option<(u64, u64, f64, usize)> {
-        if !has_analytics_log() {
-            return None;
-        }
-        let events = load_events_in_window(0, i64::MAX);
-        if events.is_empty() {
-            return None;
-        }
-        let input: u64 = events.iter().map(|e| e.prompt_tokens).sum();
-        let output: u64 = events.iter().map(|e| e.completion_tokens).sum();
-        let cost: f64 = events.iter().map(|e| e.cost).sum();
-        Some((input, output, cost, events.len()))
-    }
-
-    #[allow(dead_code)]
-    pub fn is_aider_config_set() -> bool {
-        let home = match dirs::home_dir() {
-            Some(h) => h,
-            None => return false,
-        };
-        let conf = home.join(".aider.conf.yml");
-        if !conf.exists() {
-            return false;
-        }
-        let content = fs::read_to_string(&conf).unwrap_or_default();
-        content.contains("analytics-log")
-    }
-
-    #[allow(dead_code)]
-    pub fn config_snippet() -> String {
-        let path = analytics_log_path();
-        format!("analytics-log: {}", path.display())
     }
 
     #[cfg(test)]
@@ -467,13 +427,6 @@ pub mod analytics {
             let content = fs::read_to_string(&log_path).unwrap();
             assert!(content.contains("message_send"));
             assert!(content.contains("anthropic/claude-sonnet"));
-        }
-
-        #[test]
-        fn test_config_snippet() {
-            let snippet = config_snippet();
-            assert!(snippet.starts_with("analytics-log:"));
-            assert!(snippet.contains("aider-analytics.jsonl"));
         }
     }
 }

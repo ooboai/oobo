@@ -53,7 +53,7 @@ fn sessions_from_workspaces() -> Vec<Session> {
                 arr.first()
                     .and_then(|item| item.get("inputText"))
                     .and_then(|t| t.as_str())
-                    .map(|s| s.to_string())
+                    .map(std::string::ToString::to_string)
             });
 
         if let Some(storage) = agent_storage {
@@ -67,11 +67,9 @@ fn sessions_from_workspaces() -> Vec<Session> {
 
                         let name = if i == 0 { first_input.clone() } else { None };
 
-                        let name = name
-                            .map(|s| {
+                        let name = name.map_or_else(|| "Trae session".to_string(), |s| {
                                 crate::utils::truncate_name(&s, crate::utils::MAX_SESSION_NAME_LEN)
-                            })
-                            .unwrap_or_else(|| "Trae session".to_string());
+                            });
 
                         let ts = trae_db_mtime();
 

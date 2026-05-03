@@ -40,9 +40,7 @@ fn session_from_file(path: &Path) -> Option<Session> {
             .or_else(|| data.get("name"))
             .or_else(|| data.get("summary"))
             .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN))
-            .unwrap_or_else(|| "Junie session".to_string());
+            .filter(|s| !s.is_empty()).map_or_else(|| "Junie session".to_string(), |s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN));
 
         let project_path = data
             .get("cwd")
@@ -244,7 +242,7 @@ pub mod transcript {
                 .unwrap_or("")
                 .to_string();
             if !text.is_empty() {
-                let ts = entry.get("timestamp").and_then(|t| t.as_i64());
+                let ts = entry.get("timestamp").and_then(serde_json::Value::as_i64);
                 messages.push(Message {
                     role: role.to_string(),
                     text,
@@ -268,7 +266,7 @@ pub mod transcript {
                 .unwrap_or("")
                 .to_string();
             if !text.is_empty() {
-                let ts = msg.get("timestamp").and_then(|t| t.as_i64());
+                let ts = msg.get("timestamp").and_then(serde_json::Value::as_i64);
                 messages.push(Message {
                     role: role.to_string(),
                     text,

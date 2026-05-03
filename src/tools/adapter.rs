@@ -225,17 +225,15 @@ impl Tool for AiderTool {
             .env_remove("GIT_QUARANTINE_PATH")
             .output()
             .ok()
-            .filter(|o| o.status.success())
-            .map(|o| {
+            .filter(|o| o.status.success()).map_or_else(|| {
+                std::env::current_dir()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            }, |o| {
                 String::from_utf8_lossy(&o.stdout)
                     .replace('\r', "")
                     .trim()
                     .to_string()
-            })
-            .unwrap_or_else(|| {
-                std::env::current_dir()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default()
             });
         crate::tools::aider::sessions_for_project(&project_root)
     }
@@ -249,10 +247,10 @@ impl Tool for AiderTool {
     }
 
     fn extract_native_stats(&self, session: &Session) -> Option<NativeStats> {
-        let end = if session.updated_at != session.created_at {
-            session.updated_at
-        } else {
+        let end = if session.updated_at == session.created_at {
             None
+        } else {
+            session.updated_at
         };
         crate::tools::aider::analytics::extract_native_stats(session.created_at, end)
     }
@@ -392,22 +390,6 @@ impl Tool for OpenCodeTool {
             crate::tools::opencode::transcript::parse_messages_for_session(&db_path, session_id)
         } else {
             Vec::new()
-        }
-    }
-
-    fn read_transcript_by_id(
-        &self,
-        _project_path: &str,
-        session_id: &str,
-        max_messages: u32,
-    ) -> String {
-        if let Some(db_path) = crate::tools::opencode::find_db_path() {
-            let messages = crate::tools::opencode::transcript::parse_messages_for_session(
-                &db_path, session_id,
-            );
-            crate::utils::format_transcript(&messages, max_messages, "Assistant")
-        } else {
-            String::new()
         }
     }
 

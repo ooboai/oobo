@@ -126,9 +126,7 @@ fn session_from_file(path: &Path, project_path: &str) -> Option<Session> {
 
     let name = v
         .get("summary")
-        .and_then(|s| s.as_str())
-        .map(|s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN))
-        .unwrap_or_else(|| extract_first_user_message(messages));
+        .and_then(|s| s.as_str()).map_or_else(|| extract_first_user_message(messages), |s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN));
 
     let created_at = crate::utils::parse_iso_timestamp(start_time);
     let updated_at = crate::utils::parse_iso_timestamp(last_updated);
@@ -137,12 +135,12 @@ fn session_from_file(path: &Path, project_path: &str) -> Option<Session> {
         let parent = v
             .get("parentSessionId")
             .and_then(|s| s.as_str())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
         let agent_name = v
             .get("agentName")
             .or_else(|| v.get("agentId"))
             .and_then(|s| s.as_str())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .or_else(|| Some("unknown".to_string()));
         (parent, agent_name)
     } else {
@@ -226,7 +224,7 @@ pub fn all_sessions() -> Result<Vec<Session>, String> {
 }
 
 pub mod transcript {
-    use super::*;
+    use super::{PathBuf, tmp_dir, fs, Path, Message, content_to_string};
 
     pub fn find_transcript_path(_project_path: &str, session_id: &str) -> Option<PathBuf> {
         let tmp = tmp_dir()?;
@@ -313,7 +311,7 @@ pub mod transcript {
 
             let text = content_to_string(msg.get("content"));
             let display = content_to_string(msg.get("displayContent"));
-            let final_text = if !display.is_empty() { display } else { text };
+            let final_text = if display.is_empty() { text } else { display };
 
             if final_text.trim().is_empty() {
                 continue;
@@ -362,14 +360,14 @@ pub mod transcript {
                 model = msg
                     .get("model")
                     .and_then(|m| m.as_str())
-                    .map(|s| s.to_string());
+                    .map(std::string::ToString::to_string);
             }
 
             if let Some(tokens) = msg.get("tokens") {
-                total_input += tokens.get("input").and_then(|v| v.as_u64()).unwrap_or(0);
-                total_output += tokens.get("output").and_then(|v| v.as_u64()).unwrap_or(0);
-                total_cached += tokens.get("cached").and_then(|v| v.as_u64()).unwrap_or(0);
-                total_thoughts += tokens.get("thoughts").and_then(|v| v.as_u64()).unwrap_or(0);
+                total_input += tokens.get("input").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                total_output += tokens.get("output").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                total_cached += tokens.get("cached").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                total_thoughts += tokens.get("thoughts").and_then(serde_json::Value::as_u64).unwrap_or(0);
             }
 
             if let Some(tool_calls) = msg.get("toolCalls").and_then(|tc| tc.as_array()) {

@@ -1,4 +1,3 @@
-pub mod ai_tracking;
 pub mod composer;
 pub mod composer_data;
 pub mod transcript;
@@ -42,31 +41,6 @@ pub fn cursor_projects_dir() -> Option<PathBuf> {
 /// `/home/user/projects/my-app` → `home-user-projects-my-app`
 pub fn path_to_slug(path: &str) -> String {
     path.trim_start_matches('/').replace('/', "-")
-}
-
-#[allow(dead_code)]
-pub fn get_project_root() -> String {
-    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    std::process::Command::new(git)
-        .args(["rev-parse", "--show-toplevel"])
-        .stdin(std::process::Stdio::null())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .replace('\r', "")
-                .trim()
-                .to_string()
-        })
-        .unwrap_or_else(|| {
-            std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default()
-        })
 }
 
 /// Get all sessions for a given project root, sorted by most recent first.

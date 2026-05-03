@@ -40,7 +40,7 @@ fn replay_jsonl(content: &str) -> Option<serde_json::Value> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let kind = entry.get("kind").and_then(|k| k.as_u64()).unwrap_or(99);
+        let kind = entry.get("kind").and_then(serde_json::Value::as_u64).unwrap_or(99);
 
         match kind {
             0 => {
@@ -133,7 +133,7 @@ fn parse_session_file(path: &Path, project_path: &str, ws_dir: &str) -> Option<S
     };
 
     let session_id = data.get("sessionId")?.as_str()?.to_string();
-    let created_at = data.get("creationDate").and_then(|v| v.as_i64());
+    let created_at = data.get("creationDate").and_then(serde_json::Value::as_i64);
 
     let requests = data.get("requests").and_then(|v| v.as_array())?;
 
@@ -141,9 +141,7 @@ fn parse_session_file(path: &Path, project_path: &str, ws_dir: &str) -> Option<S
         .first()
         .and_then(|r| r.get("message"))
         .and_then(|m| m.get("text"))
-        .and_then(|t| t.as_str())
-        .map(|s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN))
-        .unwrap_or_else(|| "Copilot chat".to_string());
+        .and_then(|t| t.as_str()).map_or_else(|| "Copilot chat".to_string(), |s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN));
 
     let model = requests
         .first()
@@ -155,7 +153,7 @@ fn parse_session_file(path: &Path, project_path: &str, ws_dir: &str) -> Option<S
     let updated_at = requests
         .last()
         .and_then(|r| r.get("timestamp"))
-        .and_then(|v| v.as_i64());
+        .and_then(serde_json::Value::as_i64);
 
     Some(Session {
         session_id,
@@ -200,7 +198,7 @@ pub fn all_sessions() -> Result<Vec<Session>, String> {
 }
 
 pub mod transcript {
-    use super::*;
+    use super::{PathBuf, vscode_fork, VSCODE_APP, Path, Message, fs, replay_jsonl};
 
     pub fn find_transcript_path(project_path: &str, session_id: &str) -> Option<PathBuf> {
         let ws_dirs =
@@ -318,11 +316,11 @@ pub mod transcript {
             .and_then(|v| v.as_str())
             .map(String::from);
 
-        let first_ts = data.get("creationDate").and_then(|v| v.as_i64());
+        let first_ts = data.get("creationDate").and_then(serde_json::Value::as_i64);
         let last_ts = requests
             .last()
             .and_then(|r| r.get("timestamp"))
-            .and_then(|v| v.as_i64());
+            .and_then(serde_json::Value::as_i64);
 
         let duration_secs = match (first_ts, last_ts) {
             (Some(f), Some(l)) if l > f => Some(((l - f) / 1000) as u64),

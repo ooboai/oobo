@@ -9,8 +9,6 @@ pub mod continue_dev;
 pub mod copilot;
 pub mod cursor;
 pub mod droid;
-#[allow(dead_code)]
-pub mod external;
 pub mod gemini;
 pub mod opencode;
 pub mod vscode_fork;
@@ -99,9 +97,9 @@ mod tests {
     #[test]
     fn test_registry_names_unique() {
         let reg = registry_with(true);
-        let names: Vec<&str> = reg.all().map(|t| t.name()).collect();
+        let names: Vec<&str> = reg.all().map(super::super::core::tool::Tool::name).collect();
         let mut deduped = names.clone();
-        deduped.sort();
+        deduped.sort_unstable();
         deduped.dedup();
         assert_eq!(names.len(), deduped.len(), "duplicate tool names found");
     }
@@ -217,9 +215,6 @@ mod tests {
                 msgs.is_empty(),
                 "{n}: parse_messages on bad path should be empty"
             );
-            // count_messages on nonexistent path.
-            let count = tool.count_messages("/nonexistent", "nonexistent-session-id");
-            assert_eq!(count, 0, "{n}: count_messages on bad path should be 0");
         }
     }
 
