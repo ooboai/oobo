@@ -1,4 +1,8 @@
-mod alias;
+// The binary crate re-declares all modules from `lib.rs`; Rust performs
+// independent dead-code analysis per crate, producing false positives for
+// items that are only consumed in the lib crate or its tests.
+#![allow(dead_code)]
+
 mod analytics;
 mod attribution;
 mod cli;
@@ -6,10 +10,10 @@ mod commands;
 mod config;
 mod core;
 mod error;
+mod feed;
 mod git;
+mod help;
 mod hooks;
-#[allow(dead_code)]
-mod notify;
 mod paths;
 mod project;
 mod project_config;
@@ -26,19 +30,25 @@ mod utils;
 use std::process;
 
 fn main() {
+    trace::init();
     let cfg = config::Config::load_or_default();
 
     if let Err(e) = ensure_oobo_dirs() {
-        eprintln!("anchor: warning: {e}");
+        eprintln!("oobo: warning: {e}");
     }
 
     run_startup_tasks(&cfg);
 
-    match cli::route(cfg) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to create tokio runtime");
+
+    match rt.block_on(cli::route(&cfg)) {
         Ok(code) => process::exit(code),
         Err(e) => {
-            eprintln!("anchor: {e}");
-            process::exit(1);
+            eprintln!("oobo: {e}");
+            process::exit(e.exit_code());
         }
     }
 }
@@ -51,7 +61,7 @@ fn run_startup_tasks(_cfg: &config::Config) {
         let _ = std::fs::write(&flag_path, "1");
         let version = env!("CARGO_PKG_VERSION");
         eprintln!();
-        eprintln!("  \x1b[1;36m  anchor {version}\x1b[0m");
+        eprintln!("  \x1b[1;36m  oobo {version}\x1b[0m");
         eprintln!();
     }
 }

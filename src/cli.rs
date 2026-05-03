@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 use crate::config::Config;
+use crate::error::CmdResult;
 use crate::git;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,55 +11,46 @@ pub enum OutputMode {
     Json,
 }
 
-impl OutputMode {
-    #[allow(dead_code)]
-    pub fn is_structured(self) -> bool {
-        matches!(self, OutputMode::Agent | OutputMode::Json)
-    }
-}
-
-/// anchor — git with memory
+/// oobo — developer memory for humans and agents
 #[derive(Parser, Debug)]
 #[command(
-    name = "anchor",
+    name = "oobo",
     version,
-    about = "anchor — git with memory.",
+    about = "oobo — developer memory for humans and agents.",
     help_template = "\
 {about}
 
-USAGE:
-    anchor [OPTIONS] [COMMAND]
+Usage: oobo [OPTIONS] [COMMAND]
 
-VIEWS:
-  anchors, a   See the memory
+Commands (require a git repository):
+  anchors      Memory feed — list anchors and active sessions
+  anchor       Inspect a single anchor (show, blame)
+  goto         Travel to a turn or commit (auto-stashes)
+  back         Return to where you were before goto
   blame        Per-line AI/human attribution
-  search       Find any past session
-
-ACTIONS:
-  from        Load code/context from a turn or anchor
+  search       Find past sessions and anchors
   enable       Start tracking this project
   disable      Stop tracking this project
-  alias        Install/uninstall the git=anchor shell alias
 
-WIZARD + CONFIG:
-  setup        Onboard, repair, reindex, manage projects
-  settings     Show / set / unset config values
+Commands (work anywhere):
+  setup        Onboarding wizard — install hooks, configure tools
+  settings     Show / set / unset configuration
+  help         Built-in documentation (oobo help <topic>)
+  update       Self-update to the latest version
 
-LIFECYCLE:
-  update       Self-update
+Without a subcommand, oobo shows the memory feed for the current project.
 
-GIT PASSTHROUGH:
-  Any command not listed above is forwarded to git unchanged.
-  Write operations (commit, push, merge) also capture AI context.
+Options:
+  -n, --limit <N>    Max items (default 50)
+  --since <WHEN>     Time filter (e.g. 24h, 7d, ISO-8601)
+  --tool <NAME>      Filter by tool (cursor, claude, gemini...)
+  --agent            Minimal plain-text output (token-efficient)
+  --json             Full structured JSON output
+  --interactive      Force TUI even when auto-detection would not
+  -h, --help         Print help
+  -V, --version      Print version
 
-OPTIONS:
-  --agent          Minimal plain-text output (token-efficient)
-  --json           Full structured JSON output
-  --interactive    Force TUI even when auto-detection would not
-  -h, --help       Print help
-  -V, --version    Print version
-
-Run `anchor <command> --help` for per-command help.
+Run `oobo <command> --help` for details on any command.
 ",
     disable_help_subcommand = true
 )]
@@ -78,57 +70,71 @@ pub struct Cli {
     #[arg(long, global = true, conflicts_with_all = ["agent", "json"])]
     pub interactive: bool,
 
-    /// Raw args passed when invoked as a git alias (everything after `anchor`)
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
-    pub git_args: Vec<String>,
-}
+    /// Max items to list (default 50)
+    #[arg(short = 'n', long, default_value_t = 50, global = true)]
+    pub limit: usize,
 
-#[derive(Subcommand, Debug)]
-pub enum AnchorsAction {
-    /// Drill into one anchor by SHA (prefix OK if unambiguous).
-    Show {
-        /// Commit SHA (full or unambiguous prefix).
-        sha: String,
-    },
+    /// Only items at/after this point (e.g. 24h, 7d, ISO-8601)
+    #[arg(long, global = true)]
+    pub since: Option<String>,
+
+    /// Filter by tool name (case-insensitive)
+    #[arg(long, global = true)]
+    pub tool: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Show enriched commit history with anchor metadata
+    /// Memory feed — list anchors and active sessions
     #[command(
         display_order = 1,
-        alias = "a",
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       anchor anchors               Show recent commits with AI context\n  \
-                       anchor a -n 20               Show last 20 (short alias)\n  \
-                       anchor anchors --agent       Compact output\n  \
-                       anchor anchors --json        Full JSON output"
+                       oobo anchors                  Memory feed (TUI in terminal)\n  \
+                       oobo anchors --agent          Token-efficient listing\n  \
+                       oobo anchors --json           Full JSON output\n  \
+                       oobo anchors --since 7d       Last 7 days"
     )]
-    Anchors {
-        /// Subcommand (e.g. `show <sha>`). Omit to list anchors.
-        #[command(subcommand)]
-        action: Option<AnchorsAction>,
-        /// Max anchors to list (default 50)
-        #[arg(short = 'n', long, default_value_t = 50)]
-        limit: usize,
-        /// Only anchors at/after this point (e.g. 24h, 7d, ISO-8601).
-        #[arg(long)]
-        since: Option<String>,
-        /// Filter by tool name (case-insensitive).
-        #[arg(long)]
-        tool: Option<String>,
-        /// Filter/scope to a specific project (valid only OUTSIDE a repo).
-        #[arg(long)]
-        project: Option<String>,
-    },
+    Anchors {},
 
-    /// Show per-line AI/human attribution for a file
+    /// Operate on a single anchor (show, blame)
     #[command(
         display_order = 2,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       anchor blame src/main.rs          Show AI attribution for file at HEAD\n  \
-                       anchor blame src/main.rs abc123   Show attribution at a specific commit\n  \
-                       anchor blame src/main.rs --json   JSON output"
+                       oobo anchor show a1b2c3d      Drill into a commit\n  \
+                       oobo anchor show a1b2c3d --json  Full JSON output"
+    )]
+    Anchor {
+        #[command(subcommand)]
+        action: AnchorAction,
+    },
+
+    /// Travel to a turn or commit (auto-stashes dirty changes)
+    #[command(
+        display_order = 3,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo goto t123abc     Load a turn snapshot\n  \
+                       oobo goto abc123      Load a commit\n  \
+                       oobo back             Return to where you were"
+    )]
+    Goto {
+        /// Turn ID or commit SHA (full or unambiguous prefix)
+        target: String,
+        /// Don't auto-stash dirty changes; fail instead.
+        #[arg(long)]
+        no_stash: bool,
+    },
+
+    /// Return to where you were before `goto` (restores stash if one was created)
+    #[command(display_order = 4)]
+    Back {},
+
+    /// Show per-line AI/human attribution for a file
+    #[command(
+        display_order = 5,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo blame src/main.rs          Show AI attribution at HEAD\n  \
+                       oobo blame src/main.rs abc123   At a specific commit\n  \
+                       oobo blame src/main.rs --json   JSON output"
     )]
     Blame {
         /// Pure `git blame` output (no AI column).
@@ -141,14 +147,14 @@ pub enum Command {
 
     /// Search sessions and anchors (this project by default; --global for all)
     #[command(
-        display_order = 3,
+        display_order = 6,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       anchor search \"auth middleware\"      This project (inside a repo)\n  \
-                       anchor search foo --global            Across all projects\n  \
-                       anchor search foo --since 7d          Last 7 days\n  \
-                       anchor search foo --project oobo-cli  Explicit project scope\n  \
-                       anchor search foo --tool cursor       Scope to a tool\n  \
-                       anchor search foo --agent             Compact output"
+                       oobo search \"auth middleware\"      This project (inside a repo)\n  \
+                       oobo search foo --global            Across all projects\n  \
+                       oobo search foo --since 7d          Last 7 days\n  \
+                       oobo search foo --project oobo-cli  Explicit project scope\n  \
+                       oobo search foo --tool cursor       Scope to a tool\n  \
+                       oobo search foo --agent             Compact output"
     )]
     Search {
         /// Free-text query (quote multi-word queries)
@@ -156,7 +162,7 @@ pub enum Command {
         /// Search across all projects (default is the current project when in a repo)
         #[arg(long, conflicts_with = "project")]
         global: bool,
-        /// Local DB only (default when no API key)
+        /// Local only (default when no API key)
         #[arg(long, conflicts_with_all = ["remote", "both"])]
         local: bool,
         /// Remote server only (requires API key)
@@ -168,7 +174,7 @@ pub enum Command {
         /// Time window (e.g. 7d, 24h, 30m, or ISO timestamp)
         #[arg(long)]
         since: Option<String>,
-        /// Explicit project to scope to (by name); implies cross-project search
+        /// Scope search to a specific project (by name)
         #[arg(long)]
         project: Option<String>,
         /// Scope hits to a single tool (claude, cursor, gemini...)
@@ -179,32 +185,19 @@ pub enum Command {
         limit: usize,
     },
 
-    /// Load code/context from a turn or anchor (preview by default)
-    #[command(
-        display_order = 5,
-        after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       anchor from turn t123abc          Preview a turn\n  \
-                       anchor from turn t123abc --load   Load that turn into the worktree\n  \
-                       anchor from anchor abc123 --load  Load an anchor commit"
-    )]
-    From {
-        #[command(subcommand)]
-        action: FromAction,
-    },
-
     /// Declarative KV config (no OAuth, no login flow)
     #[command(
         display_order = 6,
-        after_help = "\x1b[1mGrammar:\x1b[0m  anchor settings [scope] [verb] <key> [value]\n\n\
+        after_help = "\x1b[1mGrammar:\x1b[0m  oobo settings [scope] [verb] <key> [value]\n\n\
                        \x1b[1mExamples:\x1b[0m\n  \
-                       anchor settings                       Show all effective settings\n  \
-                       anchor settings default               Show defaults only\n  \
-                       anchor settings project               Show project overrides\n  \
-                       anchor settings key                   Show the default 'key' value\n  \
-                       anchor settings set key sk_abc        Set the default API key\n  \
-                       anchor settings project set remote <url>  Per-project override\n  \
-                       anchor settings unset key             Remove the default API key\n  \
-                       anchor settings project unset remote  Drop the project override"
+                       oobo settings                       Show all effective settings\n  \
+                       oobo settings default               Show defaults only\n  \
+                       oobo settings project               Show project overrides\n  \
+                       oobo settings key                   Show the default 'key' value\n  \
+                       oobo settings set key sk_abc        Set the default API key\n  \
+                       oobo settings project set remote <url>  Per-project override\n  \
+                       oobo settings unset key             Remove the default API key\n  \
+                       oobo settings project unset remote  Drop the project override"
     )]
     Settings {
         /// Positional args: [scope] [verb] <key> [value]
@@ -216,8 +209,8 @@ pub enum Command {
     #[command(
         display_order = 7,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       anchor enable           Turn on tracking for this repo\n  \
-                       anchor enable --json    Machine-readable confirmation"
+                       oobo enable           Turn on tracking for this repo\n  \
+                       oobo enable --json    Machine-readable confirmation"
     )]
     Enable {},
 
@@ -225,21 +218,20 @@ pub enum Command {
     #[command(
         display_order = 8,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       anchor disable          Turn off tracking for this repo\n  \
-                       anchor disable --agent  Minimal confirmation"
+                       oobo disable          Turn off tracking for this repo\n  \
+                       oobo disable --agent  Minimal confirmation"
     )]
     Disable {},
 
-    /// Onboarding + repair wizard (projects, hooks, keys, alias)
+    /// Onboarding + repair wizard
     #[command(
         display_order = 10,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       anchor setup                        Interactive wizard\n  \
-                       anchor setup --non-interactive      CI-safe: accept defaults\n  \
-                       anchor setup --reindex              Force full reindex\n  \
-                       anchor setup --repair               Re-install hooks + verify\n  \
-                       anchor setup --uninstall-alias      Remove the shell alias\n  \
-                       anchor setup --repair --reindex     Composable"
+                       oobo setup                        Interactive wizard\n  \
+                       oobo setup --non-interactive      CI-safe: accept defaults\n  \
+                       oobo setup --reindex              Force full reindex\n  \
+                       oobo setup --repair               Re-install hooks + verify\n  \
+                       oobo setup --repair --reindex     Composable"
     )]
     Setup {
         /// Accept defaults non-interactively (CI-safe)
@@ -248,24 +240,16 @@ pub enum Command {
         /// Force a full reindex
         #[arg(long)]
         reindex: bool,
-        /// Remove the git→anchor shell alias
-        #[arg(long)]
-        uninstall_alias: bool,
         /// Re-install hooks, re-detect tools, rebuild orphan branch if needed
         #[arg(long)]
         repair: bool,
     },
 
-    /// Manage the git→anchor shell alias [install, uninstall]
-    #[command(
-        display_order = 11,
-        after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       anchor alias install     Alias git→anchor in your shell\n  \
-                       anchor alias uninstall   Remove the alias"
-    )]
-    Alias {
-        #[command(subcommand)]
-        action: AliasAction,
+    /// Built-in documentation (oobo help <topic>)
+    #[command(display_order = 15)]
+    Help {
+        /// Topic to display (omit for list of topics)
+        topic: Option<String>,
     },
 
     /// Check for updates or self-update
@@ -288,37 +272,35 @@ pub enum Command {
 }
 
 #[derive(Subcommand, Debug)]
-pub enum AliasAction {
-    /// Add `alias git=anchor` to your shell RC file
-    Install,
-    /// Remove the git→anchor alias from your shell RC file
-    Uninstall,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum FromAction {
-    /// Preview or load a shadow-anchor snapshot
-    Turn {
-        /// Turn id (full or unambiguous prefix)
-        turn_id: String,
-        /// Actually load the turn into the worktree. Omit for preview.
-        #[arg(long)]
-        load: bool,
-        /// Permit loading over a dirty worktree.
-        #[arg(long)]
-        force: bool,
-    },
-    /// Preview or load an anchor commit
-    Anchor {
-        /// Commit SHA (full or unambiguous prefix)
+pub enum AnchorAction {
+    /// Drill into one commit's anchor by SHA (prefix OK if unambiguous)
+    #[command(
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo anchor show a1b2c3d               Drill into a commit\n  \
+                       oobo anchor show a1b2c3d --agent       Compact output\n  \
+                       oobo anchor show a1b2c3d --json        Full JSON output"
+    )]
+    Show {
+        /// Commit SHA (full or unambiguous prefix).
         sha: String,
-        /// Actually load the anchor into the worktree. Omit for preview.
-        #[arg(long)]
-        load: bool,
-        /// Permit loading over a dirty worktree.
-        #[arg(long)]
-        force: bool,
     },
+
+    /// Show per-line AI/human attribution (alias for `oobo blame`)
+    #[command(
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo blame src/main.rs          Show AI attribution at HEAD\n  \
+                       oobo blame src/main.rs abc123   At a specific commit\n  \
+                       oobo blame src/main.rs --json   JSON output"
+    )]
+    Blame {
+        /// Pure `git blame` output (no AI column).
+        #[arg(long = "no-ai")]
+        no_ai: bool,
+        /// Arguments forwarded to `git blame` (plus AI overlay).
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
 }
 
 #[derive(Subcommand, Debug)]
@@ -357,18 +339,14 @@ pub enum HookAction {
     },
 }
 
-/// Reserved anchor verbs. Anything else at argv[1] is forwarded to `git` (passthrough).
-const OOBO_SUBCOMMANDS: &[&str] = &[
-    "anchors", "a", "from", "blame", "search", "settings", "enable", "disable", "setup", "alias",
-    "update", "hooks",
-];
-
 /// Re-parse the CLI with a synthetic argv and dispatch. Used by the legacy
-/// hint system to rewrite e.g. `anchor scan` → `anchor setup --reindex`.
-fn dispatch_with_argv(cfg: Config, argv: Vec<String>) -> Result<i32, String> {
-    let cli = Cli::try_parse_from(argv).map_err(|e| format!("dispatch rewrite: {e}"))?;
-    let mode = resolve_output_mode(cli.json, cli.agent, cli.interactive);
-    dispatch_parsed(cfg, cli, mode)
+/// hint system to rewrite e.g. `oobo scan` → `oobo setup --reindex`.
+fn dispatch_with_argv(cfg: &Config, argv: Vec<String>) -> std::pin::Pin<Box<dyn std::future::Future<Output = CmdResult> + '_>> {
+    Box::pin(async move {
+        let cli = Cli::try_parse_from(argv).map_err(|e| format!("dispatch rewrite: {e}"))?;
+        let mode = resolve_output_mode(cli.json, cli.agent, cli.interactive);
+        dispatch_parsed(cfg, cli, mode).await
+    })
 }
 
 /// Agent-env-var names. Any of these being set & non-empty implies agent mode.
@@ -416,42 +394,9 @@ pub fn resolve_output_mode(json: bool, agent: bool, interactive: bool) -> Output
     OutputMode::Tui
 }
 
-/// Commands that read data — safe to kick a background scan for.
-fn is_view_command(cmd: &Option<Command>) -> bool {
-    matches!(
-        cmd,
-        None | Some(Command::Anchors { .. })
-            | Some(Command::Blame { .. })
-            | Some(Command::Search { .. })
-    )
-}
-
-fn is_oobo_subcommand(args: &[String]) -> bool {
-    args.get(1)
-        .map(|a| OOBO_SUBCOMMANDS.contains(&a.as_str()))
-        .unwrap_or(false)
-}
-
 /// Determine what to do and dispatch.
-pub fn route(cfg: Config) -> Result<i32, String> {
+pub async fn route(cfg: &Config) -> CmdResult {
     let raw_args: Vec<String> = std::env::args().collect();
-
-    // If invoked as `git` (via alias), treat everything as git args
-    let invoked_as_git = raw_args
-        .first()
-        .map(|a| {
-            let name = std::path::Path::new(a)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(a);
-            name == "git"
-        })
-        .unwrap_or(false);
-
-    if invoked_as_git {
-        let git_args: Vec<&str> = raw_args.iter().skip(1).map(|s| s.as_str()).collect();
-        return git::proxy::run_and_intercept(&cfg, &git_args);
-    }
 
     if is_root_version_request(&raw_args) && raw_args.iter().any(|a| a == "--json") {
         if raw_args.iter().any(|a| a == "--agent") {
@@ -462,55 +407,25 @@ pub fn route(cfg: Config) -> Result<i32, String> {
         return Ok(0);
     }
 
-    // Legacy 0.1.x command hints. Fires BEFORE git passthrough so we can
-    // intercept names that collide with git verbs only coincidentally.
+    // Legacy 0.1.x command hints.
     if let Some(verb) = raw_args.get(1) {
-        if !OOBO_SUBCOMMANDS.contains(&verb.as_str()) {
-            if let Some(hint) = crate::commands::legacy::lookup(verb) {
-                match crate::commands::legacy::handle(hint) {
-                    Some(code) => return Ok(code),
-                    None => {
-                        // Continue with mapped args.
-                        if let Some(mapped) = hint.mapped {
-                            let mut new_argv: Vec<String> = vec![raw_args[0].clone()];
-                            for m in mapped {
-                                new_argv.push((*m).to_string());
-                            }
-                            // Replace argv in-process so clap sees the rewrite.
-                            return dispatch_with_argv(cfg, new_argv);
-                        }
-                        return Ok(2);
-                    }
+        if let Some(hint) = crate::commands::legacy::lookup(verb) {
+            if let Some(code) = crate::commands::legacy::handle(hint) { return Ok(code) }
+            if let Some(mapped) = hint.mapped {
+                let mut new_argv: Vec<String> = vec![raw_args[0].clone()];
+                for m in mapped {
+                    new_argv.push((*m).to_string());
                 }
+                return dispatch_with_argv(cfg, new_argv).await;
             }
+            return Ok(2);
         }
     }
 
-    let cli = match Cli::try_parse() {
-        Ok(c) => c,
-        Err(e) => {
-            if e.kind() == clap::error::ErrorKind::DisplayHelp
-                || e.kind() == clap::error::ErrorKind::DisplayVersion
-            {
-                e.exit();
-            }
-            // If the first arg is one of our subcommands, show clap's error
-            // (e.g. missing required arg) instead of passing to git
-            if is_oobo_subcommand(&raw_args) {
-                e.exit();
-            }
-            // For other parse failures with args present, treat as git passthrough
-            if raw_args.len() > 1 {
-                let git_args: Vec<&str> = raw_args.iter().skip(1).map(|s| s.as_str()).collect();
-                return git::proxy::run_and_intercept(&cfg, &git_args);
-            }
-            e.exit();
-        }
-    };
-
+    let cli = Cli::parse();
     let mode = resolve_output_mode(cli.json, cli.agent, cli.interactive);
 
-    dispatch_parsed(cfg, cli, mode)
+    dispatch_parsed(cfg, cli, mode).await
 }
 
 fn is_root_version_request(args: &[String]) -> bool {
@@ -527,7 +442,7 @@ fn is_root_version_request(args: &[String]) -> bool {
 
 fn print_version_json() {
     let value = serde_json::json!({
-        "name": "anchor",
+        "name": "oobo",
         "version": env!("CARGO_PKG_VERSION"),
         "commit": option_env!("OOBO_BUILD_COMMIT").unwrap_or("unknown"),
         "built_at": option_env!("OOBO_BUILT_AT").unwrap_or("unknown"),
@@ -535,15 +450,53 @@ fn print_version_json() {
     crate::utils::print_json(&value);
 }
 
+/// Extract the project root from a hook payload's `workspace_roots` field
+/// without fully deserializing the payload. Returns `None` if the field is
+/// missing or doesn't resolve to a git repo.
+fn payload_project_root(payload: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(payload).ok()?;
+    let root = parsed
+        .get("workspace_roots")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.as_str())?;
+    let resolved = git::proxy::project_root_from(root);
+    if resolved.is_empty() {
+        None
+    } else {
+        Some(resolved)
+    }
+}
+
 /// Dispatch a parsed `Cli`. Extracted so legacy-hint rewrites can re-enter
 /// the same code path after swapping argv.
-fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, String> {
-    // Fire-and-forget auto-index for view-style commands. Never blocks.
-    if is_view_command(&cli.command) {
-        crate::commands::auto::maybe_kick(&cfg);
-    }
-
+async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult {
     let result = match cli.command {
+        Some(Command::Anchors {}) => {
+            run_anchors_feed(cfg, &cli, mode)
+        }
+        Some(Command::Anchor { action }) => {
+            match action {
+                AnchorAction::Show { sha } => {
+                    let code = crate::commands::anchors::run_show(cfg, &sha, mode)?;
+                    Ok(code)
+                }
+                AnchorAction::Blame { no_ai, args } => {
+                    dispatch_blame(cfg, no_ai, args, mode)
+                }
+            }
+        }
+        Some(Command::Goto { target, no_stash }) => {
+            let code = crate::commands::goto::run(cfg, &target, no_stash, mode)?;
+            Ok(code)
+        }
+        Some(Command::Back {}) => {
+            let code = crate::commands::goto::run_back(cfg, mode)?;
+            Ok(code)
+        }
+        Some(Command::Blame { no_ai, args }) => {
+            dispatch_blame(cfg, no_ai, args, mode)
+        }
         Some(Command::Search {
             query,
             global,
@@ -565,23 +518,21 @@ fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, Strin
                 None
             };
 
-            // Scope resolution:
-            //   explicit --project NAME → that project
-            //   --global                → all projects
-            //   inside a repo (no flag) → current project
-            //   outside a repo          → all projects
             let scope = if let Some(name) = project {
                 crate::commands::search::Scope::Project(name)
             } else if global {
                 crate::commands::search::Scope::Global
             } else {
-                match crate::git::proxy::project_root(&cfg) {
+                match crate::git::proxy::project_root(cfg) {
                     Some(root) => crate::commands::search::Scope::CurrentRepo(root),
                     None => crate::commands::search::Scope::Global,
                 }
             };
 
             let q = query.join(" ");
+            if mode == OutputMode::Tui {
+                return crate::tui::app::run_search(cfg, &q);
+            }
             let opts = crate::commands::search::Options {
                 source,
                 since,
@@ -589,184 +540,101 @@ fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, Strin
                 tool,
                 limit,
             };
-            let code = crate::commands::search::run(&cfg, &q, opts, mode)?;
+            let code = crate::commands::search::run(cfg, &q, &opts, mode).await?;
             Ok(code)
         }
         Some(Command::Settings { args }) => {
-            let code = crate::commands::settings::run(&cfg, &args, mode)?;
-            Ok(code)
-        }
-        Some(Command::From { action }) => {
-            let code = match action {
-                FromAction::Turn {
-                    turn_id,
-                    load,
-                    force,
-                } => crate::commands::from::run_turn(&cfg, &turn_id, load, force, mode)?,
-                FromAction::Anchor { sha, load, force } => {
-                    crate::commands::from::run_anchor(&cfg, &sha, load, force, mode)?
-                }
-            };
+            let code = crate::commands::settings::run(cfg, &args, mode)?;
             Ok(code)
         }
         Some(Command::Enable {}) => {
-            let code = crate::commands::toggle::enable(&cfg, mode)?;
+            let code = crate::commands::toggle::enable(cfg, mode)?;
             Ok(code)
         }
         Some(Command::Disable {}) => {
-            let code = crate::commands::toggle::disable(&cfg, mode)?;
+            let code = crate::commands::toggle::disable(cfg, mode)?;
             Ok(code)
         }
         Some(Command::Setup {
             non_interactive,
             reindex,
-            uninstall_alias,
             repair,
         }) => {
             let opts = crate::setup::SetupOptions {
                 non_interactive,
                 reindex,
-                uninstall_alias,
                 repair,
                 mode,
             };
-            let code = crate::setup::run_setup_with(opts).map_err(|e| e.to_string())?;
+            let code = crate::setup::run_setup_with(&opts)?;
             Ok(code)
         }
-        Some(Command::Alias { action }) => {
-            crate::alias::run(action)?;
-            Ok(0)
+        Some(Command::Help { topic }) => {
+            let code = crate::help::run(topic.as_deref(), mode);
+            Ok(code)
         }
         Some(Command::Update { check, post_update }) => {
             if post_update {
                 crate::commands::update::run_post_update()?;
             } else {
-                crate::commands::update::run(check)?;
+                crate::commands::update::run(check).await?;
             }
             Ok(0)
-        }
-        Some(Command::Anchors {
-            action,
-            limit,
-            since,
-            tool,
-            project,
-        }) => {
-            let opts = crate::commands::anchors::Options {
-                limit,
-                since,
-                tool,
-                project,
-            };
-            match action {
-                Some(AnchorsAction::Show { sha }) => {
-                    let code = crate::commands::anchors::run_show(&cfg, &sha, mode)?;
-                    Ok(code)
-                }
-                None => {
-                    let code = crate::commands::anchors::run_list(&cfg, opts, mode)?;
-                    Ok(code)
-                }
-            }
-        }
-        Some(Command::Blame { no_ai, mut args }) => {
-            // `trailing_var_arg` slurps global flags when they appear
-            // after the first positional. Recover them here.
-            let mut mode = mode;
-            let mut local_json = false;
-            let mut local_agent = false;
-            args.retain(|a| match a.as_str() {
-                "--json" => {
-                    local_json = true;
-                    false
-                }
-                "--agent" => {
-                    local_agent = true;
-                    false
-                }
-                "--interactive" => false,
-                _ => true,
-            });
-            if local_json && local_agent {
-                eprintln!("error: --agent and --json are mutually exclusive");
-                return Ok(2);
-            }
-            if local_json {
-                mode = OutputMode::Json;
-            } else if local_agent {
-                mode = OutputMode::Agent;
-            }
-            let code = crate::commands::blame::run(&cfg, no_ai, &args, mode)?;
-            Ok(code)
         }
         Some(Command::Hooks { action }) => {
             match action {
                 HookAction::Agent { event, tool } => {
-                    if git::proxy::project_root(&cfg)
-                        .as_deref()
-                        .map(crate::project_config::is_enabled)
-                        != Some(true)
-                    {
-                        return Ok(0);
-                    }
                     let mut payload = String::new();
                     if let Err(e) =
                         std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload)
                     {
-                        eprintln!("anchor: warning: could not read agent payload from stdin: {e}");
+                        eprintln!("oobo: warning: could not read agent payload from stdin: {e}");
                     }
                     if payload.trim().is_empty() {
                         payload = "{}".to_string();
                     }
-                    // Debug: log hook invocations to diagnose missed sessions.
-                    if let Some(home) = dirs::home_dir() {
-                        let log_dir = home.join(".oobo/logs");
-                        let _ = std::fs::create_dir_all(&log_dir);
-                        let line = format!(
-                            "{} event={} tool={:?} payload={}\n",
-                            chrono::Utc::now().to_rfc3339(),
-                            event,
-                            tool,
-                            payload.trim(),
-                        );
-                        let _ = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(log_dir.join("hooks-debug.log"))
-                            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+
+                    let project_root = payload_project_root(&payload)
+                        .or_else(|| git::proxy::project_root(cfg));
+                    if project_root
+                        .as_deref().is_none_or(|x| !crate::project_config::is_enabled(x))
+                    {
+                        return Ok(0);
                     }
+
+                    tracing::debug!(event = %event, tool = ?tool, payload_len = payload.len(), "hook event received");
                     crate::hooks::handle_event(&event, &payload, tool.as_deref())
                         .map_err(|e| e.to_string())?;
                 }
                 HookAction::PostCommit { .. } => {
-                    if let Some(root) = git::proxy::project_root(&cfg) {
+                    if let Some(root) = git::proxy::project_root(cfg) {
                         if !crate::project_config::is_enabled(&root) {
                             return Ok(0);
                         }
                         if std::env::var("OOBO_INTERCEPTED").is_err() {
-                            if let Err(e) = crate::git::interceptor::on_write_op(&cfg, &["commit"])
+                            if let Err(e) = crate::git::interceptor::on_write_op(cfg, &["commit"])
                             {
-                                eprintln!("anchor: warning: {e}");
+                                eprintln!("oobo: warning: {e}");
                             }
                         }
                         crate::hooks::state::cleanup_stale(&root, 86400);
                     }
                 }
                 HookAction::PrePush { .. } => {
-                    if let Some(root) = git::proxy::project_root(&cfg) {
+                    if let Some(root) = git::proxy::project_root(cfg) {
                         if !crate::project_config::is_enabled(&root) {
                             return Ok(0);
                         }
                         if crate::git::orphan::branch_exists(&root) {
                             if let Err(e) = crate::git::orphan::push(&root) {
-                                eprintln!("anchor: warning: could not push anchors: {e}");
+                                eprintln!("oobo: warning: could not push anchors: {e}");
                             }
                         }
                         crate::git::orphan::retry_pending_pushes(&root);
                     }
                 }
                 HookAction::PostMerge { .. } => {
-                    if let Some(root) = git::proxy::project_root(&cfg) {
+                    if let Some(root) = git::proxy::project_root(cfg) {
                         if !crate::project_config::is_enabled(&root) {
                             return Ok(0);
                         }
@@ -778,9 +646,9 @@ fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, Strin
                     if let Err(e) =
                         std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload)
                     {
-                        eprintln!("anchor: warning: could not read post-rewrite payload: {e}");
+                        eprintln!("oobo: warning: could not read post-rewrite payload: {e}");
                     }
-                    if let Some(root) = git::proxy::project_root(&cfg) {
+                    if let Some(root) = git::proxy::project_root(cfg) {
                         if !crate::project_config::is_enabled(&root) {
                             return Ok(0);
                         }
@@ -788,7 +656,7 @@ fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, Strin
                         if let Err(e) =
                             crate::git::orphan::rekey_anchors_from_rewrite_pairs(&root, &pairs)
                         {
-                            eprintln!("anchor: warning: could not update rewritten anchors: {e}");
+                            eprintln!("oobo: warning: could not update rewritten anchors: {e}");
                         }
                     }
                 }
@@ -796,19 +664,54 @@ fn dispatch_parsed(cfg: Config, cli: Cli, mode: OutputMode) -> Result<i32, Strin
             Ok(0)
         }
         None => {
-            // Truly bare `anchor` (no trailing tokens) → four-quadrant view.
-            // `anchor <non-reserved-verb>` (e.g. `anchor commit`, `anchor status`)
-            // lands here too because clap parks unknown verbs in git_args;
-            // those should still be forwarded to git (passthrough).
-            if cli.git_args.is_empty() {
-                let code = crate::commands::bare::run(&cfg, mode)?;
-                Ok(code)
-            } else {
-                let git_args: Vec<&str> = cli.git_args.iter().map(|s| s.as_str()).collect();
-                git::proxy::run_and_intercept(&cfg, &git_args)
-            }
+            // Bare `oobo` = same as `oobo anchors` (the memory feed).
+            run_anchors_feed(cfg, &cli, mode)
         }
     };
 
     result
+}
+
+/// Shared logic for both `oobo` (bare) and `oobo anchors`.
+fn run_anchors_feed(cfg: &Config, cli: &Cli, mode: OutputMode) -> CmdResult {
+    if mode == OutputMode::Tui {
+        crate::commands::bare::run(cfg, mode)
+    } else {
+        let opts = crate::commands::anchors::Options {
+            limit: cli.limit,
+            since: cli.since.clone(),
+            tool: cli.tool.clone(),
+        };
+        let code = crate::commands::anchors::run_list(cfg, &opts, mode)?;
+        Ok(code)
+    }
+}
+
+fn dispatch_blame(cfg: &Config, no_ai: bool, mut args: Vec<String>, mode: OutputMode) -> CmdResult {
+    let mut mode = mode;
+    let mut local_json = false;
+    let mut local_agent = false;
+    args.retain(|a| match a.as_str() {
+        "--json" => {
+            local_json = true;
+            false
+        }
+        "--agent" => {
+            local_agent = true;
+            false
+        }
+        "--interactive" => false,
+        _ => true,
+    });
+    if local_json && local_agent {
+        eprintln!("error: --agent and --json are mutually exclusive");
+        return Ok(2);
+    }
+    if local_json {
+        mode = OutputMode::Json;
+    } else if local_agent {
+        mode = OutputMode::Agent;
+    }
+    let code = crate::commands::blame::run(cfg, no_ai, &args, mode)?;
+    Ok(code)
 }

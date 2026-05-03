@@ -1,10 +1,8 @@
 pub mod agent;
 pub mod anchors;
-pub mod auto;
 pub mod bare;
 pub mod blame;
-pub mod from;
-pub mod index;
+pub mod goto;
 pub mod legacy;
 pub mod search;
 pub mod settings;

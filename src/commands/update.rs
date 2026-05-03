@@ -1,11 +1,11 @@
-const REPO: &str = "ooboai/anchor";
-const USER_AGENT: &str = concat!("anchor/", env!("CARGO_PKG_VERSION"));
+const REPO: &str = "ooboai/oobo";
+const USER_AGENT: &str = concat!("oobo/", env!("CARGO_PKG_VERSION"));
 
-pub fn run(check_only: bool) -> Result<(), String> {
+pub async fn run(check_only: bool) -> Result<(), String> {
     let current_version = env!("CARGO_PKG_VERSION");
     eprintln!("current version: v{current_version}");
 
-    let latest = fetch_latest_version()?;
+    let latest = fetch_latest_version().await?;
     let latest_clean = latest.trim_start_matches('v');
 
     if latest_clean == current_version {
@@ -16,12 +16,12 @@ pub fn run(check_only: bool) -> Result<(), String> {
     eprintln!("new version available: v{latest_clean}");
 
     if check_only {
-        eprintln!("run `anchor update` to install");
+        eprintln!("run `oobo update` to install");
         return Ok(());
     }
 
     eprintln!("downloading...");
-    install_latest(&latest)?;
+    install_latest(&latest).await?;
     eprintln!("updated to v{latest_clean}");
 
     let current_exe = std::env::current_exe().ok();
@@ -41,7 +41,7 @@ pub fn run(check_only: bool) -> Result<(), String> {
 }
 
 pub fn run_post_update() -> Result<(), String> {
-    eprintln!("anchor: running post-update tasks...");
+    eprintln!("oobo: running post-update tasks...");
 
     match crate::commands::agent::ensure_skill_file() {
         Ok(_) => eprintln!("  skill file updated"),
@@ -58,10 +58,10 @@ pub fn run_post_update() -> Result<(), String> {
     Ok(())
 }
 
-fn fetch_latest_version() -> Result<String, String> {
+async fn fetch_latest_version() -> Result<String, String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .build()
         .map_err(|e| format!("http client error: {e}"))?;
@@ -69,34 +69,35 @@ fn fetch_latest_version() -> Result<String, String> {
     let resp = client
         .get(&url)
         .send()
+        .await
         .map_err(|e| format!("cannot reach GitHub: {e}"))?;
 
     if !resp.status().is_success() {
         return Err(format!("GitHub API returned {}", resp.status()));
     }
 
-    let body: serde_json::Value = resp.json().map_err(|e| format!("invalid response: {e}"))?;
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("invalid response: {e}"))?;
 
     body.get("tag_name")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .ok_or_else(|| "no tag_name in release".to_string())
 }
 
-fn install_latest(tag: &str) -> Result<(), String> {
+async fn install_latest(tag: &str) -> Result<(), String> {
     let target = current_target();
     if target == "unknown" || target.is_empty() {
         return Err("prebuilt binaries are not available for this platform".to_string());
     }
 
     #[cfg(target_os = "windows")]
-    let (asset_name, is_zip) = (format!("anchor-{tag}-{target}.zip"), true);
+    let (asset_name, is_zip) = (format!("oobo-{tag}-{target}.zip"), true);
     #[cfg(not(target_os = "windows"))]
-    let (asset_name, is_zip) = (format!("anchor-{tag}-{target}.tar.gz"), false);
+    let (asset_name, is_zip) = (format!("oobo-{tag}-{target}.tar.gz"), false);
 
     let url = format!("https://github.com/{REPO}/releases/download/{tag}/{asset_name}");
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .build()
         .map_err(|e| format!("http client error: {e}"))?;
@@ -104,6 +105,7 @@ fn install_latest(tag: &str) -> Result<(), String> {
     let resp = client
         .get(&url)
         .send()
+        .await
         .map_err(|e| format!("cannot download: {e}"))?;
 
     if !resp.status().is_success() {
@@ -112,12 +114,13 @@ fn install_latest(tag: &str) -> Result<(), String> {
 
     let bytes = resp
         .bytes()
+        .await
         .map_err(|e| format!("cannot read download: {e}"))?;
 
     let current_exe =
         std::env::current_exe().map_err(|e| format!("cannot find current binary: {e}"))?;
 
-    let tmp_dir = std::env::temp_dir().join(format!("anchor-update-{}", std::process::id()));
+    let tmp_dir = std::env::temp_dir().join(format!("oobo-update-{}", std::process::id()));
     std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("cannot create temp dir: {e}"))?;
 
     let archive_path = tmp_dir.join(&asset_name);
@@ -137,9 +140,9 @@ fn install_latest(tag: &str) -> Result<(), String> {
     }
 
     #[cfg(target_os = "windows")]
-    let binary_name = "anchor.exe";
+    let binary_name = "oobo.exe";
     #[cfg(not(target_os = "windows"))]
-    let binary_name = "anchor";
+    let binary_name = "oobo";
 
     let new_binary = tmp_dir.join(binary_name);
     if !new_binary.exists() {
@@ -148,7 +151,7 @@ fn install_latest(tag: &str) -> Result<(), String> {
 
     let backup = current_exe.with_extension("old");
     if let Err(e) = std::fs::rename(&current_exe, &backup) {
-        eprintln!("anchor: warning: could not backup current binary: {e}");
+        eprintln!("oobo: warning: could not backup current binary: {e}");
     }
 
     if let Err(e) = std::fs::copy(&new_binary, &current_exe) {
@@ -189,7 +192,7 @@ fn extract_zip(archive: &std::path::Path, dest: &std::path::Path) -> Result<(), 
 }
 
 #[cfg(not(target_os = "windows"))]
-#[allow(dead_code)]
+#[allow(clippy::unnecessary_wraps)]
 fn extract_zip(_archive: &std::path::Path, _dest: &std::path::Path) -> Result<(), String> {
     Ok(())
 }

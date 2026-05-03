@@ -7,6 +7,7 @@
 
 use crate::cli::OutputMode;
 use crate::config::Config;
+use crate::error::{CliError, CmdResult};
 
 const RESERVED_SCOPES: &[&str] = &["default", "project"];
 const RESERVED_VERBS: &[&str] = &["set", "unset"];
@@ -16,7 +17,6 @@ const VALID_KEYS: &[&str] = &[
     "remote",
     "transparency",
     "tools.experimental",
-    "setup.scan_roots",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +45,7 @@ pub struct Parsed {
 /// Grammar: [scope] [verb] <key> [value]
 /// Reserved scope/verb words are recognized ONLY in positions 1–2; after
 /// that, any token is treated as key or value.
-pub fn parse_args(args: &[String]) -> Result<Parsed, String> {
+pub fn parse_args(args: &[String]) -> Result<Parsed, CliError> {
     let mut idx = 0;
     let mut scope: Option<Scope> = None;
     let mut verb: Option<Verb> = None;
@@ -68,7 +68,7 @@ pub fn parse_args(args: &[String]) -> Result<Parsed, String> {
                 verb = Some(v);
                 idx += 1;
             } else if match_scope(a).is_some() {
-                return Err(format!("unexpected scope in position 2: '{a}'"));
+                return Err(format!("unexpected scope in position 2: '{a}'").into());
             }
         }
     }
@@ -79,10 +79,10 @@ pub fn parse_args(args: &[String]) -> Result<Parsed, String> {
     let value = args.get(idx + 1).cloned();
 
     if args.len() > idx + 2 {
-        return Err(format!(
-            "too many arguments (got {}): anchor settings [scope] [verb] <key> [value]",
+        return Err(CliError::User(format!(
+            "too many arguments (got {}): oobo settings [scope] [verb] <key> [value]",
             args.len()
-        ));
+        )));
     }
 
     Ok(Parsed {
@@ -116,7 +116,7 @@ fn match_verb(token: &str) -> Option<Verb> {
 }
 
 /// Entry point invoked by `src/cli.rs`.
-pub fn run(cfg: &Config, args: &[String], mode: OutputMode) -> Result<i32, String> {
+pub fn run(cfg: &Config, args: &[String], mode: OutputMode) -> CmdResult {
     let parsed = match parse_args(args) {
         Ok(p) => p,
         Err(e) => {
@@ -126,7 +126,7 @@ pub fn run(cfg: &Config, args: &[String], mode: OutputMode) -> Result<i32, Strin
     };
 
     match parsed.verb {
-        Verb::Get => run_get(cfg, parsed.scope, parsed.key.as_deref(), mode),
+        Verb::Get => Ok(run_get(cfg, parsed.scope, parsed.key.as_deref(), mode)),
         Verb::Set => run_set(
             cfg,
             parsed.scope,
@@ -145,7 +145,7 @@ fn run_get(
     scope: Option<Scope>,
     key: Option<&str>,
     mode: OutputMode,
-) -> Result<i32, String> {
+) -> i32 {
     match (scope, key) {
         (None, None) => show_effective(cfg, mode),
         (Some(Scope::Default), None) => show_default(cfg, mode),
@@ -156,7 +156,7 @@ fn run_get(
     }
 }
 
-fn show_effective(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
+fn show_effective(cfg: &Config, mode: OutputMode) -> i32 {
     let project_settings = current_project_settings(cfg);
     let rows: Vec<(String, String, String)> = VALID_KEYS
         .iter()
@@ -166,10 +166,20 @@ fn show_effective(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
         })
         .collect();
     print_rows(&rows, mode);
-    Ok(0)
+    if matches!(mode, OutputMode::Tui) {
+        println!();
+        println!("  key              API key for remote sync (oobo.ai cloud)");
+        println!("  remote           API endpoint URL");
+        println!("  transparency     sync transcripts to anchors branch (on/off)");
+        println!("  tools.experimental  enable experimental tool adapters (on/off)");
+        println!();
+        println!("  set:   oobo settings set <key> <value>");
+        println!("  unset: oobo settings unset <key>");
+    }
+    0
 }
 
-fn show_default(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
+fn show_default(cfg: &Config, mode: OutputMode) -> i32 {
     let rows: Vec<(String, String, String)> = VALID_KEYS
         .iter()
         .map(|k| {
@@ -178,16 +188,13 @@ fn show_default(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
         })
         .collect();
     print_rows(&rows, mode);
-    Ok(0)
+    0
 }
 
-fn show_project(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
-    let ps = match current_project_settings(cfg) {
-        Some(p) => p,
-        None => {
-            eprintln!("error: 'project' scope requires being inside a git repo.");
-            return Ok(1);
-        }
+fn show_project(cfg: &Config, mode: OutputMode) -> i32 {
+    let ps = if let Some(p) = current_project_settings(cfg) { p } else {
+        eprintln!("error: 'project' scope requires being inside a git repo.");
+        return 1;
     };
     let overrides: Vec<(String, String, String)> = VALID_KEYS
         .iter()
@@ -198,59 +205,53 @@ fn show_project(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
         .collect();
     if overrides.is_empty() {
         println!("no project overrides set. showing defaults:");
-        println!("  run: anchor settings default");
-        return Ok(0);
+        println!("  run: oobo settings default");
+        return 0;
     }
     print_rows(&overrides, mode);
-    Ok(0)
+    0
 }
 
-fn show_key_effective(cfg: &Config, key: &str, mode: OutputMode) -> Result<i32, String> {
+fn show_key_effective(cfg: &Config, key: &str, mode: OutputMode) -> i32 {
     if let Err(e) = validate_key(key) {
         eprintln!("error: {e}");
-        return Ok(2);
+        return 2;
     }
     let project_settings = current_project_settings(cfg);
     let (source, value) = effective_value(cfg, key, project_settings.as_ref());
     print_single(key, &source, &value, mode);
-    Ok(0)
+    0
 }
 
-fn show_key_default(cfg: &Config, key: &str, mode: OutputMode) -> Result<i32, String> {
+fn show_key_default(cfg: &Config, key: &str, mode: OutputMode) -> i32 {
     if let Err(e) = validate_key(key) {
         eprintln!("error: {e}");
-        return Ok(2);
+        return 2;
     }
     let raw = read_default(cfg, key).unwrap_or_else(|| "(unset)".to_string());
     print_single(key, "default", &mask_if_secret(key, &raw), mode);
-    Ok(0)
+    0
 }
 
-fn show_key_project(cfg: &Config, key: &str, mode: OutputMode) -> Result<i32, String> {
+fn show_key_project(cfg: &Config, key: &str, mode: OutputMode) -> i32 {
     if let Err(e) = validate_key(key) {
         eprintln!("error: {e}");
-        return Ok(2);
+        return 2;
     }
-    let ps = match current_project_settings(cfg) {
-        Some(p) => p,
-        None => {
-            eprintln!("error: 'project' scope requires being inside a git repo.");
-            return Ok(1);
-        }
+    let ps = if let Some(p) = current_project_settings(cfg) { p } else {
+        eprintln!("error: 'project' scope requires being inside a git repo.");
+        return 1;
     };
-    match read_project(&ps, key) {
-        Some(v) => {
-            print_single(key, "project", &mask_if_secret(key, &v), mode);
-        }
-        None => {
-            let def = read_default(cfg, key).unwrap_or_else(|| "(unset)".to_string());
-            println!(
-                "{key}   (no project override) falling back to default: {}",
-                mask_if_secret(key, &def)
-            );
-        }
+    if let Some(v) = read_project(&ps, key) {
+        print_single(key, "project", &mask_if_secret(key, &v), mode);
+    } else {
+        let def = read_default(cfg, key).unwrap_or_else(|| "(unset)".to_string());
+        println!(
+            "{key}   (no project override) falling back to default: {}",
+            mask_if_secret(key, &def)
+        );
     }
-    Ok(0)
+    0
 }
 
 // ── SET ─────────────────────────────────────────────────────────────────────
@@ -261,20 +262,14 @@ fn run_set(
     key: Option<&str>,
     value: Option<&str>,
     mode: OutputMode,
-) -> Result<i32, String> {
-    let key = match key {
-        Some(k) => k,
-        None => {
-            eprintln!("error: 'set' requires a key: anchor settings [scope] set <key> <value>");
-            return Ok(2);
-        }
+) -> CmdResult {
+    let key = if let Some(k) = key { k } else {
+        eprintln!("error: 'set' requires a key: oobo settings [scope] set <key> <value>");
+        return Ok(2);
     };
-    let value = match value {
-        Some(v) => v,
-        None => {
-            eprintln!("error: 'set' requires a value: anchor settings [scope] set <key> <value>");
-            return Ok(2);
-        }
+    let value = if let Some(v) = value { v } else {
+        eprintln!("error: 'set' requires a value: oobo settings [scope] set <key> <value>");
+        return Ok(2);
     };
     if let Err(e) = validate_key(key) {
         eprintln!("error: {e}");
@@ -307,12 +302,9 @@ fn run_set(
             }
         }
         Scope::Project => {
-            let (project_root, project_id) = match current_project_context(cfg) {
-                Some(context) => context,
-                None => {
-                    eprintln!("error: 'project' scope requires being inside a git repo.");
-                    return Ok(1);
-                }
+            let (project_root, project_id) = if let Some(context) = current_project_context(cfg) { context } else {
+                eprintln!("error: 'project' scope requires being inside a git repo.");
+                return Ok(1);
             };
             if let Err(e) = validate_project_key(key) {
                 eprintln!("error: {e}");
@@ -361,13 +353,10 @@ fn run_unset(
     scope: Option<Scope>,
     key: Option<&str>,
     mode: OutputMode,
-) -> Result<i32, String> {
-    let key = match key {
-        Some(k) => k,
-        None => {
-            eprintln!("error: 'unset' requires a key: anchor settings [scope] unset <key>");
-            return Ok(2);
-        }
+) -> CmdResult {
+    let key = if let Some(k) = key { k } else {
+        eprintln!("error: 'unset' requires a key: oobo settings [scope] unset <key>");
+        return Ok(2);
     };
     if let Err(e) = validate_key(key) {
         eprintln!("error: {e}");
@@ -393,12 +382,9 @@ fn run_unset(
             }
         }
         Scope::Project => {
-            let (project_root, project_id) = match current_project_context(cfg) {
-                Some(context) => context,
-                None => {
-                    eprintln!("error: 'project' scope requires being inside a git repo.");
-                    return Ok(1);
-                }
+            let (project_root, project_id) = if let Some(context) = current_project_context(cfg) { context } else {
+                eprintln!("error: 'project' scope requires being inside a git repo.");
+                return Ok(1);
             };
             if let Err(e) = validate_project_key(key) {
                 eprintln!("error: {e}");
@@ -440,64 +426,62 @@ fn run_unset(
 
 // ── Key I/O ─────────────────────────────────────────────────────────────────
 
-fn validate_key(key: &str) -> Result<(), String> {
+fn validate_key(key: &str) -> Result<(), CliError> {
     if VALID_KEYS.contains(&key) {
         return Ok(());
     }
-    Err(format!(
+    Err(CliError::Config(format!(
         "unknown key '{key}'. valid keys: {}",
         VALID_KEYS.join(", ")
-    ))
+    )))
 }
 
-fn validate_value(key: &str, value: &str) -> Result<(), String> {
+fn validate_value(key: &str, value: &str) -> Result<(), CliError> {
     match key {
         "remote" => {
             if value.starts_with("http://") || value.starts_with("https://") {
                 Ok(())
             } else {
-                Err(format!(
+                Err(CliError::Config(format!(
                     "invalid value for 'remote': expected http(s) URL, got '{value}'"
-                ))
+                )))
             }
         }
         "transparency" => match value {
             "on" | "off" => Ok(()),
-            _ => Err(format!(
+            _ => Err(CliError::Config(format!(
                 "invalid value for 'transparency': expected 'on' or 'off', got '{value}'"
-            )),
+            ))),
         },
         "tools.experimental" => match value {
             "on" | "off" | "true" | "false" => Ok(()),
-            _ => Err(format!(
+            _ => Err(CliError::Config(format!(
                 "invalid value for 'tools.experimental': expected 'on' or 'off', got '{value}'"
-            )),
+            ))),
         },
         _ => Ok(()),
     }
 }
 
-fn validate_project_key(key: &str) -> Result<(), String> {
+fn validate_project_key(key: &str) -> Result<(), CliError> {
     match key {
         "key" | "remote" | "transparency" => Ok(()),
-        "tools.experimental" | "setup.scan_roots" => Err(format!(
-            "'{key}' is a default-only setting; use `anchor settings default set {key} ...`"
-        )),
+        "tools.experimental" => Err(CliError::Config(format!(
+            "'{key}' is a default-only setting; use `oobo settings default set {key} ...`"
+        ))),
         _ => validate_key(key),
     }
 }
 
-fn validate_project_value(key: &str, value: &str) -> Result<(), String> {
+fn validate_project_value(key: &str, value: &str) -> Result<(), CliError> {
     match key {
-        // Project `remote` is the Git remote target for the anchor orphan
-        // branch. It can be a remote name (`origin`, `oobo`) or a full Git URL.
         "remote" => {
             if !value.trim().is_empty() && !value.chars().any(char::is_whitespace) {
                 Ok(())
             } else {
-                Err(format!(
+                Err(CliError::Config(format!(
                     "invalid value for project 'remote': expected Git remote name or URL, got '{value}'"
-                ))
+                )))
             }
         }
         _ => validate_value(key, value),
@@ -517,7 +501,6 @@ fn read_default(cfg: &Config, key: &str) -> Option<String> {
         "remote" => Some(cfg.server.url.clone()),
         "transparency" => Some(cfg.transparency.mode.clone()),
         "tools.experimental" => Some(if cfg.tools.experimental { "on" } else { "off" }.to_string()),
-        "setup.scan_roots" => Some(cfg.setup.scan_roots.join(",")),
         _ => None,
     }
 }
@@ -530,9 +513,6 @@ fn write_default(cfg: &mut Config, key: &str, value: &str) {
         "tools.experimental" => {
             cfg.tools.experimental = matches!(value, "on" | "true");
         }
-        "setup.scan_roots" => {
-            cfg.setup.scan_roots = value.split(',').map(|s| s.trim().to_string()).collect();
-        }
         _ => {}
     }
 }
@@ -541,9 +521,8 @@ fn unset_default(cfg: &mut Config, key: &str) {
     match key {
         "key" => cfg.server.api_key.clear(),
         "remote" => cfg.server.url = "https://api.oobo.ai".to_string(),
-        "transparency" => cfg.transparency.mode = "off".to_string(),
+        "transparency" => cfg.transparency.mode = "on".to_string(),
         "tools.experimental" => cfg.tools.experimental = false,
-        "setup.scan_roots" => cfg.setup.scan_roots = vec!["~".to_string()],
         _ => {}
     }
 }
@@ -569,7 +548,7 @@ fn write_project_setting(
     project_id: &str,
     key: &str,
     value: &str,
-) -> Result<(), String> {
+) -> Result<(), CliError> {
     match key {
         "remote" | "transparency" => {
             let mut cfg = load_project_config_for_write(project_root, project_id)?;
@@ -578,17 +557,17 @@ fn write_project_setting(
                 "transparency" => cfg.privacy.transparency = Some(value.to_string()),
                 _ => {}
             }
-            cfg.save(project_root)
+            cfg.save(project_root).map_err(CliError::Config)
         }
         "key" => {
-            eprintln!("anchor: warning: project-scoped API keys require the global config. Use `anchor settings set key <value>` instead.");
+            eprintln!("oobo: warning: project-scoped API keys require the global config. Use `oobo settings set key <value>` instead.");
             Ok(())
         }
         _ => Ok(()),
     }
 }
 
-fn unset_project_setting(project_root: &str, project_id: &str, key: &str) -> Result<(), String> {
+fn unset_project_setting(project_root: &str, project_id: &str, key: &str) -> Result<(), CliError> {
     match key {
         "remote" | "transparency" => {
             let mut cfg = load_project_config_for_write(project_root, project_id)?;
@@ -597,9 +576,8 @@ fn unset_project_setting(project_root: &str, project_id: &str, key: &str) -> Res
                 "transparency" => cfg.privacy.transparency = None,
                 _ => {}
             }
-            cfg.save(project_root)
+            cfg.save(project_root).map_err(CliError::Config)
         }
-        "key" => Ok(()),
         _ => Ok(()),
     }
 }
@@ -607,7 +585,7 @@ fn unset_project_setting(project_root: &str, project_id: &str, key: &str) -> Res
 fn load_project_config_for_write(
     project_root: &str,
     project_id: &str,
-) -> Result<crate::project_config::ProjectConfig, String> {
+) -> Result<crate::project_config::ProjectConfig, CliError> {
     let mut cfg = crate::project_config::ProjectConfig::load(project_root)?
         .unwrap_or_else(|| crate::project_config::ProjectConfig::for_project(project_id));
     if cfg.project.id.is_empty() {

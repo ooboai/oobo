@@ -8,6 +8,7 @@
 use crate::cli::OutputMode;
 use crate::config::Config;
 use crate::core::anchor::FileAttribution;
+use crate::error::{CliError, CmdResult};
 use crate::git::{orphan, proxy};
 
 /// Entry point.
@@ -17,12 +18,17 @@ use crate::git::{orphan, proxy};
 /// - `mode == Json` → structured JSON output.
 /// - `mode == Agent` → flat columns.
 /// - `mode == Tui` → colored git-blame + AI column.
-pub fn run(cfg: &Config, no_ai: bool, args: &[String], mode: OutputMode) -> Result<i32, String> {
+pub fn run(cfg: &Config, no_ai: bool, args: &[String], mode: OutputMode) -> CmdResult {
+    if crate::git::proxy::project_root(cfg).is_none() {
+        eprintln!("oobo: not inside a git repository.");
+        return Ok(1);
+    }
+
     if no_ai || is_machine_output(args) {
         return passthrough(cfg, args);
     }
 
-    let (file, commit) = detect_file_and_commit(args)?;
+    let (file, commit) = detect_file_and_commit(args);
     if file.is_empty() {
         return passthrough(cfg, args);
     }
@@ -39,12 +45,12 @@ pub fn run(cfg: &Config, no_ai: bool, args: &[String], mode: OutputMode) -> Resu
 // ------------------------------------------------------------------
 
 /// Exec `git blame <args>` and forward stdout/stderr and the exit code.
-fn passthrough(cfg: &Config, args: &[String]) -> Result<i32, String> {
+fn passthrough(cfg: &Config, args: &[String]) -> CmdResult {
     let mut argv: Vec<String> = vec!["blame".to_string()];
     for a in args {
         argv.push(a.clone());
     }
-    let borrowed: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
+    let borrowed: Vec<&str> = argv.iter().map(std::string::String::as_str).collect();
     proxy::run_and_intercept(cfg, &borrowed)
 }
 
@@ -55,7 +61,7 @@ fn is_machine_output(args: &[String]) -> bool {
 
 /// Scan passed args for the first positional that looks like a file path.
 /// Returns `(file, commit)` where `commit` is optional.
-fn detect_file_and_commit(args: &[String]) -> Result<(String, Option<String>), String> {
+fn detect_file_and_commit(args: &[String]) -> (String, Option<String>) {
     let mut positionals: Vec<String> = Vec::new();
     let mut iter = args.iter().peekable();
     while let Some(a) = iter.next() {
@@ -66,7 +72,6 @@ fn detect_file_and_commit(args: &[String]) -> Result<(String, Option<String>), S
             break;
         }
         if a.starts_with('-') {
-            // Flags that take a value on the next token.
             if matches!(
                 a.as_str(),
                 "-L" | "--abbrev" | "--date" | "--since" | "--until"
@@ -78,13 +83,12 @@ fn detect_file_and_commit(args: &[String]) -> Result<(String, Option<String>), S
         positionals.push(a.clone());
     }
     match positionals.len() {
-        0 => Ok((String::new(), None)),
-        1 => Ok((positionals.remove(0), None)),
+        0 => (String::new(), None),
+        1 => (positionals.remove(0), None),
         _ => {
-            // git blame convention: last arg is file, preceding is commit-ish.
             let file = positionals.pop().unwrap();
             let commit = positionals.pop();
-            Ok((file, commit))
+            (file, commit)
         }
     }
 }
@@ -93,7 +97,7 @@ fn detect_file_and_commit(args: &[String]) -> Result<(String, Option<String>), S
 // JSON
 // ------------------------------------------------------------------
 
-fn emit_json(cfg: &Config, file: &str, commit: Option<&str>) -> Result<i32, String> {
+fn emit_json(cfg: &Config, file: &str, commit: Option<&str>) -> CmdResult {
     let root = match proxy::project_root(cfg) {
         Some(r) => r,
         None => return passthrough(cfg, &[file.to_string()]),
@@ -160,7 +164,7 @@ fn emit_agent(
     file: &str,
     commit: Option<&str>,
     args: &[String],
-) -> Result<i32, String> {
+) -> CmdResult {
     let root = match proxy::project_root(cfg) {
         Some(r) => r,
         None => return passthrough(cfg, args),
@@ -207,7 +211,7 @@ fn emit_overlay(
     file: &str,
     commit: Option<&str>,
     args: &[String],
-) -> Result<i32, String> {
+) -> CmdResult {
     let root = match proxy::project_root(cfg) {
         Some(r) => r,
         None => return passthrough(cfg, args),
@@ -221,7 +225,7 @@ fn emit_overlay(
     for a in args {
         blame_argv.push(a.clone());
     }
-    let borrowed: Vec<&str> = blame_argv.iter().map(|s| s.as_str()).collect();
+    let borrowed: Vec<&str> = blame_argv.iter().map(std::string::String::as_str).collect();
     let raw = match proxy::run_git_capture(cfg, &borrowed) {
         Ok(s) => s,
         Err(_) => return passthrough(cfg, args),
@@ -236,18 +240,16 @@ fn emit_overlay(
     for raw_line in raw.lines() {
         let n = parse_blame_line_number(raw_line);
         let attr = n
-            .and_then(|n| line_map.get(&n))
-            .map(|(a, agent)| format_attr(a, agent))
-            .unwrap_or_else(|| "-".to_string());
+            .and_then(|n| line_map.get(&n)).map_or_else(|| "-".to_string(), |(a, agent)| format_attr(a, agent.as_ref()));
         println!("\x1b[36m{attr:<8}\x1b[0m {raw_line}");
     }
     Ok(0)
 }
 
-fn format_attr(a: &FileAttribution, agent: &Option<String>) -> String {
+fn format_attr(a: &FileAttribution, agent: Option<&String>) -> String {
     match a {
-        FileAttribution::Ai => agent.clone().unwrap_or_else(|| "ai".into()),
-        FileAttribution::Mixed => agent.clone().unwrap_or_else(|| "mixed".into()),
+        FileAttribution::Ai => agent.cloned().unwrap_or_else(|| "ai".into()),
+        FileAttribution::Mixed => agent.cloned().unwrap_or_else(|| "mixed".into()),
         FileAttribution::Human => "human".into(),
     }
 }
@@ -259,7 +261,7 @@ fn format_attr(a: &FileAttribution, agent: &Option<String>) -> String {
 fn parse_blame_line_number(line: &str) -> Option<u32> {
     let close = line.find(')')?;
     let head = &line[..close];
-    let start = head.rfind(' ').map(|i| i + 1).unwrap_or(0);
+    let start = head.rfind(' ').map_or(0, |i| i + 1);
     head[start..].parse::<u32>().ok()
 }
 
@@ -267,11 +269,11 @@ fn parse_blame_line_number(line: &str) -> Option<u32> {
 // shared helpers
 // ------------------------------------------------------------------
 
-fn resolve_commit(cfg: &Config, commit: Option<&str>) -> Result<String, String> {
+fn resolve_commit(cfg: &Config, commit: Option<&str>) -> Result<String, CliError> {
     let rev = commit.unwrap_or("HEAD");
     proxy::run_git_capture(cfg, &["rev-parse", rev])
         .map(|s| s.trim().to_string())
-        .map_err(|e| format!("could not resolve '{rev}': {e}"))
+        .map_err(|_| CliError::Git(format!("could not resolve '{rev}'")))
 }
 
 fn build_line_map(
@@ -291,15 +293,11 @@ fn build_line_map(
 fn normalize_file_path(file: &str, project_root: &str) -> String {
     let path = std::path::Path::new(file);
     let relative = if path.is_absolute() {
-        path.strip_prefix(project_root)
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|_| path.to_path_buf())
+        path.strip_prefix(project_root).map_or_else(|_| path.to_path_buf(), std::path::Path::to_path_buf)
     } else {
         let cwd = std::env::current_dir().unwrap_or_default();
         let abs = cwd.join(path);
-        abs.strip_prefix(project_root)
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|_| path.to_path_buf())
+        abs.strip_prefix(project_root).map_or_else(|_| path.to_path_buf(), std::path::Path::to_path_buf)
     };
     relative
         .to_string_lossy()
@@ -322,7 +320,7 @@ mod tests {
     #[test]
     fn test_detect_file_only() {
         let a = vec!["src/main.rs".to_string()];
-        let (f, c) = detect_file_and_commit(&a).unwrap();
+        let (f, c) = detect_file_and_commit(&a);
         assert_eq!(f, "src/main.rs");
         assert_eq!(c, None);
     }
@@ -330,7 +328,7 @@ mod tests {
     #[test]
     fn test_detect_file_and_commit() {
         let a = vec!["a1b2c3d".to_string(), "src/main.rs".to_string()];
-        let (f, c) = detect_file_and_commit(&a).unwrap();
+        let (f, c) = detect_file_and_commit(&a);
         assert_eq!(f, "src/main.rs");
         assert_eq!(c.as_deref(), Some("a1b2c3d"));
     }
@@ -338,7 +336,7 @@ mod tests {
     #[test]
     fn test_detect_skips_flags() {
         let a = vec!["-w".to_string(), "src/main.rs".to_string()];
-        let (f, c) = detect_file_and_commit(&a).unwrap();
+        let (f, c) = detect_file_and_commit(&a);
         assert_eq!(f, "src/main.rs");
         assert_eq!(c, None);
     }
@@ -350,7 +348,7 @@ mod tests {
             "10,20".to_string(),
             "src/main.rs".to_string(),
         ];
-        let (f, _) = detect_file_and_commit(&a).unwrap();
+        let (f, _) = detect_file_and_commit(&a);
         assert_eq!(f, "src/main.rs");
     }
 

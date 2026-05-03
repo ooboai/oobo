@@ -3,74 +3,43 @@ use std::io::IsTerminal;
 
 use crate::cli::OutputMode;
 use crate::config::Config;
+use crate::error::{CliError, CmdResult};
 use crate::tui::setup::{ProjectChoice, ScanInfo};
 
 pub struct SetupOptions {
     pub non_interactive: bool,
     pub reindex: bool,
-    pub uninstall_alias: bool,
     pub repair: bool,
     pub mode: OutputMode,
 }
 
 /// Top-level dispatcher for `oobo setup [flags]`. Flags are composable.
-pub fn run_setup_with(opts: SetupOptions) -> Result<i32, String> {
-    if opts.uninstall_alias && !opts.repair && !opts.reindex && !opts.non_interactive_wizard() {
-        crate::alias::uninstall_alias()?;
-        return Ok(0);
-    }
-
-    let mut exit_code = 0;
-
+pub fn run_setup_with(opts: &SetupOptions) -> CmdResult {
     if opts.repair {
-        if let Err(e) = run_repair(&opts) {
-            eprintln!("anchor: error: repair failed: {e}");
-            exit_code = 1;
-        }
+        run_repair(opts);
     }
 
     if opts.reindex {
-        match run_reindex(&opts) {
-            Ok(code) if code != 0 => exit_code = code,
-            Err(e) => {
-                eprintln!("anchor: error: reindex failed: {e}");
-                exit_code = 1;
-            }
-            _ => {}
-        }
+        run_reindex(opts);
     }
 
-    if opts.uninstall_alias {
-        if let Err(e) = crate::alias::uninstall_alias() {
-            eprintln!("anchor: warning: could not uninstall alias: {e}");
-        }
-    }
-
-    if !opts.repair && !opts.reindex && !opts.uninstall_alias {
+    if !opts.repair && !opts.reindex {
         run_setup(opts.non_interactive)?;
     }
 
-    Ok(exit_code)
-}
-
-impl SetupOptions {
-    fn non_interactive_wizard(&self) -> bool {
-        self.non_interactive
-    }
+    Ok(0)
 }
 
 // ── Repair path ────────────────────────────────────────────────────────────
 
-fn run_repair(opts: &SetupOptions) -> Result<(), String> {
+fn run_repair(opts: &SetupOptions) {
     let cfg = Config::load_or_default();
     let mode = opts.mode;
 
     let root = crate::git::proxy::project_root(&cfg);
     let Some(path) = root else {
-        if matches!(mode, OutputMode::Tui) {
-            println!("not in a git repository — cd into a project first.");
-        }
-        return Ok(());
+        eprintln!("oobo: not inside a git repository.");
+        return;
     };
 
     let project_id = crate::project::id_for_root(&path);
@@ -89,7 +58,7 @@ fn run_repair(opts: &SetupOptions) -> Result<(), String> {
         "ok"
     } else if crate::git::orphan::remote_branch_exists(&path) {
         match crate::git::orphan::fetch_and_reconcile(&path) {
-            Ok(_) => "rebuilt from remote",
+            Ok(()) => "rebuilt from remote",
             Err(_) => "missing",
         }
     } else {
@@ -99,8 +68,7 @@ fn run_repair(opts: &SetupOptions) -> Result<(), String> {
     match mode {
         OutputMode::Agent => {
             println!(
-                "repair {} hooks={} orphan={}",
-                name, hooks_status, orphan_status
+                "repair {name} hooks={hooks_status} orphan={orphan_status}"
             );
         }
         OutputMode::Json => {
@@ -113,8 +81,7 @@ fn run_repair(opts: &SetupOptions) -> Result<(), String> {
         }
         OutputMode::Tui => {
             println!(
-                "  {:<20} hooks {} · orphan {}",
-                name, hooks_status, orphan_status
+                "  {name:<20} hooks {hooks_status} · orphan {orphan_status}"
             );
         }
     }
@@ -123,22 +90,20 @@ fn run_repair(opts: &SetupOptions) -> Result<(), String> {
         println!();
         println!("repair complete.");
     }
-    Ok(())
 }
 
 // ── Reindex path ───────────────────────────────────────────────────────────
 
-fn run_reindex(opts: &SetupOptions) -> Result<i32, String> {
+fn run_reindex(opts: &SetupOptions) {
     let mode = opts.mode;
     if matches!(mode, OutputMode::Tui) {
-        println!("reindex is no longer needed — anchor data lives on the orphan branch.");
+        println!("reindex is no longer needed — oobo data lives on the orphan branch.");
     }
-    Ok(0)
 }
 
-pub fn run_setup(non_interactive: bool) -> Result<(), String> {
+pub fn run_setup(non_interactive: bool) -> Result<(), CliError> {
     if let Err(e) = crate::commands::agent::ensure_skill_file() {
-        eprintln!("anchor: warning: could not install skill file: {e}");
+        eprintln!("oobo: warning: could not install skill file: {e}");
     }
 
     eprintln!("  scanning for AI tools and projects...");
@@ -168,14 +133,11 @@ pub fn run_setup(non_interactive: bool) -> Result<(), String> {
     let cfg = Config::load_or_default();
 
     let outcome = if !non_interactive && std::io::stdout().is_terminal() {
-        match crate::tui::setup::run_setup_wizard(&cfg, scan)? {
-            Some(outcome) => outcome,
-            None => {
-                println!();
-                println!("  Setup cancelled.");
-                println!();
-                return Ok(());
-            }
+        if let Some(outcome) = crate::tui::setup::run_setup_wizard(&cfg, scan)? { outcome } else {
+            println!();
+            println!("  Setup cancelled.");
+            println!();
+            return Ok(());
         }
     } else {
         eprintln!("  non-interactive environment detected — using defaults");
@@ -197,14 +159,6 @@ pub fn run_setup(non_interactive: bool) -> Result<(), String> {
         println!("  Projects disabled: {disabled_projects}");
     }
 
-    if new_cfg.git.alias_enabled {
-        if let Err(e) = crate::alias::install_alias() {
-            eprintln!("anchor: warning: could not install alias: {e}");
-        } else {
-            println!("  Git alias installed (git = anchor)");
-        }
-    }
-
     println!("  Agent skill installed at ~/.agents/skills/oobo/");
 
     let hooks_installed = crate::hooks::install::install_all_agent_hooks();
@@ -220,11 +174,11 @@ pub fn run_setup(non_interactive: bool) -> Result<(), String> {
 
     println!();
     println!("  You're all set! Try:");
-    println!("    anchor             -- see your anchor feed");
-    println!("    anchor anchors     -- enriched commit history");
-    println!("    anchor search <q>  -- find any past session");
-    println!("    anchor enable      -- enable the current repo later");
-    println!("    anchor disable     -- make anchor stay quiet in this repo");
+    println!("    oobo               -- see your memory feed");
+    println!("    oobo anchor show <sha>  -- drill into a commit");
+    println!("    oobo search <q>    -- find any past session");
+    println!("    oobo enable        -- enable the current repo later");
+    println!("    oobo disable       -- make oobo stay quiet in this repo");
     println!();
     Ok(())
 }
@@ -261,7 +215,7 @@ fn run_initial_scan() -> ScanInfo {
 
     let mut project_choices: Vec<ProjectChoice> = project_map
         .into_iter()
-        .filter_map(|(path, (tools, session_count))| {
+        .map(|(path, (tools, session_count))| {
             let name = std::path::Path::new(&path)
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -270,14 +224,14 @@ fn run_initial_scan() -> ScanInfo {
             let id = crate::project::id_for_root(&path);
             let already_enabled = crate::project_config::is_enabled(&path);
             let has_sessions = session_count > 0;
-            Some(ProjectChoice {
+            ProjectChoice {
                 id,
                 name,
                 path,
                 tools: tools.into_iter().collect(),
                 sessions: session_count,
                 enabled: already_enabled || has_sessions,
-            })
+            }
         })
         .collect();
 
@@ -291,7 +245,7 @@ fn run_initial_scan() -> ScanInfo {
     }
 }
 
-fn apply_project_choices(projects: &[ProjectChoice]) -> Result<(usize, usize), String> {
+fn apply_project_choices(projects: &[ProjectChoice]) -> Result<(usize, usize), CliError> {
     let mut enabled = 0usize;
     let mut disabled = 0usize;
     for project in projects {
@@ -340,7 +294,7 @@ fn install_project_hooks_with_status(root: &str, label: &str) {
             }
         }
         Err(e) => {
-            eprintln!("anchor: warning: could not install git hooks for {label}: {e}");
+            eprintln!("oobo: warning: could not install git hooks for {label}: {e}");
         }
     }
 }

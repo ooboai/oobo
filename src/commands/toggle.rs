@@ -6,17 +6,13 @@
 
 use crate::cli::OutputMode;
 use crate::config::Config;
+use crate::error::CmdResult;
 
 /// `oobo enable` — mark the current project as tracked.
-pub fn enable(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
-    let (root, name) = match project_context(cfg) {
-        Some(tuple) => tuple,
-        None => {
-            eprintln!(
-                "error: not a git repository. cd into a repo first, or use 'anchor setup' to manage multiple projects."
-            );
-            return Ok(1);
-        }
+pub fn enable(cfg: &Config, mode: OutputMode) -> CmdResult {
+    let (root, name) = if let Some(tuple) = project_context(cfg) { tuple } else {
+        eprintln!("oobo: not inside a git repository.");
+        return Ok(1);
     };
 
     let project_id = crate::project::id_for_root(&root);
@@ -24,29 +20,26 @@ pub fn enable(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
     let was_enabled = crate::project_config::is_enabled(&root);
 
     if was_enabled {
+        // Always refresh hooks to pick up new events added in upgrades.
+        let _ = crate::hooks::install::install_project_hooks(&root);
+        let _ = crate::hooks::install::install_all_agent_hooks();
         emit_already_enabled(&name, &project_id, &root, mode);
         return Ok(0);
     }
 
     crate::project_config::set_enabled(&root, &project_id, true)?;
-    // Best-effort: install hooks (idempotent) + kick off a background reindex.
     let _ = crate::hooks::install::install_project_hooks(&root);
-    spawn_background_index(&root, &project_id);
+    let _ = crate::hooks::install::install_all_agent_hooks();
 
     emit_enabled(&name, &project_id, &root, created_project_config, mode);
     Ok(0)
 }
 
 /// `oobo disable` — mark the current project as not tracked.
-pub fn disable(cfg: &Config, mode: OutputMode) -> Result<i32, String> {
-    let (root, name) = match project_context(cfg) {
-        Some(tuple) => tuple,
-        None => {
-            eprintln!(
-                "error: not a git repository. cd into a repo first, or use 'anchor setup' to manage multiple projects."
-            );
-            return Ok(1);
-        }
+pub fn disable(cfg: &Config, mode: OutputMode) -> CmdResult {
+    let (root, name) = if let Some(tuple) = project_context(cfg) { tuple } else {
+        eprintln!("oobo: not inside a git repository.");
+        return Ok(1);
     };
 
     let project_id = crate::project::id_for_root(&root);
@@ -76,8 +69,6 @@ fn project_context(cfg: &Config) -> Option<(String, String)> {
     Some((root, name))
 }
 
-fn spawn_background_index(_root: &str, _project_id: &str) {}
-
 fn emit_enabled(name: &str, id: &str, path: &str, created_project_config: bool, mode: OutputMode) {
     match mode {
         OutputMode::Agent => println!("enabled {name}"),
@@ -85,7 +76,6 @@ fn emit_enabled(name: &str, id: &str, path: &str, created_project_config: bool, 
             let json = serde_json::json!({
                 "project": { "id": id, "name": name, "path": path },
                 "enabled": true,
-                "indexing": true,
                 "project_config": {
                     "path": crate::project_config::path_for(path),
                     "created": created_project_config,
@@ -94,7 +84,7 @@ fn emit_enabled(name: &str, id: &str, path: &str, created_project_config: bool, 
             crate::utils::print_json(&json);
         }
         OutputMode::Tui => {
-            println!("anchor enabled for '{name}'. indexing sessions in the background.");
+            println!("oobo enabled for '{name}'. hooks installed.");
         }
     }
 }
@@ -106,12 +96,12 @@ fn emit_already_enabled(name: &str, id: &str, path: &str, mode: OutputMode) {
             let json = serde_json::json!({
                 "project": { "id": id, "name": name, "path": path },
                 "enabled": true,
-                "indexing": false,
+                "noop": true,
             });
             crate::utils::print_json(&json);
         }
         OutputMode::Tui => {
-            println!("anchor is already enabled for '{name}'.");
+            println!("oobo is already enabled for '{name}'.");
         }
     }
 }
@@ -128,7 +118,7 @@ fn emit_disabled(name: &str, id: &str, mode: OutputMode) {
         }
         OutputMode::Tui => {
             println!(
-                "anchor disabled for '{name}'. existing anchors retained. run 'anchor enable' to resume."
+                "oobo disabled for '{name}'. existing anchors retained. run 'oobo enable' to resume."
             );
         }
     }
@@ -145,7 +135,7 @@ fn emit_already_disabled(name: &str, id: &str, mode: OutputMode) {
             crate::utils::print_json(&json);
         }
         OutputMode::Tui => {
-            println!("anchor is already disabled for '{name}'.");
+            println!("oobo is already disabled for '{name}'.");
         }
     }
 }

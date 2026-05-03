@@ -40,7 +40,7 @@ fn endpoint(cfg: &Config, path: &str) -> String {
     )
 }
 
-pub fn search_anchors_with_timeout(
+pub async fn search_anchors_with_timeout(
     cfg: &Config,
     request: &payload::SearchRequest,
     api_key_override: Option<&str>,
@@ -49,7 +49,7 @@ pub fn search_anchors_with_timeout(
     let url = endpoint(cfg, "anchors/search");
     let api_key = api_key_override.unwrap_or(&cfg.server.api_key);
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(2))
         .timeout(timeout)
         .build()
@@ -59,20 +59,22 @@ pub fn search_anchors_with_timeout(
         .post(&url)
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
-        .header("User-Agent", format!("anchor/{}", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", format!("oobo/{}", env!("CARGO_PKG_VERSION")))
         .json(request)
         .send()
+        .await
         .map_err(|e| RemoteError::Request(e.to_string()))?;
 
     let status = resp.status();
     if status.is_success() {
         return resp
             .json::<payload::SearchResponse>()
+            .await
             .map_err(|e| RemoteError::Parse(e.to_string()));
     }
 
     if status.as_u16() == 401 {
-        if let Ok(err) = resp.json::<payload::IngestError>() {
+        if let Ok(err) = resp.json::<payload::IngestError>().await {
             let detail = err
                 .detail
                 .or(err.message)
@@ -83,7 +85,7 @@ pub fn search_anchors_with_timeout(
     }
 
     if status.as_u16() == 422 {
-        let detail = resp.text().unwrap_or_default();
+        let detail = resp.text().await.unwrap_or_default();
         if detail.is_empty() {
             return Err(RemoteError::Rejected(
                 "search request rejected (422)".to_string(),
@@ -95,7 +97,7 @@ pub fn search_anchors_with_timeout(
     }
 
     if status.is_server_error() {
-        let body = resp.text().unwrap_or_default();
+        let body = resp.text().await.unwrap_or_default();
         if body.is_empty() {
             return Err(RemoteError::Server(format!("HTTP {status}")));
         }
@@ -103,29 +105,6 @@ pub fn search_anchors_with_timeout(
     }
 
     Err(RemoteError::Http(format!("HTTP {status}")))
-}
-
-#[allow(dead_code)]
-pub fn check_connection(cfg: &Config) -> Result<String, String> {
-    let url = endpoint(cfg, "anchors/health");
-
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| format!("client error: {e}"))?;
-
-    let resp = client
-        .get(&url)
-        .header("User-Agent", format!("anchor/{}", env!("CARGO_PKG_VERSION")))
-        .send()
-        .map_err(|e| format!("connection failed: {e}"))?;
-
-    let status = resp.status();
-    if status.is_success() {
-        Ok(format!("connected (HTTP {status})"))
-    } else {
-        Err(format!("server returned HTTP {status}"))
-    }
 }
 
 #[cfg(test)]

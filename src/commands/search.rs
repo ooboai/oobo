@@ -3,6 +3,7 @@
 
 use crate::cli::OutputMode;
 use crate::config::Config;
+use crate::error::{CliError, CmdResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
@@ -45,24 +46,30 @@ pub struct Hit {
     pub score: f64,
 }
 
-pub fn run(cfg: &Config, query: &str, opts: Options, mode: OutputMode) -> Result<i32, String> {
+#[tracing::instrument(skip_all, fields(query))]
+pub async fn run(cfg: &Config, query: &str, opts: &Options, mode: OutputMode) -> CmdResult {
     if query.trim().is_empty() {
         eprintln!("error: query cannot be empty");
         return Ok(2);
     }
 
     let effective_key = crate::commands::sync::resolve_api_key(cfg);
-    let source = resolve_source(&effective_key, opts.source)?;
+    let source = resolve_source(&effective_key, opts.source);
+
+    if !matches!(source, Source::Remote) && crate::git::proxy::project_root(cfg).is_none() {
+        eprintln!("oobo: not inside a git repository.");
+        return Ok(1);
+    }
     match source {
         Source::Remote => {
             if effective_key.is_empty() {
-                eprintln!("error: --remote requires an API key. run: anchor settings set key <...>");
+                eprintln!("error: --remote requires an API key. run: oobo settings set key <...>");
                 return Ok(2);
             }
         }
         Source::Both => {
             if effective_key.is_empty() {
-                eprintln!("error: --both requires an API key. run: anchor settings set key <...>");
+                eprintln!("error: --both requires an API key. run: oobo settings set key <...>");
                 return Ok(2);
             }
         }
@@ -70,10 +77,10 @@ pub fn run(cfg: &Config, query: &str, opts: Options, mode: OutputMode) -> Result
     }
 
     if matches!(source, Source::Remote) {
-        match search_remote(cfg, &effective_key, query, &opts) {
+        match search_remote(cfg, &effective_key, query, opts).await {
             Ok(mut hits) => {
                 sort_and_limit(&mut hits, opts.limit);
-                emit(&hits, query, &["remote"], mode);
+                emit(&hits, query, &["remote"], true, mode);
                 return Ok(0);
             }
             Err(e) => {
@@ -84,48 +91,50 @@ pub fn run(cfg: &Config, query: &str, opts: Options, mode: OutputMode) -> Result
     }
 
     let project_root = crate::git::proxy::project_root(cfg);
-    let local_hits = search_local(project_root.as_deref(), query, &opts)?;
+    let local_hits = search_local(project_root.as_deref(), query, opts);
 
     let mut hits = local_hits;
     let mut sources: Vec<&'static str> = vec!["local"];
 
     if matches!(source, Source::Both) {
-        match search_remote(cfg, &effective_key, query, &opts) {
+        match search_remote(cfg, &effective_key, query, opts).await {
             Ok(mut remote_hits) => {
                 sources.push("remote");
                 hits.append(&mut remote_hits);
             }
             Err(e) => {
-                eprintln!("warning: remote search failed: {e}. showing local results only.");
+                tracing::debug!("remote search failed: {e}");
+                sources.push("remote_failed");
             }
         }
     }
 
     sort_and_limit(&mut hits, opts.limit);
 
-    emit(&hits, query, &sources, mode);
+    let has_key = !effective_key.is_empty();
+    emit(&hits, query, &sources, has_key, mode);
     Ok(0)
 }
 
-fn resolve_source(api_key: &str, explicit: Option<Source>) -> Result<Source, String> {
+fn resolve_source(api_key: &str, explicit: Option<Source>) -> Source {
     if let Some(s) = explicit {
-        return Ok(s);
+        return s;
     }
     if api_key.is_empty() {
-        Ok(Source::Local)
+        Source::Local
     } else {
-        Ok(Source::Both)
+        Source::Both
     }
 }
 
 /// Public entry used by the TUI's in-app search. Runs the same ranking as
 /// `oobo search` (local only) and returns raw hits.
-pub fn collect_local(cfg: &Config, query: &str, opts: &Options) -> Result<Vec<Hit>, String> {
+pub fn collect_local(cfg: &Config, query: &str, opts: &Options) -> Result<Vec<Hit>, CliError> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
     let project_root = crate::git::proxy::project_root(cfg);
-    let mut hits = search_local(project_root.as_deref(), query, opts)?;
+    let mut hits = search_local(project_root.as_deref(), query, opts);
     hits.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
@@ -137,16 +146,16 @@ pub fn collect_local(cfg: &Config, query: &str, opts: &Options) -> Result<Vec<Hi
     Ok(hits)
 }
 
-fn search_local(project_root: Option<&str>, query: &str, opts: &Options) -> Result<Vec<Hit>, String> {
+fn search_local(project_root: Option<&str>, query: &str, opts: &Options) -> Vec<Hit> {
     let q_terms: Vec<String> = tokenize(query);
     if q_terms.is_empty() {
-        return Ok(vec![]);
+        return vec![];
     }
     let since_ts = opts.since.as_deref().and_then(parse_since);
     let mut hits: Vec<Hit> = Vec::new();
 
     let Some(root) = project_root else {
-        return Ok(hits);
+        return hits;
     };
 
     let hashes = crate::git::orphan::list_anchor_hashes(root);
@@ -177,15 +186,15 @@ fn search_local(project_root: Option<&str>, query: &str, opts: &Options) -> Resu
             score,
         });
     }
-    Ok(hits)
+    hits
 }
 
-fn search_remote(
+async fn search_remote(
     cfg: &Config,
     api_key: &str,
     query: &str,
     opts: &Options,
-) -> Result<Vec<Hit>, String> {
+) -> Result<Vec<Hit>, CliError> {
     let request = crate::remote::payload::SearchRequest {
         query: query.to_string(),
         since: opts.since.clone(),
@@ -212,7 +221,8 @@ fn search_remote(
         &request,
         Some(api_key),
         std::time::Duration::from_secs(5),
-    )?;
+    )
+    .await?;
 
     Ok(response
         .hits
@@ -264,7 +274,7 @@ fn term_score(haystack: &str, terms: &[String]) -> f64 {
     if hits == 0 {
         return 0.0;
     }
-    hits as f64 / terms.len() as f64
+    f64::from(hits) / terms.len() as f64
 }
 
 fn snippet(text: &str, terms: &[String]) -> String {
@@ -309,15 +319,22 @@ fn human_tokens(tokens: i64) -> String {
 
 // ── emitters ───────────────────────────────────────────────────────────────
 
-fn emit(hits: &[Hit], query: &str, sources: &[&str], mode: OutputMode) {
+fn emit(hits: &[Hit], query: &str, sources: &[&str], has_key: bool, mode: OutputMode) {
     match mode {
         OutputMode::Json => emit_json(hits, query, sources),
-        OutputMode::Agent => emit_agent(hits),
-        OutputMode::Tui => emit_pretty(hits, query),
+        OutputMode::Agent => emit_agent(hits, sources, has_key),
+        OutputMode::Tui => emit_pretty(hits, query, sources, has_key),
     }
 }
 
-fn emit_agent(hits: &[Hit]) {
+fn emit_agent(hits: &[Hit], _sources: &[&str], has_key: bool) {
+    if hits.is_empty() {
+        println!("no results");
+        if !has_key {
+            println!("note: cloud search not configured. run: oobo settings set key <API_KEY>");
+        }
+        return;
+    }
     let multi_project = hits
         .iter()
         .map(|h| &h.project_name)
@@ -328,13 +345,9 @@ fn emit_agent(hits: &[Hit]) {
         let sha = h.anchor_sha.clone().unwrap_or_else(|| "-".to_string());
         let tool = h.tool.clone().unwrap_or_else(|| "-".to_string());
         let tokens = h
-            .tokens
-            .map(human_tokens)
-            .unwrap_or_else(|| "-".to_string());
+            .tokens.map_or_else(|| "-".to_string(), human_tokens);
         let when = h
-            .timestamp
-            .map(relative_time)
-            .unwrap_or_else(|| "-".to_string());
+            .timestamp.map_or_else(|| "-".to_string(), relative_time);
         let snippet: String = h.snippet.chars().take(60).collect();
         if multi_project {
             println!(
@@ -345,19 +358,28 @@ fn emit_agent(hits: &[Hit]) {
             println!("{sha} {tool} {tokens} {when} {snippet}");
         }
     }
+    if !hits.is_empty() {
+        println!();
+        println!("commands:");
+        println!("  oobo anchor show <sha>       # details for any result above");
+        println!("  oobo search \"query\" --json   # structured output");
+    }
 }
 
-fn emit_pretty(hits: &[Hit], query: &str) {
+fn emit_pretty(hits: &[Hit], query: &str, _sources: &[&str], has_key: bool) {
     if hits.is_empty() {
         println!("no results for \"{query}\"");
+        if !has_key {
+            println!();
+            println!("  \x1b[2mcloud search: not configured\x1b[0m");
+            println!("  \x1b[2mto enable: oobo settings set key <API_KEY>\x1b[0m");
+        }
         return;
     }
     for h in hits {
         let tool = h.tool.clone().unwrap_or_else(|| "-".to_string());
         let when = h
-            .timestamp
-            .map(relative_time)
-            .unwrap_or_else(|| "-".to_string());
+            .timestamp.map_or_else(|| "-".to_string(), relative_time);
         let intent = if h.intent.is_empty() {
             "(no intent)"
         } else {
@@ -399,8 +421,12 @@ fn emit_json(hits: &[Hit], query: &str, sources: &[&str]) {
     let json = serde_json::json!({
         "query": query,
         "sources": sources,
+        "cloud_connected": sources.contains(&"remote"),
         "total_hits": hits.len(),
         "hits": arr,
+        "actions": [
+            { "command": "oobo anchor show <sha>", "description": "show anchor details" },
+        ],
     });
     crate::utils::print_json(&json);
 }
@@ -456,16 +482,16 @@ mod tests {
 
     #[test]
     fn resolve_source_defaults_to_both_when_key_exists() {
-        assert_eq!(resolve_source("", None).unwrap(), Source::Local);
-        assert_eq!(resolve_source("sk_test", None).unwrap(), Source::Both);
+        assert_eq!(resolve_source("", None), Source::Local);
+        assert_eq!(resolve_source("sk_test", None), Source::Both);
         assert_eq!(
-            resolve_source("sk_test", Some(Source::Remote)).unwrap(),
+            resolve_source("sk_test", Some(Source::Remote)),
             Source::Remote
         );
     }
 
-    #[test]
-    fn remote_search_posts_contract_and_maps_hits() {
+    #[tokio::test]
+    async fn remote_search_posts_contract_and_maps_hits() {
         let body = r#"{
           "hits": [
             {
@@ -497,7 +523,7 @@ mod tests {
             limit: 5,
         };
 
-        let hits = search_remote(&cfg, "sk_test", "auth middleware", &opts).unwrap();
+        let hits = search_remote(&cfg, "sk_test", "auth middleware", &opts).await.unwrap();
 
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].project_id, "p1");

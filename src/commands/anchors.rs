@@ -7,8 +7,8 @@
 use crate::cli::OutputMode;
 use crate::config::Config;
 use crate::core::anchor::Anchor;
-use crate::core::turn::TurnSnapshot;
-use std::collections::HashMap;
+use crate::error::{CliError, CmdResult};
+use crate::feed::{FeedRow, RowKind};
 
 /// User-facing filters for `anchors` list mode.
 #[derive(Debug, Default, Clone)]
@@ -16,7 +16,6 @@ pub struct Options {
     pub limit: usize,
     pub since: Option<String>,
     pub tool: Option<String>,
-    pub project: Option<String>,
 }
 
 // ------------------------------------------------------------------
@@ -24,13 +23,10 @@ pub struct Options {
 // ------------------------------------------------------------------
 
 /// `oobo anchors` — list recent anchors.
-pub fn run_list(cfg: &Config, opts: Options, mode: OutputMode) -> Result<i32, String> {
-    let in_repo = crate::git::proxy::project_root(cfg).is_some();
-
-    if in_repo && opts.project.is_some() {
-        eprintln!("error: --project is not allowed inside a repo (current project is implied)");
-        return Ok(2);
-    }
+#[tracing::instrument(skip_all)]
+pub fn run_list(cfg: &Config, opts: &Options, mode: OutputMode) -> CmdResult {
+    let root = crate::git::proxy::project_root(cfg);
+    let in_repo = root.is_some();
 
     if in_repo
         && mode == OutputMode::Tui
@@ -52,17 +48,32 @@ pub fn run_list(cfg: &Config, opts: Options, mode: OutputMode) -> Result<i32, St
         None => None,
     };
 
-    let rows = if in_repo {
-        load_in_repo(cfg, &opts, since_epoch)?
+    let rows = if let Some(ref root) = root {
+        crate::feed::load(cfg, root, &crate::feed::LoadOptions {
+            limit: opts.limit,
+            since: since_epoch,
+            tool: opts.tool.clone(),
+        })?
     } else {
-        eprintln!("anchor: cross-project listing requires being inside a git repository.");
-        Vec::new()
+        if mode == OutputMode::Json {
+            let json = serde_json::json!({ "error": "not inside a git repository" });
+            crate::utils::print_json(&json);
+        } else {
+            eprintln!("oobo: not inside a git repository.");
+        }
+        return Ok(1);
     };
 
+    let project_name = root
+        .as_deref()
+        .and_then(|r| std::path::Path::new(r).file_name())
+        .and_then(|s| s.to_str())
+        .unwrap_or("all");
+
     match mode {
-        OutputMode::Json => emit_list_json(cfg, &rows, in_repo),
-        OutputMode::Agent => emit_list_agent(&rows, in_repo),
-        OutputMode::Tui => emit_list_pretty(&rows, in_repo),
+        OutputMode::Json => emit_list_json(cfg, &rows, project_name, in_repo),
+        OutputMode::Agent => emit_list_agent(&rows, project_name, in_repo),
+        OutputMode::Tui => emit_list_pretty(&rows, project_name, in_repo),
     }
     Ok(0)
 }
@@ -72,11 +83,12 @@ pub fn run_list(cfg: &Config, opts: Options, mode: OutputMode) -> Result<i32, St
 // ------------------------------------------------------------------
 
 /// `oobo anchors show <sha>` — drill-down on one anchor.
-pub fn run_show(cfg: &Config, sha: &str, mode: OutputMode) -> Result<i32, String> {
+#[tracing::instrument(skip_all, fields(sha))]
+pub fn run_show(cfg: &Config, sha: &str, mode: OutputMode) -> CmdResult {
     let root = crate::git::proxy::project_root(cfg)
-        .ok_or_else(|| "not inside a git repository".to_string())?;
+        .ok_or(CliError::NotARepo)?;
 
-    let matches = resolve_sha(&root, sha)?;
+    let matches = resolve_sha(&root, sha);
     match matches.len() {
         0 => {
             eprintln!("error: no anchor found for '{sha}'");
@@ -98,323 +110,18 @@ pub fn run_show(cfg: &Config, sha: &str, mode: OutputMode) -> Result<i32, String
     let sessions = load_sessions(&root, &commit_hash);
 
     match mode {
-        OutputMode::Json => emit_show_json(cfg, &anchor, &sessions),
-        OutputMode::Agent => emit_show_agent(&anchor, &sessions),
-        OutputMode::Tui => emit_show_pretty(&anchor, &sessions),
-    }
-    Ok(0)
-}
-
-// ------------------------------------------------------------------
-// row model
-// ------------------------------------------------------------------
-
-#[derive(Debug, Clone)]
-struct Row {
-    kind: RowKind,
-    project_name: String,
-    id: String,
-    subject: String,
-    timestamp: i64,
-    tool: Option<String>,
-    tokens: i64,
-    session_count: usize,
-    ai_pct: Option<i64>,
-    files: usize,
-    tool_calls: usize,
-    session_id: Option<String>,
-    turn_index: Option<i64>,
-    parent_anchor: Option<String>,
-    restored_from: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RowKind {
-    Anchor,
-    ShadowAnchor,
-}
-
-impl RowKind {
-    fn agent_label(self) -> &'static str {
-        match self {
-            RowKind::Anchor => "anchor",
-            RowKind::ShadowAnchor => "shadow",
+        OutputMode::Json => {
+            emit_show_json(cfg, &anchor, &sessions);
+            Ok(0)
+        }
+        OutputMode::Agent => {
+            emit_show_agent(&anchor, &sessions);
+            Ok(0)
+        }
+        OutputMode::Tui => {
+            crate::tui::app::run_show(cfg, &commit_hash)
         }
     }
-
-    fn json_label(self) -> &'static str {
-        match self {
-            RowKind::Anchor => "anchor",
-            RowKind::ShadowAnchor => "shadow_anchor",
-        }
-    }
-}
-
-// ------------------------------------------------------------------
-// loaders
-// ------------------------------------------------------------------
-
-fn load_in_repo(
-    cfg: &Config,
-    opts: &Options,
-    since: Option<i64>,
-) -> Result<Vec<Row>, String> {
-    let n = opts.limit.max(1);
-    let log = crate::git::proxy::run_git_capture(
-        cfg,
-        &[
-            "log",
-            &format!("-{}", n * 4),
-            "--format=%H|||%s|||%ct",
-        ],
-    )
-    .unwrap_or_default();
-
-    let root = crate::git::proxy::project_root(cfg).unwrap_or_default();
-
-    let project_name = std::path::Path::new(&root)
-        .file_name()
-        .and_then(|s| s.to_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "-".to_string());
-
-    let (all_anchors, all_links) =
-        crate::git::anchor_cache::load_anchors_cached(&root);
-    let anchor_map: HashMap<String, &Anchor> = all_anchors
-        .iter()
-        .map(|a| (a.commit_hash.clone(), a))
-        .collect();
-
-    let mut out: Vec<Row> = Vec::new();
-    for line in log.lines() {
-        let parts: Vec<&str> = line.splitn(3, "|||").collect();
-        if parts.len() < 3 {
-            continue;
-        }
-        let sha = parts[0].to_string();
-        let subject = parts[1].to_string();
-        let ts: i64 = parts[2].parse().unwrap_or(0);
-
-        if let Some(s) = since {
-            if ts < s {
-                continue;
-            }
-        }
-
-        let (tool, tokens, count) = if let Some(_anchor) = anchor_map.get(&sha) {
-            let links = all_links.get(&sha).cloned().unwrap_or_default();
-            summarize_session_links(&links)
-        } else {
-            (None, 0, 0)
-        };
-
-        if let Some(t) = opts.tool.as_deref() {
-            let want = t.to_lowercase();
-            let has = tool
-                .as_deref()
-                .map(|x| x.to_lowercase())
-                .unwrap_or_default();
-            if has != want {
-                continue;
-            }
-        }
-
-        let ai_pct = anchor_map
-            .get(&sha)
-            .and_then(|a| a.ai_percentage)
-            .map(|p| p.round() as i64);
-
-        out.push(Row {
-            kind: RowKind::Anchor,
-            project_name: project_name.clone(),
-            id: sha,
-            subject,
-            timestamp: ts,
-            tool,
-            tokens,
-            session_count: count,
-            ai_pct,
-            files: 0,
-            tool_calls: 0,
-            session_id: None,
-            turn_index: None,
-            parent_anchor: None,
-            restored_from: None,
-        });
-    }
-    if !root.is_empty() {
-        let parents = build_shadow_parents_from_cached(&all_anchors);
-        out.extend(load_turn_rows(&root, &project_name, opts, since, &parents));
-    }
-    sort_memory_rows(&mut out);
-    out.truncate(opts.limit);
-    Ok(out)
-}
-
-fn load_turn_rows(
-    project_root: &str,
-    project_name: &str,
-    opts: &Options,
-    since: Option<i64>,
-    parents: &HashMap<String, String>,
-) -> Vec<Row> {
-    crate::git::turns::list_turn_snapshots(project_root)
-        .into_iter()
-        .filter_map(|turn| turn_to_row(turn, project_name, opts, since, parents))
-        .collect()
-}
-
-fn turn_to_row(
-    turn: TurnSnapshot,
-    project_name: &str,
-    opts: &Options,
-    since: Option<i64>,
-    parents: &HashMap<String, String>,
-) -> Option<Row> {
-    let ts = turn.ended_at.or(turn.started_at).unwrap_or(turn.created_at);
-    if let Some(s) = since {
-        if ts < s {
-            return None;
-        }
-    }
-    if let Some(t) = opts.tool.as_deref() {
-        if !turn.source.eq_ignore_ascii_case(t) {
-            return None;
-        }
-    }
-    Some(Row {
-        kind: RowKind::ShadowAnchor,
-        project_name: project_name.to_string(),
-        id: turn.id.clone(),
-        subject: turn_subject(&turn),
-        timestamp: ts,
-        tool: Some(turn.source.clone()),
-        tokens: 0,
-        session_count: 1,
-        ai_pct: None,
-        files: turn_file_count(&turn),
-        tool_calls: turn.memory.tool_calls.len(),
-        session_id: Some(turn.session_id.clone()),
-        turn_index: Some(turn.turn_index),
-        parent_anchor: parents.get(&turn.id).cloned(),
-        restored_from: turn.restored_from.clone(),
-    })
-}
-
-fn turn_subject(turn: &TurnSnapshot) -> String {
-    for event in &turn.memory.hook_events {
-        let Some(payload) = event.payload.as_ref() else {
-            continue;
-        };
-        for key in ["prompt", "message", "text", "input"] {
-            if let Some(value) = payload.get(key).and_then(|v| v.as_str()) {
-                let value = value.lines().next().unwrap_or(value).trim();
-                if !value.is_empty() {
-                    return value.to_string();
-                }
-            }
-        }
-    }
-    format!("anchor #{}", turn.turn_index)
-}
-
-fn turn_file_count(turn: &TurnSnapshot) -> usize {
-    let mut files = std::collections::HashSet::new();
-    for call in &turn.memory.tool_calls {
-        if let Some(input) = call.input.as_ref() {
-            collect_file_paths_from_value(input, &mut files);
-        }
-    }
-    for event in &turn.memory.hook_events {
-        if let Some(payload) = event.payload.as_ref() {
-            collect_file_paths_from_value(payload, &mut files);
-        }
-    }
-    if files.is_empty() {
-        turn.files.len()
-    } else {
-        files.len()
-    }
-}
-
-fn collect_file_paths_from_value(
-    value: &serde_json::Value,
-    files: &mut std::collections::HashSet<String>,
-) {
-    for key in ["file_path", "path"] {
-        if let Some(path) = value.get(key).and_then(|v| v.as_str()) {
-            push_counted_file(path, files);
-        }
-    }
-    for key in ["modified_files", "files", "file_paths"] {
-        if let Some(items) = value.get(key).and_then(|v| v.as_array()) {
-            for item in items {
-                if let Some(path) = item.as_str() {
-                    push_counted_file(path, files);
-                }
-            }
-        }
-    }
-    if let Some(input) = value.get("tool_input") {
-        collect_file_paths_from_value(input, files);
-    }
-}
-
-fn push_counted_file(path: &str, files: &mut std::collections::HashSet<String>) {
-    if path.is_empty() || path == "." || path.ends_with('/') {
-        return;
-    }
-    files.insert(path.to_string());
-}
-
-fn build_shadow_parents_from_cached(
-    all_anchors: &[Anchor],
-) -> HashMap<String, String> {
-    let mut parents = HashMap::new();
-    for anchor in all_anchors {
-        for turn in &anchor.turns {
-            parents
-                .entry(turn.id.clone())
-                .or_insert_with(|| anchor.commit_hash.clone());
-        }
-    }
-    parents
-}
-
-fn sort_memory_rows(rows: &mut [Row]) {
-    rows.sort_by(|a, b| {
-        if a.parent_anchor.as_deref() == Some(b.id.as_str()) {
-            return std::cmp::Ordering::Greater;
-        }
-        if b.parent_anchor.as_deref() == Some(a.id.as_str()) {
-            return std::cmp::Ordering::Less;
-        }
-        if a.parent_anchor.is_some() && a.parent_anchor == b.parent_anchor {
-            return a
-                .turn_index
-                .cmp(&b.turn_index)
-                .then_with(|| a.id.cmp(&b.id));
-        }
-        b.timestamp.cmp(&a.timestamp).then_with(|| b.id.cmp(&a.id))
-    });
-}
-
-fn summarize_session_links(
-    links: &[crate::core::anchor::SessionLink],
-) -> (Option<String>, i64, usize) {
-    if links.is_empty() {
-        return (None, 0, 0);
-    }
-    let tool = Some(links[0].agent.clone());
-    let total: i64 = links
-        .iter()
-        .map(|l| {
-            l.input_tokens.unwrap_or(0) as i64
-                + l.output_tokens.unwrap_or(0) as i64
-                + l.cache_read_tokens.unwrap_or(0) as i64
-                + l.cache_creation_tokens.unwrap_or(0) as i64
-        })
-        .sum();
-    (tool, total, links.len())
 }
 
 fn load_anchor(project_root: &str, commit_hash: &str) -> Option<Anchor> {
@@ -454,54 +161,67 @@ fn load_sessions(project_root: &str, commit_hash: &str) -> Vec<SessionInfo> {
 // SHA resolution
 // ------------------------------------------------------------------
 
-fn resolve_sha(project_root: &str, prefix: &str) -> Result<Vec<(String, String)>, String> {
+fn resolve_sha(project_root: &str, prefix: &str) -> Vec<(String, String)> {
     let hashes = crate::git::orphan::list_anchor_hashes(project_root);
-    let matches: Vec<(String, String)> = hashes.into_iter()
+    hashes.into_iter()
         .filter(|h| h.starts_with(prefix))
         .filter_map(|h| {
             let anchor = crate::git::orphan::read_anchor(project_root, &h)?;
             Some((h, anchor.message))
         })
-        .collect();
-    Ok(matches)
+        .collect()
 }
 
 // ------------------------------------------------------------------
 // emitters — list
 // ------------------------------------------------------------------
 
-fn emit_list_agent(rows: &[Row], in_repo: bool) {
+fn emit_list_agent(rows: &[FeedRow], project_name: &str, in_repo: bool) {
     for r in rows {
         let id = short_id(&r.id);
         let rel = relative_time(r.timestamp);
         let subject = truncate_fixed(&r.subject, 40);
-        let tool = r.tool.as_deref().unwrap_or("-");
+        let tool_base = r.tool.as_deref().unwrap_or("-");
+        let tool = match &r.worktree_hint {
+            Some(wt) => format!("{tool_base}@{}", truncate_fixed(wt, 12)),
+            None => tool_base.to_string(),
+        };
         let tokens = if r.tokens > 0 {
             human_tokens(r.tokens)
         } else {
             "-".to_string()
         };
         let count = match r.kind {
-            RowKind::Anchor if r.session_count > 0 => format!("{}s", r.session_count),
-            RowKind::ShadowAnchor => format!("{}f/{}t", r.files, r.tool_calls),
+            RowKind::Anchor if r.ai_pct.is_some() => format!("{}%ai", r.ai_pct.unwrap()),
+            RowKind::Shadow => {
+                let tid: String = r.id.chars().take(8).collect();
+                format!("t:{tid}")
+            }
             RowKind::Anchor => "-".to_string(),
         };
         let kind = r.kind.agent_label();
         if in_repo {
-            println!("{kind:<6} {id:<10} {rel:<4} {subject:<40} {tool:<8} {tokens:<4} {count}",);
+            println!("{kind:<6} {id:<10} {rel:<4} {subject:<40} {tool:<20} {tokens:<4} {count}",);
         } else {
-            let proj = truncate_fixed(&r.project_name, 14);
-            println!("{proj:<14} {kind:<6} {id:<10} {rel:<4} {subject:<40} {tool:<8} {tokens:<4} {count}",);
+            let proj = truncate_fixed(project_name, 14);
+            println!("{proj:<14} {kind:<6} {id:<10} {rel:<4} {subject:<40} {tool:<20} {tokens:<4} {count}",);
         }
+    }
+    if !rows.is_empty() {
+        println!();
+        println!("commands:");
+        println!("  oobo anchor show <sha>   # details for any anchor above");
+        println!("  oobo blame <file> [sha]  # per-line AI/human attribution");
+        println!("  oobo search \"query\"      # search sessions");
     }
 }
 
-fn emit_list_pretty(rows: &[Row], in_repo: bool) {
+fn emit_list_pretty(rows: &[FeedRow], project_name: &str, in_repo: bool) {
     if rows.is_empty() {
-        println!("No anchors yet. Commit through anchor to start anchoring sessions.");
+        println!("No anchors yet. Commit through oobo to start anchoring sessions.");
         return;
     }
-    println!("\x1b[1manchor memory\x1b[0m");
+    println!("\x1b[1moobo memory\x1b[0m");
     println!("\x1b[2manchors are committed memory; local anchors are restorable points\x1b[0m");
     println!();
     for (idx, r) in rows.iter().enumerate() {
@@ -528,22 +248,24 @@ fn emit_list_pretty(rows: &[Row], in_repo: bool) {
                     format!("{tool} · {tokens} · {sessions}"),
                 )
             }
-            RowKind::ShadowAnchor => {
-                let idx = r
-                    .turn_index
-                    .map(|i| format!("snapshot {i}"))
-                    .unwrap_or_else(|| "snapshot".to_string());
+            RowKind::Shadow => {
+                let tid: String = r.id.chars().take(8).collect();
                 let parent = r
                     .parent_anchor
                     .as_deref()
                     .map(|sha| format!(" · anchored under {}", short_sha(sha)))
+                    .unwrap_or_default();
+                let wt = r
+                    .worktree_hint
+                    .as_deref()
+                    .map(|w| format!(" · \x1b[36mwt:{w}\x1b[0m"))
                     .unwrap_or_default();
                 (
                     "\x1b[2m○\x1b[0m",
                     "\x1b[2manchor\x1b[0m",
                     "\x1b[2m",
                     format!(
-                        "{tool} · {idx} · {} file{} · {} tool{}{parent}",
+                        "{tool} · t:{tid} · {} file{} · {} tool{}{parent}{wt}",
                         r.files,
                         plural(r.files),
                         r.tool_calls,
@@ -562,7 +284,7 @@ fn emit_list_pretty(rows: &[Row], in_repo: bool) {
             );
             println!("   \x1b[2m{meta}{ai_pct}\x1b[0m");
         } else {
-            let proj = truncate_fixed(&r.project_name, 16);
+            let proj = truncate_fixed(project_name, 16);
             println!(
                 " {dot} \x1b[34m{proj:<16}\x1b[0m \x1b[2m{rel:<5}\x1b[0m {kind:<20} {id_color}{id:<10}\x1b[0m  \x1b[1m{subject}\x1b[0m",
             );
@@ -574,7 +296,7 @@ fn emit_list_pretty(rows: &[Row], in_repo: bool) {
     }
 }
 
-fn emit_list_json(_cfg: &Config, rows: &[Row], in_repo: bool) {
+fn emit_list_json(_cfg: &Config, rows: &[FeedRow], project_name: &str, in_repo: bool) {
     let arr: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
@@ -591,13 +313,13 @@ fn emit_list_json(_cfg: &Config, rows: &[Row], in_repo: bool) {
                 "ai_pct": r.ai_pct,
             });
             if !in_repo {
-                obj["project"] = serde_json::Value::String(r.project_name.clone());
+                obj["project"] = serde_json::Value::String(project_name.to_string());
             }
             match r.kind {
                 RowKind::Anchor => {
                     obj["sha"] = serde_json::Value::String(r.id.clone());
                 }
-                RowKind::ShadowAnchor => {
+                RowKind::Shadow => {
                     obj["turn_id"] = serde_json::Value::String(r.id.clone());
                     obj["shadow_anchor_id"] = serde_json::Value::String(r.id.clone());
                     obj["files"] = serde_json::Value::Number(r.files.into());
@@ -614,12 +336,23 @@ fn emit_list_json(_cfg: &Config, rows: &[Row], in_repo: bool) {
                     if let Some(restored_from) = &r.restored_from {
                         obj["restored_from"] = serde_json::Value::String(restored_from.clone());
                     }
+                    if let Some(wt) = &r.worktree_hint {
+                        obj["worktree"] = serde_json::Value::String(wt.clone());
+                    }
                 }
             }
             obj
         })
         .collect();
-    crate::utils::print_json(&serde_json::Value::Array(arr));
+    let json = serde_json::json!({
+        "anchors": arr,
+        "actions": [
+            { "command": "oobo anchor show <sha>", "description": "show anchor details" },
+            { "command": "oobo blame <file> [sha]", "description": "line attribution" },
+            { "command": "oobo search \"query\"", "description": "search sessions" },
+        ],
+    });
+    crate::utils::print_json(&json);
 }
 
 // ------------------------------------------------------------------
@@ -630,7 +363,7 @@ fn emit_show_agent(anchor: &Anchor, sessions: &[SessionInfo]) {
     let ts = chrono::DateTime::from_timestamp(anchor.committed_at, 0)
         .map(|t| t.to_rfc3339())
         .unwrap_or_default();
-    let tool = sessions.first().map(|s| s.tool.as_str()).unwrap_or("-");
+    let tool = sessions.first().map_or("-", |s| s.tool.as_str());
     let total: i64 = sessions.iter().map(|s| s.total).sum();
     let input: i64 = sessions.iter().map(|s| s.input).sum();
     let output: i64 = sessions.iter().map(|s| s.output).sum();
@@ -645,7 +378,7 @@ fn emit_show_agent(anchor: &Anchor, sessions: &[SessionInfo]) {
     println!("tools:      {tool}");
     println!("tokens:     {total} (in {input} / out {output} / cache {cache})");
     if let Some(p) = anchor.ai_percentage {
-        println!("ai_pct:     {:.0}", p);
+        println!("ai_pct:     {p:.0}");
     }
     if !sessions.is_empty() {
         println!("sessions:");
@@ -658,57 +391,15 @@ fn emit_show_agent(anchor: &Anchor, sessions: &[SessionInfo]) {
             );
         }
     }
+    println!();
+    println!("commands:");
+    if !anchor.files_changed.is_empty() {
+        let short = &anchor.commit_hash[..7.min(anchor.commit_hash.len())];
+        println!("  oobo blame {} {}", anchor.files_changed[0], short);
+    }
+    println!("  oobo goto <turn-or-commit>   # travel to this point");
 }
 
-fn emit_show_pretty(anchor: &Anchor, sessions: &[SessionInfo]) {
-    let sha7 = short_sha(&anchor.commit_hash);
-    let rel = relative_time(anchor.committed_at);
-    println!("\x1b[1m{sha7}\x1b[0m — {subj}", subj = anchor.message);
-    if !anchor.author.is_empty() {
-        println!(
-            "\x1b[2m{author}  ·  {rel} ago\x1b[0m",
-            author = anchor.author
-        );
-    }
-    println!("─────────────────────────────────────────────────────────");
-    let total: i64 = sessions.iter().map(|s| s.total).sum();
-    let input: i64 = sessions.iter().map(|s| s.input).sum();
-    let output: i64 = sessions.iter().map(|s| s.output).sum();
-    let cache: i64 = sessions.iter().map(|s| s.cache_read + s.cache_write).sum();
-    let tools: Vec<String> = sessions.iter().map(|s| s.tool.clone()).collect();
-    println!(
-        "TOOLS     {}",
-        if tools.is_empty() {
-            "-".to_string()
-        } else {
-            tools.join(", ")
-        }
-    );
-    println!(
-        "TOKENS    {total} (input {}, output {}, cache {})",
-        human_tokens(input),
-        human_tokens(output),
-        human_tokens(cache)
-    );
-    if let Some(p) = anchor.ai_percentage {
-        println!(
-            "ATTRIB    {} AI lines · {} human lines · {:.0}% AI",
-            anchor.ai_added, anchor.human_added, p
-        );
-    }
-    if !sessions.is_empty() {
-        println!();
-        println!("SESSIONS");
-        for s in sessions {
-            let model = s.model.as_deref().unwrap_or("-");
-            println!(
-                "  \x1b[35m●\x1b[0m {tool} · {model} · {total} tokens",
-                tool = s.tool,
-                total = human_tokens(s.total),
-            );
-        }
-    }
-}
 
 fn emit_show_json(cfg: &Config, anchor: &Anchor, sessions: &[SessionInfo]) {
     let ts = chrono::DateTime::from_timestamp(anchor.committed_at, 0)
@@ -737,6 +428,15 @@ fn emit_show_json(cfg: &Config, anchor: &Anchor, sessions: &[SessionInfo]) {
     let output: i64 = sessions.iter().map(|s| s.output).sum();
     let cache_read: i64 = sessions.iter().map(|s| s.cache_read).sum();
     let cache_write: i64 = sessions.iter().map(|s| s.cache_write).sum();
+    let first_file = anchor.files_changed.first().cloned().unwrap_or_default();
+    let short_sha = &anchor.commit_hash[..7.min(anchor.commit_hash.len())];
+    let mut actions: Vec<serde_json::Value> = Vec::new();
+    if !first_file.is_empty() {
+        actions.push(serde_json::json!({
+            "command": format!("oobo blame {} {}", first_file, short_sha),
+            "description": "line attribution",
+        }));
+    }
     let json = serde_json::json!({
         "sha": anchor.commit_hash,
         "parents": parents,
@@ -759,6 +459,7 @@ fn emit_show_json(cfg: &Config, anchor: &Anchor, sessions: &[SessionInfo]) {
         "sessions": sess_json,
         "shadow_anchors": anchor.turns,
         "files_changed": anchor.files_changed,
+        "actions": actions,
     });
     crate::utils::print_json(&json);
 }
@@ -836,7 +537,7 @@ fn load_parent_hashes(cfg: &Config, commit_hash: &str) -> Vec<String> {
 fn parse_parent_hashes(line: &str) -> Vec<String> {
     line.split_whitespace()
         .skip(1)
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect()
 }
 
@@ -845,12 +546,12 @@ fn parse_parent_hashes(line: &str) -> Vec<String> {
 // ------------------------------------------------------------------
 
 /// Kept for bare `oobo` in-repo agent/json modes (byte-for-byte equivalence).
-pub fn run(cfg: &Config, limit: usize, mode: OutputMode) -> Result<(), String> {
+pub fn run(cfg: &Config, limit: usize, mode: OutputMode) -> Result<(), CliError> {
     let opts = Options {
         limit,
         ..Default::default()
     };
-    run_list(cfg, opts, mode)?;
+    run_list(cfg, &opts, mode)?;
     Ok(())
 }
 

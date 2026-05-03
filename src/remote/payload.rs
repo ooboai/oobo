@@ -3,17 +3,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::anchor::{Anchor, SessionLink};
 
-#[allow(dead_code)]
 pub const EVENT_PAYLOAD_SCHEMA_VERSION: u32 = 1;
 
-#[allow(dead_code)]
 fn default_event_payload_schema_version() -> u32 {
     EVENT_PAYLOAD_SCHEMA_VERSION
 }
 
 /// Anchor payload envelope — kept for schema documentation and test round-trips.
 #[derive(Debug, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct EventPayload {
     /// Version of the remote transport envelope. The embedded anchor has its
     /// own schema version and remains the canonical commit-memory object.
@@ -34,7 +31,6 @@ pub struct EventPayload {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct ProjectInfo {
     pub name: String,
     pub git_remote: Option<String>,
@@ -42,7 +38,6 @@ pub struct ProjectInfo {
 
 /// The anchor plus its linked sessions, mirroring what's on the orphan branch.
 #[derive(Debug, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct AnchorPayload {
     #[serde(flatten)]
     pub anchor: Anchor,
@@ -52,7 +47,6 @@ pub struct AnchorPayload {
 
 /// A tool invocation within a transcript.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct ToolCallMessage {
     pub tool_use_id: String,
     pub name: String,
@@ -61,7 +55,6 @@ pub struct ToolCallMessage {
 
 /// The result of a tool invocation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct ToolResultMessage {
     pub tool_use_id: String,
     pub name: String,
@@ -73,7 +66,6 @@ pub struct ToolResultMessage {
 /// A single transcript message. All optional fields are additive — older
 /// backends that only read `role` + `text` continue to work unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct TranscriptMessage {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,7 +82,6 @@ pub struct TranscriptMessage {
 
 /// A session's transcript with parent-child relationship metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct SessionTranscript {
     pub session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -126,13 +117,13 @@ pub struct SessionStats {
     pub tool_call_count: u32,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_zero(v: &u32) -> bool {
     *v == 0
 }
 
 /// Error body returned by the remote API on 4xx / 5xx (e.g. 401 from search).
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct IngestError {
     #[serde(default)]
     pub detail: Option<String>,
@@ -274,6 +265,8 @@ mod tests {
             bash_commands: None,
             thinking_duration_ms: None,
             compact_count: None,
+            context_tokens: None,
+            context_window_size: None,
             is_subagent: false,
             parent_session_id: None,
             subagent_type: None,

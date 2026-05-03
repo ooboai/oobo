@@ -61,7 +61,7 @@ pub fn parse_iso_timestamp(s: &str) -> Option<i64> {
     let yoe = y_adj - era * 400;
     let doy = (153 * m_adj + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468;
+    let days = era * 146_097 + doe - 719_468;
     let secs = days * 86400 + h * 3600 + mi * 60 + sec;
     Some(secs * 1000)
 }
@@ -77,7 +77,8 @@ pub fn format_transcript(messages: &[Message], max_messages: u32, assistant_labe
         } else {
             assistant_label
         };
-        out.push_str(&format!("── {label} ──\n{}\n\n", msg.text));
+        use std::fmt::Write;
+        let _ = write!(out, "── {label} ──\n{}\n\n", msg.text);
     }
     out
 }
@@ -391,7 +392,7 @@ pub fn parse_since(raw: &str) -> Result<i64, String> {
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw) {
         return Ok(dt.timestamp());
     }
-    let digits: String = raw.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = raw.chars().take_while(char::is_ascii_digit).collect();
     if digits.is_empty() {
         return Err("expected number + suffix (s/m/h/d/w/mo/y) or ISO-8601".into());
     }
