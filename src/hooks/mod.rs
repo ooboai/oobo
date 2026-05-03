@@ -19,9 +19,14 @@ pub struct HookEvent {
     pub model: Option<String>,
     #[serde(default)]
     pub workspace_roots: Vec<String>,
+    #[serde(default)]
+    pub loop_count: Option<u32>,
+    #[serde(default)]
+    pub context_tokens: Option<u64>,
+    #[serde(default)]
+    pub context_window_size: Option<u64>,
     /// Captures unknown fields from hook payloads for forward compatibility.
     #[serde(flatten)]
-    #[allow(dead_code)]
     pub extra: serde_json::Value,
 }
 
@@ -38,7 +43,7 @@ pub fn handle_event(
     let mut event: HookEvent = match serde_json::from_str(payload) {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("anchor: warning: malformed hook payload for event '{event_name}': {e}");
+            tracing::warn!(event = event_name, %e, "malformed hook payload");
             return Ok(());
         }
     };
@@ -87,22 +92,6 @@ pub fn handle_event(
         }
         "session-end" => {
             if let Some(sid) = session_id_field {
-                // Read the session state BEFORE deleting to compute stats proactively.
-                if !project_root.is_empty() {
-                    let active = state::read_session(&project_root, sid);
-                    let source = crate::core::tool::normalize_source(agent);
-                    if let Err(e) = crate::commands::index::index_single_session(
-                        sid,
-                        source,
-                        &project_root,
-                        active.as_ref(),
-                    ) {
-                        eprintln!(
-                            "anchor: warning: could not index session {}: {e}",
-                            &sid[..sid.len().min(8)]
-                        );
-                    }
-                }
                 state::remove_session(&project_root, sid);
             }
         }
@@ -118,6 +107,40 @@ pub fn handle_event(
                 );
                 if !project_root.is_empty() {
                     let _ = state::snapshot_pre_agent_state(&project_root, sid);
+                }
+            }
+        }
+        "pre-tool-use" => {
+            if let Some(sid) = session_id_field {
+                let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
+                if !project_root.is_empty() {
+                    let tool_name = event
+                        .extra
+                        .get("tool_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+
+                    let tool_input = event.extra.get("tool_input");
+
+                    if is_file_mutating_tool(tool_name) || tool_name.is_empty() {
+                        let file_path = event
+                            .extra
+                            .get("file_path")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| {
+                                tool_input
+                                    .and_then(|ti| ti.get("file_path").or_else(|| ti.get("path")))
+                                    .and_then(|v| v.as_str())
+                            });
+
+                        if let Some(abs_path) = file_path {
+                            let rel = make_relative(abs_path, &project_root);
+                            if !rel.starts_with('/') && !rel.starts_with("..") {
+                                let _ =
+                                    state::snapshot_pre_edit_file(&project_root, sid, &rel);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -159,12 +182,7 @@ pub fn handle_event(
                     }
 
                     // Track edited files for file-modifying tools.
-                    if tool_name == "Write"
-                        || tool_name == "Edit"
-                        || tool_name == "MultiEdit"
-                        || tool_name == "Delete"
-                        || tool_name.is_empty()
-                    {
+                    if is_file_mutating_tool(tool_name) || tool_name.is_empty() {
                         // Cursor: file_path at top level.
                         // Claude PostToolUse: file_path inside tool_input.
                         let file_path = event
@@ -181,7 +199,16 @@ pub fn handle_event(
                             let rel = make_relative(abs_path, &project_root);
                             if !rel.starts_with('/') && !rel.starts_with("..") {
                                 let _ = state::record_edited_file(&project_root, sid, &rel);
-                                let _ = state::snapshot_session_files(&project_root, sid, &[rel]);
+                                let _ = state::record_post_edit_file(
+                                    &project_root,
+                                    sid,
+                                    &rel,
+                                    if tool_name.is_empty() {
+                                        None
+                                    } else {
+                                        Some(tool_name)
+                                    },
+                                );
                             }
                         }
                     }
@@ -282,7 +309,7 @@ pub fn handle_event(
                 let duration_ms = event
                     .extra
                     .get("duration_ms")
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0);
                 if duration_ms > 0 {
                     let _ = state::record_thinking(&project_root, sid, duration_ms);
@@ -298,8 +325,6 @@ pub fn handle_event(
                     event_name,
                     Some(event.extra.clone()),
                 );
-                // Swallow errors — this fires on every response so a transient IO
-                // failure shouldn't surface as a hook error to the user.
                 let _ = state::touch_session(&project_root, sid, None);
             }
         }
@@ -318,6 +343,13 @@ pub fn handle_event(
         "stop" => {
             if let Some(sid) = session_id_field {
                 let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
+                let _ = state::update_session_metrics(
+                    &project_root,
+                    sid,
+                    event.loop_count,
+                    event.context_tokens,
+                    event.context_window_size,
+                );
                 let transcript_path = event.extra.get("transcript_path").and_then(|v| v.as_str());
                 let _ = state::record_hook_event(
                     &project_root,
@@ -401,7 +433,7 @@ pub fn handle_event(
             }
         }
         _ => {
-            eprintln!("anchor: warning: unknown agent event '{event_name}' (tool={agent}). ignored.");
+            tracing::warn!(event = event_name, tool = agent, "unknown agent event, ignored");
         }
     }
 
@@ -497,6 +529,24 @@ fn is_dir_scoped_tool(tool_name: &str) -> bool {
     )
 }
 
+fn is_file_mutating_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "Write"
+            | "Edit"
+            | "MultiEdit"
+            | "StrReplace"
+            | "Delete"
+            | "write"
+            | "edit"
+            | "str_replace"
+            | "delete"
+            | "create_file"
+            | "edit_file"
+            | "edit_file_v2"
+    )
+}
+
 /// Strip the project root prefix to get a relative path, matching how git
 /// and the rest of the attribution pipeline represent file paths.
 /// Canonicalizes both sides to handle symlinks and macOS `/var` vs `/private/var`.
@@ -505,12 +555,10 @@ fn make_relative(abs_path: &str, project_root: &str) -> String {
         std::fs::canonicalize(abs_path).unwrap_or_else(|_| std::path::PathBuf::from(abs_path));
     let root = std::fs::canonicalize(project_root)
         .unwrap_or_else(|_| std::path::PathBuf::from(project_root));
-    abs.strip_prefix(&root)
-        .map(|p| {
+    abs.strip_prefix(&root).map_or_else(|_| abs_path.to_string(), |p| {
             let s = p.to_string_lossy().to_string();
             s.replace('\\', "/")
         })
-        .unwrap_or_else(|_| abs_path.to_string())
 }
 
 #[cfg(test)]
@@ -542,7 +590,7 @@ mod tests {
         let event: HookEvent = serde_json::from_str(json).unwrap();
         assert_eq!(event.session_id.as_deref(), Some("s1"));
         assert_eq!(
-            event.extra.get("unknown_field").and_then(|v| v.as_i64()),
+            event.extra.get("unknown_field").and_then(serde_json::Value::as_i64),
             Some(42)
         );
     }

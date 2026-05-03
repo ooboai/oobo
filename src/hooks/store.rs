@@ -118,8 +118,7 @@ pub fn list_for_project(project_root: &str) -> Vec<ActiveSession> {
                     let matches_root = state
                         .worktree
                         .as_deref()
-                        .map(|wt| worktree_matches(wt, project_root))
-                        .unwrap_or(false);
+                        .is_some_and(|wt| worktree_matches(wt, project_root));
                     if matches_root && seen.insert(state.session_id.clone()) {
                         out.push(state);
                     }
@@ -190,9 +189,7 @@ fn read_from_legacy(project_root: &str, session_id: &str) -> Option<ActiveSessio
 
 fn worktree_matches(worktree: &str, project_root: &str) -> bool {
     let canonical = |p: &str| {
-        fs::canonicalize(p)
-            .map(|b| b.to_string_lossy().to_string())
-            .unwrap_or_else(|_| p.to_string())
+        fs::canonicalize(p).map_or_else(|_| p.to_string(), |b| b.to_string_lossy().to_string())
     };
     canonical(worktree) == canonical(project_root)
 }
@@ -219,17 +216,23 @@ mod tests {
             file_snapshots: None,
             edited_files: None,
             read_files: None,
+            file_events: None,
             tool_usage: None,
             tool_failures: None,
             bash_commands: None,
             subagent_runs: None,
             thinking_duration_ms: None,
             compact_count: None,
+            turn_count: None,
+            context_tokens: None,
+            context_window_size: None,
             current_turn_index: 0,
             current_turn_started_at: None,
             current_turn_hook_events: None,
             current_turn_tool_calls: None,
             last_turn_snapshot_id: None,
+            pre_edit_pending: None,
+            file_edit_chain: None,
             started_at: 1,
             updated_at: 1,
         }

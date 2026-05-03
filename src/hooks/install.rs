@@ -48,37 +48,40 @@ fn install_cursor_hooks() -> Option<String> {
         "version": 1,
         "hooks": {
             "sessionStart": [
-                { "command": "anchor hooks agent session-start --tool cursor" }
+                { "command": "oobo hooks agent session-start --tool cursor" }
             ],
             "beforeSubmitPrompt": [
-                { "command": "anchor hooks agent before-submit-prompt --tool cursor" }
+                { "command": "oobo hooks agent before-submit-prompt --tool cursor" }
+            ],
+            "preToolUse": [
+                { "command": "oobo hooks agent pre-tool-use --tool cursor" }
             ],
             "postToolUse": [
-                { "command": "anchor hooks agent after-tool-use --tool cursor" }
+                { "command": "oobo hooks agent after-tool-use --tool cursor" }
             ],
             "postToolUseFailure": [
-                { "command": "anchor hooks agent tool-use-failure --tool cursor" }
+                { "command": "oobo hooks agent tool-use-failure --tool cursor" }
             ],
             "subagentStart": [
-                { "command": "anchor hooks agent subagent-start --tool cursor" }
+                { "command": "oobo hooks agent subagent-start --tool cursor" }
             ],
             "subagentStop": [
-                { "command": "anchor hooks agent subagent-stop --tool cursor" }
+                { "command": "oobo hooks agent subagent-stop --tool cursor" }
             ],
             "afterAgentThought": [
-                { "command": "anchor hooks agent after-agent-thought --tool cursor" }
+                { "command": "oobo hooks agent after-agent-thought --tool cursor" }
             ],
             "afterAgentResponse": [
-                { "command": "anchor hooks agent after-agent-response --tool cursor" }
+                { "command": "oobo hooks agent after-agent-response --tool cursor" }
             ],
             "preCompact": [
-                { "command": "anchor hooks agent pre-compact --tool cursor" }
+                { "command": "oobo hooks agent pre-compact --tool cursor" }
             ],
             "stop": [
-                { "command": "anchor hooks agent stop --tool cursor" }
+                { "command": "oobo hooks agent stop --tool cursor" }
             ],
             "sessionEnd": [
-                { "command": "anchor hooks agent session-end --tool cursor" }
+                { "command": "oobo hooks agent session-end --tool cursor" }
             ]
         }
     });
@@ -94,28 +97,31 @@ fn install_claude_hooks() -> Option<String> {
     let oobo_hooks = serde_json::json!({
         "hooks": {
             "SessionStart": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent session-start --tool claude"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent session-start --tool claude"}]
             }],
             "UserPromptSubmit": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent before-submit-prompt --tool claude"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent before-submit-prompt --tool claude"}]
+            }],
+            "PreToolUse": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent pre-tool-use --tool claude"}]
             }],
             "PostToolUse": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent after-tool-use --tool claude"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent after-tool-use --tool claude"}]
             }],
             "PostToolUseFailure": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent tool-use-failure --tool claude"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent tool-use-failure --tool claude"}]
             }],
             "SubagentStart": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent subagent-start --tool claude"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent subagent-start --tool claude"}]
             }],
             "SubagentStop": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent subagent-stop --tool claude"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent subagent-stop --tool claude"}]
             }],
             "Stop": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent stop --tool claude"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent stop --tool claude"}]
             }],
             "SessionEnd": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent session-end --tool claude"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent session-end --tool claude"}]
             }]
         }
     });
@@ -132,15 +138,15 @@ fn install_gemini_hooks() -> Option<String> {
         "hooks": {
             "SessionStart": [{
                 "type": "command",
-                "command": "anchor hooks agent session-start --tool gemini"
+                "command": "oobo hooks agent session-start --tool gemini"
             }],
             "SessionEnd": [{
                 "type": "command",
-                "command": "anchor hooks agent session-end --tool gemini"
+                "command": "oobo hooks agent session-end --tool gemini"
             }],
             "AfterAgent": [{
                 "type": "command",
-                "command": "anchor hooks agent stop --tool gemini"
+                "command": "oobo hooks agent stop --tool gemini"
             }]
         }
     });
@@ -159,9 +165,9 @@ fn install_opencode_hooks() -> Option<String> {
     const input = JSON.stringify(event);
     try {
       if (event.type === "session.created")
-        execSync("anchor hooks agent session-start --tool opencode", { input, encoding: "utf-8" });
+        execSync("oobo hooks agent session-start --tool opencode", { input, encoding: "utf-8" });
       if (event.type === "session.deleted")
-        execSync("anchor hooks agent session-end --tool opencode", { input, encoding: "utf-8" });
+        execSync("oobo hooks agent session-end --tool opencode", { input, encoding: "utf-8" });
     } catch (_) {}
   }
 });
@@ -169,7 +175,7 @@ fn install_opencode_hooks() -> Option<String> {
 
     if path.exists() {
         if let Ok(existing) = fs::read_to_string(&path) {
-            if existing.contains("anchor hooks agent") {
+            if existing.contains("oobo hooks agent") {
                 return Some(format!(
                     "OpenCode plugin → {} (already installed)",
                     path.display()
@@ -180,12 +186,12 @@ fn install_opencode_hooks() -> Option<String> {
 
     if let Some(parent) = path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
-            eprintln!("anchor: warning: could not create {}: {e}", parent.display());
+            tracing::warn!(path = %parent.display(), %e, "could not create directory");
             return None;
         }
     }
     if let Err(e) = fs::write(&path, content) {
-        eprintln!("anchor: warning: could not write {}: {e}", path.display());
+        tracing::warn!(path = %path.display(), %e, "could not write file");
         return None;
     }
     Some(format!("OpenCode plugin → {}", path.display()))
@@ -198,27 +204,30 @@ fn install_kiro_hooks() -> Option<String> {
     let path = dir.join("oobo.json");
 
     let agent_config = serde_json::json!({
-        "name": "anchor",
-        "description": "anchor lifecycle hooks for session and tool tracking",
+        "name": "oobo",
+        "description": "oobo lifecycle hooks for session and tool tracking",
         "hooks": {
             "agentSpawn": [
-                { "command": "anchor hooks agent session-start --tool kiro" }
+                { "command": "oobo hooks agent session-start --tool kiro" }
             ],
             "userPromptSubmit": [
-                { "command": "anchor hooks agent before-submit-prompt --tool kiro" }
+                { "command": "oobo hooks agent before-submit-prompt --tool kiro" }
+            ],
+            "preToolUse": [
+                { "command": "oobo hooks agent pre-tool-use --tool kiro" }
             ],
             "postToolUse": [
-                { "command": "anchor hooks agent after-tool-use --tool kiro" }
+                { "command": "oobo hooks agent after-tool-use --tool kiro" }
             ],
             "stop": [
-                { "command": "anchor hooks agent stop --tool kiro" }
+                { "command": "oobo hooks agent stop --tool kiro" }
             ]
         }
     });
 
     if path.exists() {
         if let Ok(existing) = fs::read_to_string(&path) {
-            if existing.contains("anchor hooks agent") {
+            if existing.contains("oobo hooks agent") {
                 return Some(format!(
                     "Kiro agent hooks → {} (already installed)",
                     path.display()
@@ -240,22 +249,22 @@ fn install_continue_hooks() -> Option<String> {
     let oobo_hooks = serde_json::json!({
         "hooks": {
             "SessionStart": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent session-start --tool continue"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent session-start --tool continue"}]
             }],
             "UserPromptSubmit": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent before-submit-prompt --tool continue"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent before-submit-prompt --tool continue"}]
             }],
             "PostToolUse": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent after-tool-use --tool continue"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent after-tool-use --tool continue"}]
             }],
             "PostToolUseFailure": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent tool-use-failure --tool continue"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent tool-use-failure --tool continue"}]
             }],
             "Stop": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent stop --tool continue"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent stop --tool continue"}]
             }],
             "SessionEnd": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent session-end --tool continue"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent session-end --tool continue"}]
             }]
         }
     });
@@ -271,19 +280,19 @@ fn install_droid_hooks() -> Option<String> {
     let oobo_hooks = serde_json::json!({
         "hooks": {
             "SessionStart": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent session-start --tool droid"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent session-start --tool droid"}]
             }],
             "PostToolUse": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent after-tool-use --tool droid"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent after-tool-use --tool droid"}]
             }],
             "PostToolUseFailure": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent tool-use-failure --tool droid"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent tool-use-failure --tool droid"}]
             }],
             "Stop": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent stop --tool droid"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent stop --tool droid"}]
             }],
             "SessionEnd": [{
-                "hooks": [{"type": "command", "command": "anchor hooks agent session-end --tool droid"}]
+                "hooks": [{"type": "command", "command": "oobo hooks agent session-end --tool droid"}]
             }]
         }
     });
@@ -331,7 +340,7 @@ fn merge_cursor_hooks_file(path: &Path, oobo_config: &serde_json::Value) -> Opti
             // Remove any existing oobo commands (handles upgrades, e.g. adding --tool flag)
             existing_arr.retain(|h| {
                 let cmd = h.get("command").and_then(|c| c.as_str()).unwrap_or("");
-                !cmd.contains("anchor hooks agent")
+                !cmd.contains("oobo hooks agent")
             });
             for handler in oobo_arr {
                 existing_arr.push(handler.clone());
@@ -379,7 +388,7 @@ fn merge_claude_hooks_file(path: &Path, oobo_config: &serde_json::Value) -> Opti
                     arr.iter().any(|h| {
                         h.get("command")
                             .and_then(|c| c.as_str())
-                            .is_some_and(|c| c.contains("anchor hooks agent"))
+                            .is_some_and(|c| c.contains("oobo hooks agent"))
                     })
                 })
             });
@@ -454,7 +463,7 @@ pub fn install_git_hook(project_root: &str, hook_name: &str, script: &str) -> Re
 
     if hook_path.exists() {
         let existing = fs::read_to_string(&hook_path).unwrap_or_default();
-        if existing.contains("anchor hooks") {
+        if existing.contains("oobo hooks") {
             return Ok(());
         }
 
@@ -485,26 +494,26 @@ pub fn install_project_hooks(project_root: &str) -> Result<Vec<String>, String> 
 
     let log_dir = "\"${XDG_DATA_HOME:-$HOME/.local/share}/oobo/logs\"";
     let post_commit = format!(
-        "#!/bin/sh\nmkdir -p {log_dir}\nanchor hooks post-commit \"$@\" 2>>{log_dir}/hooks.log || true\n"
+        "#!/bin/sh\nmkdir -p {log_dir}\noobo hooks post-commit \"$@\" 2>>{log_dir}/hooks.log || true\n"
     );
     install_git_hook(project_root, "post-commit", &post_commit)?;
     let hooks_display = crate::git::detect::resolve_git_dir(project_root).join("hooks");
     installed.push(format!("post-commit → {}/", hooks_display.display()));
 
     let pre_push = format!(
-        "#!/bin/sh\nmkdir -p {log_dir}\nanchor hooks pre-push \"$@\" 2>>{log_dir}/hooks.log || true\n"
+        "#!/bin/sh\nmkdir -p {log_dir}\noobo hooks pre-push \"$@\" 2>>{log_dir}/hooks.log || true\n"
     );
     install_git_hook(project_root, "pre-push", &pre_push)?;
     installed.push(format!("pre-push → {}/", hooks_display.display()));
 
     let post_merge = format!(
-        "#!/bin/sh\nmkdir -p {log_dir}\nanchor hooks post-merge \"$@\" 2>>{log_dir}/hooks.log || true\n"
+        "#!/bin/sh\nmkdir -p {log_dir}\noobo hooks post-merge \"$@\" 2>>{log_dir}/hooks.log || true\n"
     );
     install_git_hook(project_root, "post-merge", &post_merge)?;
     installed.push(format!("post-merge → {}/", hooks_display.display()));
 
     let post_rewrite = format!(
-        "#!/bin/sh\nmkdir -p {log_dir}\nanchor hooks post-rewrite \"$@\" 2>>{log_dir}/hooks.log || true\n"
+        "#!/bin/sh\nmkdir -p {log_dir}\noobo hooks post-rewrite \"$@\" 2>>{log_dir}/hooks.log || true\n"
     );
     install_git_hook(project_root, "post-rewrite", &post_rewrite)?;
     installed.push(format!("post-rewrite → {}/", hooks_display.display()));
@@ -579,8 +588,8 @@ mod tests {
 
         let oobo = serde_json::json!({
             "hooks": {
-                "SessionStart": [{"hooks": [{"type": "command", "command": "anchor hooks agent session-start --tool claude"}]}],
-                "Stop": [{"hooks": [{"type": "command", "command": "anchor hooks agent stop --tool claude"}]}]
+                "SessionStart": [{"hooks": [{"type": "command", "command": "oobo hooks agent session-start --tool claude"}]}],
+                "Stop": [{"hooks": [{"type": "command", "command": "oobo hooks agent stop --tool claude"}]}]
             }
         });
         merge_claude_hooks_file(&path, &oobo);
@@ -608,7 +617,7 @@ mod tests {
 
         let oobo = serde_json::json!({
             "hooks": {
-                "Stop": [{"hooks": [{"type": "command", "command": "anchor hooks agent stop --tool claude"}]}]
+                "Stop": [{"hooks": [{"type": "command", "command": "oobo hooks agent stop --tool claude"}]}]
             }
         });
         merge_claude_hooks_file(&path, &oobo);
@@ -628,7 +637,7 @@ mod tests {
         let stale = serde_json::json!({
             "hooks": {
                 "Stop": [
-                    {"hooks": [{"type": "command", "command": "anchor hooks agent stop --tool claude"}]},
+                    {"hooks": [{"type": "command", "command": "oobo hooks agent stop --tool claude"}]},
                     {"matcher": "Bash", "hooks": [{"type": "command", "command": "user-stop.sh"}]}
                 ]
             }
@@ -637,8 +646,8 @@ mod tests {
 
         let oobo = serde_json::json!({
             "hooks": {
-                "Stop": [{"hooks": [{"type": "command", "command": "anchor hooks agent stop --tool claude"}]}],
-                "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "anchor hooks agent before-submit-prompt --tool claude"}]}]
+                "Stop": [{"hooks": [{"type": "command", "command": "oobo hooks agent stop --tool claude"}]}],
+                "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "oobo hooks agent before-submit-prompt --tool claude"}]}]
             }
         });
         merge_claude_hooks_file(&path, &oobo);
@@ -650,7 +659,7 @@ mod tests {
         let user_cmd = stops[0]["hooks"][0]["command"].as_str().unwrap();
         assert!(user_cmd.contains("user-stop.sh"));
         let oobo_cmd = stops[1]["hooks"][0]["command"].as_str().unwrap();
-        assert!(oobo_cmd.contains("anchor hooks agent stop"));
+        assert!(oobo_cmd.contains("oobo hooks agent stop"));
         assert!(
             content["hooks"]["UserPromptSubmit"]
                 .as_array()

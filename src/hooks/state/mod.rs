@@ -1,23 +1,26 @@
 //! Active-session tracking for hook events.
 //!
-//! State is persisted through [`crate::hooks::store`], which transparently
-//! prefers the SQLite `active_sessions` table and falls back to a per-session
-//! buffer file in `~/.oobo/tmp/hook-buffer/` when no project can be resolved
-//! (pre-`git init`) or when the DB is transiently unavailable. Legacy files
-//! in `<git-common-dir>/oobo-sessions/*.json` (written by oobo 0.1.x) are
-//! read lazily and imported into the DB on first access.
+//! State is persisted through [`crate::hooks::store`], which uses per-session
+//! JSON buffer files in `~/.oobo/tmp/hook-buffer/`. Legacy files in
+//! `<git-common-dir>/oobo-sessions/*.json` (written by oobo 0.1.x) are read
+//! lazily during session discovery.
 //!
 //! All public functions here are thin wrappers that load, mutate, and save
 //! an [`ActiveSession`] via the store — they never touch the filesystem
 //! directly anymore.
 
-use std::process::{Command, Stdio};
+mod snapshots;
+mod turns;
+
+pub use snapshots::{
+    cleanup_stale, record_post_edit_file, snapshot_pre_agent_state, snapshot_pre_edit_file,
+    snapshot_session_files,
+};
+pub use turns::{finish_turn, mark_restored_from};
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::turn::{
-    TurnFileSnapshot, TurnHookEvent, TurnMemoryPayload, TurnSnapshot, TurnToolCall,
-};
+use crate::core::turn::{TurnHookEvent, TurnToolCall};
 use crate::error::Result;
 use crate::hooks::store;
 
@@ -29,6 +32,33 @@ pub struct SubagentRun {
     pub started_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<i64>,
+}
+
+/// A single file-edit event capturing the git blob hash before and after an AI
+/// tool call. Together, the chain of `FileEditPair`s for a file gives us
+/// per-edit attribution granularity (similar to git-ai's checkpoint system).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileEditPair {
+    /// Git blob hash of the file BEFORE the edit (from preToolUse).
+    pub pre_blob: String,
+    /// Git blob hash of the file AFTER the edit (from postToolUse).
+    pub post_blob: String,
+    /// Tool that made the edit (e.g. "Write", "Edit", "StrReplace").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    /// Unix timestamp when the edit occurred.
+    pub timestamp: i64,
+}
+
+/// A timestamped file access event for causality analysis.
+/// Records when a session read or wrote a specific file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileEvent {
+    pub path: String,
+    /// "read" or "write"
+    pub action: String,
+    /// Unix timestamp (seconds) when the event occurred.
+    pub timestamp: i64,
 }
 
 /// Active session state.
@@ -59,6 +89,9 @@ pub struct ActiveSession {
     /// Files read by the agent, accumulated from PostToolUse hooks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_files: Option<std::collections::HashSet<String>>,
+    /// Timestamped per-file events for causality analysis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_events: Option<Vec<FileEvent>>,
     /// Tool usage counts by tool name (e.g. {"Bash": 12, "Edit": 8, "Read": 15}).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_usage: Option<std::collections::HashMap<String, u32>>,
@@ -77,6 +110,15 @@ pub struct ActiveSession {
     /// Number of context compaction events during this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_count: Option<u32>,
+    /// Agent turn/loop count reported at session stop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_count: Option<u32>,
+    /// Total context tokens used by the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u64>,
+    /// Context window size configured for the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window_size: Option<u64>,
     /// 0-based turn index for Git-backed turn snapshots.
     #[serde(default)]
     pub current_turn_index: i64,
@@ -88,6 +130,14 @@ pub struct ActiveSession {
     pub current_turn_tool_calls: Option<Vec<TurnToolCall>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_turn_snapshot_id: Option<String>,
+    /// Pending pre-edit blob hashes awaiting pairing with post-edit blobs.
+    /// Keyed by relative file path. Set in preToolUse, consumed in postToolUse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_edit_pending: Option<std::collections::HashMap<String, String>>,
+    /// Ordered chain of pre/post blob pairs per file, giving per-edit
+    /// attribution granularity. Keyed by relative file path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_edit_chain: Option<std::collections::HashMap<String, Vec<FileEditPair>>>,
     pub started_at: i64,
     pub updated_at: i64,
 }
@@ -98,24 +148,30 @@ impl ActiveSession {
         Self {
             session_id: session_id.to_string(),
             agent: agent.to_string(),
-            model: model.map(|s| s.to_string()),
+            model: model.map(std::string::ToString::to_string),
             worktree,
             transcript_path: None,
             pre_agent_snapshots: None,
             file_snapshots: None,
             edited_files: None,
             read_files: None,
+            file_events: None,
             tool_usage: None,
             tool_failures: None,
             bash_commands: None,
             subagent_runs: None,
             thinking_duration_ms: None,
             compact_count: None,
+            turn_count: None,
+            context_tokens: None,
+            context_window_size: None,
             current_turn_index: 0,
             current_turn_started_at: None,
             current_turn_hook_events: None,
             current_turn_tool_calls: None,
             last_turn_snapshot_id: None,
+            pre_edit_pending: None,
+            file_edit_chain: None,
             started_at: now,
             updated_at: now,
         }
@@ -126,44 +182,11 @@ impl ActiveSession {
     }
 }
 
-/// Resolve the worktree root for the current directory.
-/// Returns canonicalized path to avoid macOS `/var` vs `/private/var` mismatches.
-fn resolve_worktree(project_root: &str) -> Option<String> {
-    if project_root.is_empty() {
-        return None;
-    }
-    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let output = Command::new(git)
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(project_root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
-        .output()
-        .ok()?;
-
-    if output.status.success() {
-        let raw = String::from_utf8_lossy(&output.stdout)
-            .replace('\r', "")
-            .trim()
-            .to_string();
-        let canonical = std::fs::canonicalize(&raw)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or(raw);
-        Some(canonical)
-    } else {
-        None
-    }
-}
-
 // ── Mutators ──────────────────────────────────────────────────────────
 
 /// Load state, apply `f`, bump `updated_at`, and save.
 /// No-op (returns `Ok(())`) if the session doesn't exist.
-fn mutate<F>(project_root: &str, session_id: &str, f: F) -> Result<()>
+pub(super) fn mutate<F>(project_root: &str, session_id: &str, f: F) -> Result<()>
 where
     F: FnOnce(&mut ActiveSession),
 {
@@ -177,13 +200,15 @@ where
 }
 
 /// Create a new active session.
+#[tracing::instrument(skip_all, fields(session_id, agent))]
 pub fn write_session(
     project_root: &str,
     session_id: &str,
     agent: &str,
     model: Option<&str>,
 ) -> Result<()> {
-    let worktree = resolve_worktree(project_root);
+    tracing::info!(session_id, agent, "session start");
+    let worktree = snapshots::resolve_worktree(project_root);
     let state = ActiveSession::new(session_id, agent, model, worktree);
     store::write(project_root, session_id, &state)?;
     Ok(())
@@ -205,19 +230,7 @@ pub fn ensure_session(
 }
 
 fn log_ensure(msg: &str, session_id: &str) {
-    if let Some(home) = dirs::home_dir() {
-        let line = format!(
-            "{} ensure_session: {} sid={}\n",
-            chrono::Utc::now().to_rfc3339(),
-            msg,
-            session_id,
-        );
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(home.join(".oobo/logs/hooks-debug.log"))
-            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
-    }
+    tracing::debug!(session_id, msg, "ensure_session");
 }
 
 /// Update the timestamp on an existing session (turn ended, session continues).
@@ -300,6 +313,13 @@ pub fn record_edited_file(project_root: &str, session_id: &str, file_path: &str)
         let mut files = state.edited_files.take().unwrap_or_default();
         files.insert(file_path.to_string());
         state.edited_files = Some(files);
+        let mut events = state.file_events.take().unwrap_or_default();
+        events.push(FileEvent {
+            path: file_path.to_string(),
+            action: "write".into(),
+            timestamp: chrono::Utc::now().timestamp(),
+        });
+        state.file_events = Some(events);
     })
 }
 
@@ -309,6 +329,13 @@ pub fn record_read_file(project_root: &str, session_id: &str, file_path: &str) -
         let mut files = state.read_files.take().unwrap_or_default();
         files.insert(file_path.to_string());
         state.read_files = Some(files);
+        let mut events = state.file_events.take().unwrap_or_default();
+        events.push(FileEvent {
+            path: file_path.to_string(),
+            action: "read".into(),
+            timestamp: chrono::Utc::now().timestamp(),
+        });
+        state.file_events = Some(events);
     })
 }
 
@@ -399,208 +426,28 @@ pub fn record_compact(project_root: &str, session_id: &str) -> Result<()> {
     })
 }
 
-pub fn finish_turn(
+/// Update session with metrics reported by hook events (e.g. stop payload).
+pub fn update_session_metrics(
     project_root: &str,
     session_id: &str,
-    agent: &str,
-    model: Option<&str>,
-    transcript_path: Option<&str>,
-) -> Result<Option<String>> {
-    let Some(mut state) = store::read(project_root, session_id) else {
-        return Ok(None);
-    };
-
-    let has_turn_memory = state.current_turn_started_at.is_some()
-        || state
-            .current_turn_hook_events
-            .as_ref()
-            .map(|events| !events.is_empty())
-            .unwrap_or(false)
-        || state
-            .current_turn_tool_calls
-            .as_ref()
-            .map(|calls| !calls.is_empty())
-            .unwrap_or(false)
-        || state
-            .edited_files
-            .as_ref()
-            .map(|files| !files.is_empty())
-            .unwrap_or(false);
-
-    if !has_turn_memory {
-        return Ok(None);
+    loop_count: Option<u32>,
+    context_tokens: Option<u64>,
+    context_window_size: Option<u64>,
+) -> Result<()> {
+    if loop_count.is_none() && context_tokens.is_none() && context_window_size.is_none() {
+        return Ok(());
     }
-
-    let source = crate::core::tool::normalize_source(agent);
-    let worktree_id = crate::git::turns::worktree_id(project_root);
-    let project_id = crate::project::id_for_root(project_root);
-    let mut snapshot = TurnSnapshot::new(
-        &project_id,
-        &worktree_id,
-        source,
-        &state.session_id,
-        state.current_turn_index,
-    );
-    snapshot.parent_id = state.last_turn_snapshot_id.clone();
-    snapshot.restored_from = take_restored_from(project_root);
-    snapshot.started_at = state.current_turn_started_at;
-    snapshot.ended_at = Some(chrono::Utc::now().timestamp());
-    snapshot.model = model.map(str::to_string).or_else(|| state.model.clone());
-    snapshot.files = turn_files(project_root, &state);
-
-    let transcript = transcript_path
-        .map(str::to_string)
-        .or_else(|| state.transcript_path.clone());
-    snapshot.memory = TurnMemoryPayload {
-        transcript_path: transcript.clone(),
-        transcript: transcript.as_deref().and_then(load_transcript_payload),
-        hook_events: state.current_turn_hook_events.take().unwrap_or_default(),
-        tool_calls: state.current_turn_tool_calls.take().unwrap_or_default(),
-    };
-
-    let snapshot_id = snapshot.id.clone();
-    crate::git::turns::write_turn_snapshot(project_root, snapshot)?;
-
-    state.last_turn_snapshot_id = Some(snapshot_id.clone());
-    state.current_turn_started_at = None;
-    state.current_turn_hook_events = None;
-    state.current_turn_tool_calls = None;
-    state.bump();
-    store::write(project_root, session_id, &state)?;
-
-    Ok(Some(snapshot_id))
-}
-
-pub fn mark_restored_from(project_root: &str, id: &str) -> std::io::Result<()> {
-    let path = restored_from_marker_path(project_root);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, id)
-}
-
-fn take_restored_from(project_root: &str) -> Option<String> {
-    let path = restored_from_marker_path(project_root);
-    let id = std::fs::read_to_string(&path).ok()?;
-    let _ = std::fs::remove_file(path);
-    let trimmed = id.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-fn restored_from_marker_path(project_root: &str) -> std::path::PathBuf {
-    crate::git::detect::resolve_git_common_dir(project_root)
-        .join("oobo-state")
-        .join("restored-from")
-}
-
-fn turn_files(project_root: &str, state: &ActiveSession) -> Vec<TurnFileSnapshot> {
-    let mut files: Vec<String> = current_turn_file_paths(project_root, state)
-        .into_iter()
-        .collect();
-    if files.is_empty() {
-        let Some(session_files) = state.edited_files.as_ref() else {
-            return Vec::new();
-        };
-        files = session_files.iter().cloned().collect();
-    }
-    files.sort();
-    files
-        .into_iter()
-        .map(|path| TurnFileSnapshot {
-            pre_blob: state
-                .pre_agent_snapshots
-                .as_ref()
-                .and_then(|snapshots| snapshots.get(&path))
-                .cloned(),
-            post_blob: state
-                .file_snapshots
-                .as_ref()
-                .and_then(|snapshots| snapshots.get(&path))
-                .cloned(),
-            path,
-        })
-        .collect()
-}
-
-fn current_turn_file_paths(
-    project_root: &str,
-    state: &ActiveSession,
-) -> std::collections::HashSet<String> {
-    let mut files = std::collections::HashSet::new();
-    if let Some(calls) = state.current_turn_tool_calls.as_ref() {
-        for call in calls {
-            if let Some(input) = call.input.as_ref() {
-                collect_file_paths_from_value(project_root, input, &mut files);
-            }
+    mutate(project_root, session_id, |state| {
+        if let Some(lc) = loop_count {
+            state.turn_count = Some(lc);
         }
-    }
-    if let Some(events) = state.current_turn_hook_events.as_ref() {
-        for event in events {
-            if let Some(payload) = event.payload.as_ref() {
-                collect_file_paths_from_value(project_root, payload, &mut files);
-            }
+        if let Some(ct) = context_tokens {
+            state.context_tokens = Some(ct);
         }
-    }
-    files
-}
-
-fn collect_file_paths_from_value(
-    project_root: &str,
-    value: &serde_json::Value,
-    files: &mut std::collections::HashSet<String>,
-) {
-    for key in ["file_path", "path"] {
-        if let Some(path) = value.get(key).and_then(|v| v.as_str()) {
-            push_relative_file(project_root, path, files);
+        if let Some(cw) = context_window_size {
+            state.context_window_size = Some(cw);
         }
-    }
-    for key in ["modified_files", "files", "file_paths"] {
-        if let Some(items) = value.get(key).and_then(|v| v.as_array()) {
-            for item in items {
-                if let Some(path) = item.as_str() {
-                    push_relative_file(project_root, path, files);
-                }
-            }
-        }
-    }
-    if let Some(input) = value.get("tool_input") {
-        collect_file_paths_from_value(project_root, input, files);
-    }
-}
-
-fn push_relative_file(
-    project_root: &str,
-    path: &str,
-    files: &mut std::collections::HashSet<String>,
-) {
-    if path.is_empty() || path.ends_with('/') || path == "." {
-        return;
-    }
-    let p = std::path::Path::new(path);
-    let normalized = if p.is_absolute() {
-        let root = std::path::Path::new(project_root);
-        p.strip_prefix(root)
-            .ok()
-            .and_then(|rel| rel.to_str())
-            .unwrap_or(path)
-            .to_string()
-    } else {
-        path.to_string()
-    };
-    if !normalized.starts_with('/') && !normalized.starts_with("..") {
-        files.insert(normalized);
-    }
-}
-
-fn load_transcript_payload(path: &str) -> Option<serde_json::Value> {
-    let text = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&text)
-        .ok()
-        .or(Some(serde_json::Value::String(text)))
+    })
 }
 
 // ── Readers ───────────────────────────────────────────────────────────
@@ -629,8 +476,16 @@ pub fn get_file_sets(project_root: &str, session_id: &str) -> (Vec<String>, Vec<
     (edited, read)
 }
 
+/// Read timestamped file events for a session.
+pub fn get_file_events(project_root: &str, session_id: &str) -> Vec<FileEvent> {
+    store::read(project_root, session_id)
+        .and_then(|s| s.file_events)
+        .unwrap_or_default()
+}
+
 /// Read and deserialize the active session state, if it exists.
-pub fn read_session(project_root: &str, session_id: &str) -> Option<ActiveSession> {
+#[cfg(test)]
+fn read_session(project_root: &str, session_id: &str) -> Option<ActiveSession> {
     store::read(project_root, session_id)
 }
 
@@ -642,6 +497,7 @@ pub fn read_session_model(project_root: &str, session_id: &str) -> Option<String
 
 /// Remove a session's state (session ended).
 pub fn remove_session(project_root: &str, session_id: &str) {
+    tracing::info!(session_id, "session end");
     store::remove(project_root, session_id);
 }
 
@@ -654,7 +510,7 @@ pub fn active_sessions(project_root: &str) -> Vec<ActiveSession> {
 /// Sessions without a worktree field (pre-upgrade) are included in all worktrees
 /// for backward compatibility.
 pub fn active_sessions_for_worktree(project_root: &str) -> Vec<ActiveSession> {
-    let current_wt = resolve_worktree(project_root);
+    let current_wt = snapshots::resolve_worktree(project_root);
     let all = active_sessions(project_root);
 
     match current_wt {
@@ -662,9 +518,7 @@ pub fn active_sessions_for_worktree(project_root: &str) -> Vec<ActiveSession> {
             .into_iter()
             .filter(|s| match &s.worktree {
                 Some(session_wt) => {
-                    let canonical = std::fs::canonicalize(session_wt)
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|_| session_wt.clone());
+                    let canonical = std::fs::canonicalize(session_wt).map_or_else(|_| session_wt.clone(), |p| p.to_string_lossy().to_string());
                     canonical == wt
                 }
                 None => true,
@@ -672,135 +526,6 @@ pub fn active_sessions_for_worktree(project_root: &str) -> Vec<ActiveSession> {
             .collect(),
         None => all,
     }
-}
-
-// ── Snapshots ─────────────────────────────────────────────────────────
-
-/// Capture the pre-agent file state: snapshot currently dirty files in the
-/// worktree. Called on `before-submit-prompt` — any worktree changes at this
-/// moment are human edits (the agent hasn't started yet).
-pub fn snapshot_pre_agent_state(project_root: &str, session_id: &str) -> Result<()> {
-    let snapshots = snapshot_dirty_files(project_root);
-    if snapshots.is_none() {
-        return Ok(());
-    }
-    mutate(project_root, session_id, |state| {
-        state.pre_agent_snapshots = snapshots;
-    })
-}
-
-fn snapshot_dirty_files(project_root: &str) -> Option<std::collections::HashMap<String, String>> {
-    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let mut dirty_files: Vec<String> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-
-    for args in [
-        &["diff", "--name-only", "HEAD"][..],
-        &["ls-files", "--others", "--exclude-standard"][..],
-    ] {
-        if let Ok(o) = Command::new(&git)
-            .args(args)
-            .current_dir(project_root)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-        {
-            if o.status.success() {
-                for line in String::from_utf8_lossy(&o.stdout).lines() {
-                    if !line.is_empty() && seen.insert(line.to_string()) {
-                        dirty_files.push(line.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    if dirty_files.is_empty() {
-        // No dirty files → HEAD IS the pre-agent state. No snapshot needed;
-        // at commit time we'll use HEAD~1 as the baseline.
-        return None;
-    }
-
-    let mut snapshots = std::collections::HashMap::new();
-    for file in &dirty_files {
-        if let Some(hash) = hash_object(&git, project_root, file) {
-            snapshots.insert(file.clone(), hash);
-        }
-    }
-    if snapshots.is_empty() {
-        None
-    } else {
-        Some(snapshots)
-    }
-}
-
-fn hash_object(git: &str, project_root: &str, file: &str) -> Option<String> {
-    let abs_path = std::path::Path::new(project_root).join(file);
-    if !abs_path.exists() {
-        return None;
-    }
-    let output = Command::new(git)
-        .args(["hash-object", "-w"])
-        .arg(&abs_path)
-        .current_dir(project_root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let hash = String::from_utf8_lossy(&output.stdout)
-        .replace('\r', "")
-        .trim()
-        .to_string();
-    if hash.is_empty() {
-        None
-    } else {
-        Some(hash)
-    }
-}
-
-/// Snapshot files edited by this session into git's object store.
-/// For each file, runs `git hash-object -w <file>` and stores the blob hash
-/// in the session's `file_snapshots` map.
-pub fn snapshot_session_files(
-    project_root: &str,
-    session_id: &str,
-    files: &[String],
-) -> Result<()> {
-    if files.is_empty() {
-        return Ok(());
-    }
-    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let mut new_snapshots = std::collections::HashMap::new();
-    for file in files {
-        if let Some(hash) = hash_object(&git, project_root, file) {
-            new_snapshots.insert(file.clone(), hash);
-        }
-    }
-    if new_snapshots.is_empty() {
-        return Ok(());
-    }
-    mutate(project_root, session_id, |state| {
-        let mut snapshots = state.file_snapshots.take().unwrap_or_default();
-        snapshots.extend(new_snapshots);
-        state.file_snapshots = Some(snapshots);
-    })
-}
-
-/// Clean up stale session state older than `max_age_secs`.
-pub fn cleanup_stale(project_root: &str, max_age_secs: i64) {
-    let now = chrono::Utc::now().timestamp();
-    let sessions = store::list_for_project(project_root);
-    for s in sessions {
-        if now - s.updated_at > max_age_secs {
-            store::remove(project_root, &s.session_id);
-        }
-    }
-    store::cleanup_buffer(max_age_secs);
 }
 
 #[cfg(test)]
@@ -831,7 +556,7 @@ mod tests {
     }
 
     fn setup() -> TestEnv {
-        let guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let prev = std::env::var_os("OOBO_HOME");
         let oobo_home = tempfile::tempdir().unwrap();
         unsafe {
@@ -1232,6 +957,181 @@ mod tests {
 
         let all = active_sessions(root_str);
         assert!(all.iter().any(|s| s.session_id == "sess-legacy"));
+    }
+
+    #[test]
+    fn test_snapshot_pre_edit_file_new_file() {
+        let _env = setup();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        write_session(root_str, "pre-new", "cursor", None).unwrap();
+        snapshot_pre_edit_file(root_str, "pre-new", "does-not-exist.txt").unwrap();
+
+        let state = read_session(root_str, "pre-new").unwrap();
+        let pending = state.pre_edit_pending.unwrap();
+        assert_eq!(
+            pending.get("does-not-exist.txt").unwrap(),
+            "0000000000000000000000000000000000000000"
+        );
+    }
+
+    #[test]
+    fn test_pre_post_edit_pairing() {
+        let _env = setup();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        std::fs::write(root.join("edit.txt"), "original content\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "edit.txt"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        let pre_hash_out = std::process::Command::new("git")
+            .args(["hash-object", "-w", "edit.txt"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::piped())
+            .output()
+            .unwrap();
+        let pre_hash = String::from_utf8_lossy(&pre_hash_out.stdout)
+            .trim()
+            .to_string();
+
+        write_session(root_str, "pair-sess", "cursor", None).unwrap();
+        snapshot_pre_edit_file(root_str, "pair-sess", "edit.txt").unwrap();
+
+        let state = read_session(root_str, "pair-sess").unwrap();
+        assert_eq!(
+            state.pre_edit_pending.as_ref().unwrap().get("edit.txt").unwrap(),
+            &pre_hash
+        );
+
+        std::fs::write(root.join("edit.txt"), "modified content\n").unwrap();
+        record_post_edit_file(root_str, "pair-sess", "edit.txt", Some("Write")).unwrap();
+
+        let state = read_session(root_str, "pair-sess").unwrap();
+
+        let chain = state.file_edit_chain.as_ref().unwrap();
+        let pairs = chain.get("edit.txt").unwrap();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].pre_blob, pre_hash);
+        assert_ne!(pairs[0].pre_blob, pairs[0].post_blob);
+        assert_eq!(pairs[0].tool_name.as_deref(), Some("Write"));
+
+        let pending = state.pre_edit_pending.as_ref().unwrap();
+        assert!(!pending.contains_key("edit.txt"));
+
+        let snapshots = state.file_snapshots.as_ref().unwrap();
+        assert_eq!(snapshots.get("edit.txt").unwrap(), &pairs[0].post_blob);
+    }
+
+    #[test]
+    fn test_pre_post_edit_chain_multiple_edits() {
+        let _env = setup();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        std::fs::write(root.join("multi.txt"), "v0\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "multi.txt"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+
+        write_session(root_str, "multi-sess", "cursor", None).unwrap();
+
+        for i in 1..=3 {
+            snapshot_pre_edit_file(root_str, "multi-sess", "multi.txt").unwrap();
+            std::fs::write(root.join("multi.txt"), format!("v{i}\n")).unwrap();
+            record_post_edit_file(root_str, "multi-sess", "multi.txt", Some("Edit")).unwrap();
+        }
+
+        let state = read_session(root_str, "multi-sess").unwrap();
+        let chain = state.file_edit_chain.as_ref().unwrap();
+        let pairs = chain.get("multi.txt").unwrap();
+        assert_eq!(pairs.len(), 3);
+
+        for i in 0..2 {
+            assert_eq!(
+                pairs[i].post_blob, pairs[i + 1].pre_blob,
+                "post_blob of pair {i} should equal pre_blob of pair {}",
+                i + 1
+            );
+        }
+    }
+
+    #[test]
+    fn test_pre_edit_without_post_does_not_crash() {
+        let _env = setup();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        std::fs::write(root.join("orphan.txt"), "data\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "orphan.txt"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+
+        write_session(root_str, "orphan-sess", "cursor", None).unwrap();
+        start_turn(root_str, "orphan-sess").unwrap();
+        snapshot_pre_edit_file(root_str, "orphan-sess", "orphan.txt").unwrap();
+
+        let state = read_session(root_str, "orphan-sess").unwrap();
+        assert!(state.pre_edit_pending.is_some());
+        assert!(state.file_edit_chain.is_none());
+
+        record_edited_file(root_str, "orphan-sess", "orphan.txt").unwrap();
+        snapshot_session_files(root_str, "orphan-sess", &["orphan.txt".to_string()]).unwrap();
+        let _ = finish_turn(root_str, "orphan-sess", "cursor", None, None).unwrap();
+
+        let state = read_session(root_str, "orphan-sess").unwrap();
+        assert!(state.pre_edit_pending.is_none());
+        assert!(state.file_edit_chain.is_none());
+    }
+
+    #[test]
+    fn test_same_blob_pre_post_skipped() {
+        let _env = setup();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        std::fs::write(root.join("noop.txt"), "unchanged\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "noop.txt"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+
+        write_session(root_str, "noop-sess", "cursor", None).unwrap();
+        snapshot_pre_edit_file(root_str, "noop-sess", "noop.txt").unwrap();
+        // Don't modify the file — call record_post_edit_file with the same content.
+        record_post_edit_file(root_str, "noop-sess", "noop.txt", Some("Write")).unwrap();
+
+        let state = read_session(root_str, "noop-sess").unwrap();
+        assert!(
+            state.file_edit_chain.is_none(),
+            "identical pre/post blobs should not create an edit pair"
+        );
     }
 
     #[test]
