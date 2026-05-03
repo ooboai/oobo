@@ -384,7 +384,7 @@ mod tests {
         init_git_repo(root);
         let sessions_dir = root.join(".git/oobo-sessions");
         fs::create_dir_all(&sessions_dir).unwrap();
-        fs::write(sessions_dir.join("bad.json"), r#"not valid json"#).unwrap();
+        fs::write(sessions_dir.join("bad.json"), r"not valid json").unwrap();
 
         let result = check_active_sessions(root.to_str().unwrap());
         assert_eq!(result, None);

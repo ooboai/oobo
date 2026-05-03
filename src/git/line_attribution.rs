@@ -27,7 +27,7 @@ pub(in crate::git) fn compute_pure_ai_line_attrs(
     vec![LineAttribution {
         author: FileAttribution::Ai,
         ranges: ai_ranges,
-        agent: agent_name.map(|s| s.to_string()),
+        agent: agent_name.map(std::string::ToString::to_string),
     }]
 }
 
@@ -65,7 +65,7 @@ pub(in crate::git) fn compute_mixed_line_attrs(
         return vec![LineAttribution {
             author: FileAttribution::Ai,
             ranges: all_added,
-            agent: agent_name.map(|s| s.to_string()),
+            agent: agent_name.map(std::string::ToString::to_string),
         }];
     }
 
@@ -76,7 +76,86 @@ pub(in crate::git) fn compute_mixed_line_attrs(
         attrs.push(LineAttribution {
             author: FileAttribution::Ai,
             ranges: ai_ranges,
-            agent: agent_name.map(|s| s.to_string()),
+            agent: agent_name.map(std::string::ToString::to_string),
+        });
+    }
+    if !human_ranges.is_empty() {
+        attrs.push(LineAttribution {
+            author: FileAttribution::Human,
+            ranges: human_ranges,
+            agent: None,
+        });
+    }
+    attrs
+}
+
+/// Compute line attributions using per-edit blob pairs from preToolUse/postToolUse.
+///
+/// Each `FileEditPair` gives us the exact file state before and after a single
+/// AI tool call. We diff each pair to find what the AI changed, then project
+/// those ranges onto the final committed file to handle subsequent human edits.
+///
+/// This is more precise than `compute_mixed_line_attrs` because it distinguishes
+/// AI edits at tool-call granularity rather than treating the entire turn as one diff.
+pub(in crate::git) fn compute_chain_line_attrs(
+    cfg: &Config,
+    chain: &[crate::hooks::state::FileEditPair],
+    baseline_blob: &str,
+    committed_blob: &str,
+    agent_name: Option<&str>,
+) -> Vec<LineAttribution> {
+    if committed_blob.is_empty() || chain.is_empty() {
+        return Vec::new();
+    }
+
+    // Collect all AI-added ranges by diffing each edit pair.
+    // These ranges are in the coordinate space of each pair's post_blob.
+    // We'll use the final agent blob (last pair's post_blob) to project onto committed.
+    let mut all_ai_ranges: Vec<LineRange> = Vec::new();
+
+    for pair in chain {
+        let null_blob = "0000000000000000000000000000000000000000";
+        let ranges = if pair.pre_blob == null_blob {
+            // New file created by the AI — all lines are AI.
+            blob_total_range(cfg, &pair.post_blob)
+                .map(|r| vec![r])
+                .unwrap_or_default()
+        } else {
+            diff_blobs_added_ranges(cfg, &pair.pre_blob, &pair.post_blob).unwrap_or_default()
+        };
+        all_ai_ranges.extend(ranges);
+    }
+
+    if all_ai_ranges.is_empty() {
+        return Vec::new();
+    }
+
+    // The AI ranges above are in intermediate blob coordinates. For the final
+    // attribution, diff the last agent state against committed to find human
+    // post-edits, then subtract those from the total added lines.
+    let last_agent_blob = &chain.last().unwrap().post_blob;
+    let all_added = if baseline_blob.is_empty() {
+        blob_total_range(cfg, committed_blob)
+            .map(|r| vec![r])
+            .unwrap_or_default()
+    } else {
+        diff_blobs_added_ranges(cfg, baseline_blob, committed_blob).unwrap_or_default()
+    };
+
+    if all_added.is_empty() {
+        return Vec::new();
+    }
+
+    let human_ranges =
+        diff_blobs_added_ranges(cfg, last_agent_blob, committed_blob).unwrap_or_default();
+    let ai_ranges = subtract_ranges(&all_added, &human_ranges);
+
+    let mut attrs = Vec::new();
+    if !ai_ranges.is_empty() {
+        attrs.push(LineAttribution {
+            author: FileAttribution::Ai,
+            ranges: ai_ranges,
+            agent: agent_name.map(std::string::ToString::to_string),
         });
     }
     if !human_ranges.is_empty() {
@@ -375,5 +454,125 @@ diff --git a/blob1 b/blob2
         let result = subtract_ranges(&source, &remove);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], LineRange { start: 1, end: 7 });
+    }
+
+    fn make_test_cfg(repo_path: &std::path::Path) -> (Config, std::path::PathBuf) {
+        let mut cfg = Config::default();
+        cfg.git.real_git_path = "git".to_string();
+        let prev_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(repo_path).unwrap();
+        (cfg, prev_cwd)
+    }
+
+    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn init_test_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::process::Command::new("git")
+            .args(["init", "--initial-branch=main"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        // Initial commit so blob objects can be referenced.
+        std::fs::write(root.join(".gitkeep"), "").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        dir
+    }
+
+    fn write_blob(repo_path: &std::path::Path, content: &str) -> String {
+        let file_path = repo_path.join("_tmp_blob_input");
+        std::fs::write(&file_path, content).unwrap();
+        let output = std::process::Command::new("git")
+            .args(["hash-object", "-w"])
+            .arg(&file_path)
+            .current_dir(repo_path)
+            .stdout(std::process::Stdio::piped())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn test_compute_chain_line_attrs_empty_chain() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = init_test_repo();
+        let (cfg, prev_cwd) = make_test_cfg(dir.path());
+
+        let blob = write_blob(dir.path(), "line1\nline2\n");
+        let result = compute_chain_line_attrs(&cfg, &[], "", &blob, Some("cursor"));
+
+        std::env::set_current_dir(&prev_cwd).unwrap();
+        assert!(result.is_empty(), "empty chain should return empty vec");
+    }
+
+    #[test]
+    fn test_compute_chain_line_attrs_new_file() {
+        use crate::core::anchor::FileAttribution;
+        use crate::hooks::state::FileEditPair;
+
+        let _guard = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = init_test_repo();
+        let (cfg, prev_cwd) = make_test_cfg(dir.path());
+
+        let null_blob = "0000000000000000000000000000000000000000";
+        let post_blob = write_blob(dir.path(), "line1\nline2\nline3\n");
+
+        let chain = vec![FileEditPair {
+            pre_blob: null_blob.to_string(),
+            post_blob: post_blob.clone(),
+            tool_name: Some("Write".to_string()),
+            timestamp: 1000,
+        }];
+
+        let result = compute_chain_line_attrs(
+            &cfg,
+            &chain,
+            "",
+            &post_blob,
+            Some("cursor"),
+        );
+        assert!(!result.is_empty(), "new file chain should attribute lines");
+
+        let ai_attr = result
+            .iter()
+            .find(|a| a.author == FileAttribution::Ai)
+            .expect("should have AI attribution");
+        assert_eq!(ai_attr.ranges.len(), 1);
+        assert_eq!(ai_attr.ranges[0].start, 1);
+        assert_eq!(ai_attr.ranges[0].end, 3);
+        assert_eq!(ai_attr.agent.as_deref(), Some("cursor"));
+
+        std::env::set_current_dir(&prev_cwd).unwrap();
     }
 }

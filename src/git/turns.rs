@@ -10,9 +10,7 @@ use crate::core::turn::{fnv1a64, TurnSnapshot};
 pub const REF_PREFIX: &str = "refs/oobo/turns/v1";
 
 pub fn worktree_id(project_root: &str) -> String {
-    let canonical = std::fs::canonicalize(project_root)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| project_root.to_string());
+    let canonical = std::fs::canonicalize(project_root).map_or_else(|_| project_root.to_string(), |p| p.to_string_lossy().to_string());
     format!("w{:016x}", fnv1a64(canonical.as_bytes()))
 }
 
@@ -25,10 +23,10 @@ pub fn write_turn_snapshot(
 
     let head = current_head(project_root);
     if snapshot.head_commit.is_none() {
-        snapshot.head_commit = head.clone();
+        snapshot.head_commit.clone_from(&head);
     }
     if snapshot.base_commit.is_none() {
-        snapshot.base_commit = head.clone();
+        snapshot.base_commit.clone_from(&head);
     }
     if snapshot.branch.is_none() {
         snapshot.branch = current_branch(project_root);

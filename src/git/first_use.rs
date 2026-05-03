@@ -26,7 +26,7 @@ pub fn check_first_use(cfg: &Config, project_root: &str) {
             .and_then(|n| n.to_str())
             .unwrap_or(project_root);
         eprintln!(
-            "  \x1b[1manchor:\x1b[0m enriching commits in \x1b[36m{short}\x1b[0m with AI attribution — run \x1b[1manchor disable\x1b[0m to opt out"
+            "  \x1b[1moorbo:\x1b[0m enriching commits in \x1b[36m{short}\x1b[0m with AI attribution — run \x1b[1moorbo disable\x1b[0m to opt out"
         );
     }
 
@@ -77,8 +77,8 @@ fn check_orphan_health(project_root: &str) {
 
     if crate::git::detect::is_interactive() {
         eprintln!(
-            "  \x1b[33manchor:\x1b[0m anchor branch missing for this project. \
-             Run \x1b[1manchor setup --repair\x1b[0m to rebuild."
+            "  \x1b[33moorbo:\x1b[0m anchor branch missing for this project. \
+             Run \x1b[1moorbo setup --repair\x1b[0m to rebuild."
         );
         let _ = std::fs::write(&flag, "1");
     }

@@ -1,10 +1,18 @@
+mod rekey;
+mod sync;
+
+pub use rekey::{parse_rewrite_pairs, rekey_anchors, rekey_anchors_from_rewrite_pairs};
+pub use sync::{fetch_and_reconcile, push, remote_branch_exists, retry_pending_pushes};
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::process::{Command, Stdio};
 
 use crate::core::anchor::{Anchor, SessionLink, TransparencyMode};
+use crate::error::CliError;
 
-const BRANCH: &str = "oobo/anchors/v1";
+pub(super) const BRANCH: &str = "oobo/anchors/v1";
+const NULL_OID: &str = "0000000000000000000000000000000000000000";
 
 /// Write anchor metadata to the orphan branch for a given commit.
 ///
@@ -23,21 +31,22 @@ pub(super) fn write_anchor(
     anchor: &Anchor,
     session_links: &[SessionLink],
     transcripts: &[super::transcripts::CollectedTranscript],
-) -> Result<(), String> {
+) -> Result<(), CliError> {
+    let _span = tracing::info_span!("write_anchor", commit = %anchor.commit_hash).entered();
     ensure_branch(project_root)?;
 
     let (prefix, rest) = shard_key(&anchor.commit_hash);
     let base_path = format!("{prefix}/{rest}");
 
     let anchor_json =
-        serde_json::to_string_pretty(anchor).map_err(|e| format!("serialize anchor: {e}"))?;
+        serde_json::to_string_pretty(anchor).map_err(|e| CliError::Git(format!("serialize anchor: {e}")))?;
 
     let mut entries: Vec<(String, String)> =
         vec![(format!("{base_path}/metadata.json"), anchor_json)];
 
     for (i, link) in session_links.iter().enumerate() {
         let link_json = serde_json::to_string_pretty(link)
-            .map_err(|e| format!("serialize session link: {e}"))?;
+            .map_err(|e| CliError::Git(format!("serialize session link: {e}")))?;
         let session_path = format!("{base_path}/{}", i + 1);
         entries.push((format!("{session_path}/metadata.json"), link_json));
 
@@ -60,10 +69,15 @@ pub(super) fn write_anchor(
                 sub_idx += 1;
                 let redacted = crate::redact::redact(&ct.content);
                 let sanitized = strip_absolute_paths(&redacted, project_root);
-                entries.push((
-                    format!("{session_path}/subagents/{}/transcript.json", sub_idx),
-                    sanitized,
-                ));
+                let sub_path = format!("{session_path}/subagents/{sub_idx}");
+                entries.push((format!("{sub_path}/transcript.json"), sanitized));
+                if let Some(ref stype) = ct.subagent_type {
+                    entries.push((
+                        format!("{sub_path}/metadata.json"),
+                        format!("{{\"subagent_type\":\"{stype}\",\"session_id\":\"{}\"}}",
+                                ct.session_id),
+                    ));
+                }
             }
         }
     }
@@ -71,7 +85,9 @@ pub(super) fn write_anchor(
     // Generate timeline.json when file interactions exist.
     if let Some(ref interactions) = anchor.file_interactions {
         if !interactions.is_empty() {
-            if let Ok(timeline_json) = build_timeline_json(anchor, session_links, interactions) {
+            if let Ok(timeline_json) =
+                build_timeline_json(project_root, anchor, session_links, interactions)
+            {
                 entries.push((format!("{base_path}/timeline.json"), timeline_json));
             }
         }
@@ -79,20 +95,18 @@ pub(super) fn write_anchor(
 
     write_to_branch(project_root, &entries)?;
 
+    tracing::info!(entries = entries.len(), "oobo anchor written to orphan branch");
     Ok(())
 }
 
-/// Build a timeline JSON blob for multi-agent file interactions.
-///
-/// TODO: Add an `events` array with per-file timestamped read/write events
-/// to enable causality analysis (e.g. "Agent-2 read calculator.py 49s after
-/// Agent-1 wrote it"). Requires recording per-file timestamps in
-/// `edited_files`/`read_files` state, which is not yet available.
+/// Build a timeline JSON blob for multi-agent file interactions,
+/// enriched with per-file timestamped read/write events when available.
 fn build_timeline_json(
+    project_root: &str,
     anchor: &Anchor,
     session_links: &[SessionLink],
     interactions: &[crate::core::anchor::FileInteraction],
-) -> Result<String, String> {
+) -> Result<String, CliError> {
     let longest_session_ms: Option<u64> = {
         let durations: Vec<u64> = session_links
             .iter()
@@ -129,6 +143,22 @@ fn build_timeline_json(
         })
         .collect();
 
+    // Collect timestamped file events from all linked sessions.
+    let mut events_json: Vec<serde_json::Value> = Vec::new();
+    for link in session_links {
+        let events =
+            crate::hooks::state::get_file_events(project_root, &link.session_id);
+        for ev in events {
+            events_json.push(serde_json::json!({
+                "session_id": link.session_id,
+                "path": ev.path,
+                "action": ev.action,
+                "timestamp": ev.timestamp,
+            }));
+        }
+    }
+    events_json.sort_by_key(|e| e["timestamp"].as_i64().unwrap_or(0));
+
     let mut timeline = serde_json::json!({
         "session_count": anchor.session_ids.len(),
         "file_interactions": interactions_json,
@@ -138,7 +168,11 @@ fn build_timeline_json(
         timeline["longest_session_ms"] = serde_json::json!(dur);
     }
 
-    serde_json::to_string_pretty(&timeline).map_err(|e| format!("serialize timeline: {e}"))
+    if !events_json.is_empty() {
+        timeline["events"] = serde_json::json!(events_json);
+    }
+
+    serde_json::to_string_pretty(&timeline).map_err(|e| CliError::Git(format!("serialize timeline: {e}")))
 }
 
 /// Delegate to the shared implementation in `redact` module.
@@ -206,143 +240,6 @@ pub fn read_session_links(project_root: &str, commit_hash: &str) -> Vec<SessionL
     links
 }
 
-/// Re-key anchors after a history rewrite (rebase, cherry-pick).
-///
-/// `pre_rewrite_commits` is a list of (old_commit_hash, tree_hash) captured
-/// before the rewrite. After the rewrite, we find new commits with matching
-/// tree hashes and copy anchors from the old SHA to the new SHA.
-///
-/// Phase 1: only handles simple rewrites where file content didn't change
-/// (tree hash is preserved). Content-changing rewrites (squash, conflict
-/// resolution) are deferred to Phase 2.
-pub fn rekey_anchors(
-    project_root: &str,
-    pre_rewrite_commits: &[(String, String)],
-) -> Result<(), String> {
-    if !branch_exists(project_root) || pre_rewrite_commits.is_empty() {
-        return Ok(());
-    }
-
-    let new_commits = current_branch_commits(project_root);
-    if new_commits.is_empty() {
-        return Ok(());
-    }
-
-    let new_by_tree: std::collections::HashMap<&str, &str> = new_commits
-        .iter()
-        .map(|(hash, tree)| (tree.as_str(), hash.as_str()))
-        .collect();
-
-    let mut entries = Vec::new();
-
-    for (old_hash, tree) in pre_rewrite_commits {
-        if let Some(&new_hash) = new_by_tree.get(tree.as_str()) {
-            if old_hash == new_hash {
-                continue;
-            }
-            if read_anchor(project_root, old_hash).is_none() {
-                continue;
-            }
-
-            let (old_prefix, old_rest) = shard_key(old_hash);
-            let old_base = format!("{old_prefix}/{old_rest}");
-            let (new_prefix, new_rest) = shard_key(new_hash);
-            let new_base = format!("{new_prefix}/{new_rest}");
-
-            let file_list = git_in(
-                project_root,
-                &[
-                    "ls-tree",
-                    "-r",
-                    "--name-only",
-                    BRANCH,
-                    &format!("{old_base}/"),
-                ],
-            )
-            .unwrap_or_default();
-
-            for file_path in file_list.lines() {
-                if file_path.is_empty() {
-                    continue;
-                }
-                let relative = file_path.strip_prefix(&old_base).unwrap_or(file_path);
-                let relative = relative.strip_prefix('/').unwrap_or(relative);
-                let new_path = format!("{new_base}/{relative}");
-
-                if relative == "metadata.json" && !relative.contains('/') {
-                    if let Some(mut anchor) = read_anchor(project_root, old_hash) {
-                        anchor.commit_hash = new_hash.to_string();
-                        let json = serde_json::to_string_pretty(&anchor)
-                            .map_err(|e| format!("serialize anchor: {e}"))?;
-                        entries.push((new_path, json));
-                        continue;
-                    }
-                }
-
-                if let Some(content) = read_from_branch(project_root, file_path) {
-                    entries.push((new_path, content));
-                }
-            }
-
-        }
-    }
-
-    if !entries.is_empty() {
-        write_to_branch(project_root, &entries)?;
-    }
-
-    Ok(())
-}
-
-pub fn parse_rewrite_pairs(payload: &str) -> Vec<(String, String)> {
-    payload
-        .lines()
-        .filter_map(|line| {
-            let mut parts = line.split_whitespace();
-            let old_hash = parts.next()?;
-            let new_hash = parts.next()?;
-            Some((old_hash.to_string(), new_hash.to_string()))
-        })
-        .collect()
-}
-
-pub fn rekey_anchors_from_rewrite_pairs(
-    project_root: &str,
-    pairs: &[(String, String)],
-) -> Result<(), String> {
-    if pairs.is_empty() {
-        return Ok(());
-    }
-
-    let mut pre_rewrite_commits = Vec::new();
-    for (old_hash, _) in pairs {
-        let tree =
-            git_in(project_root, &["show", "-s", "--format=%T", old_hash]).unwrap_or_default();
-        let tree = tree.trim();
-        if !tree.is_empty() {
-            pre_rewrite_commits.push((old_hash.clone(), tree.to_string()));
-        }
-    }
-
-    rekey_anchors(project_root, &pre_rewrite_commits)
-}
-
-fn current_branch_commits(project_root: &str) -> Vec<(String, String)> {
-    let output = git_in(project_root, &["log", "--format=%H %T", "HEAD"]);
-    match output {
-        Ok(text) => text
-            .lines()
-            .filter_map(|line| {
-                let mut parts = line.splitn(2, ' ');
-                let hash = parts.next()?.to_string();
-                let tree = parts.next()?.to_string();
-                Some((hash, tree))
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    }
-}
-
 pub fn branch_exists(project_root: &str) -> bool {
     git_in(project_root, &["rev-parse", "--verify", BRANCH]).is_ok()
 }
@@ -354,11 +251,13 @@ pub fn branch_tip(project_root: &str) -> Option<String> {
 
 /// Bulk-read ALL anchors and their session links from the orphan branch
 /// using a single `git cat-file --batch` process for maximum speed.
+#[tracing::instrument(skip_all)]
 pub fn read_all_anchors(project_root: &str) -> (Vec<Anchor>, HashMap<String, Vec<SessionLink>>) {
     let mut anchors = Vec::new();
     let mut links_map: HashMap<String, Vec<SessionLink>> = HashMap::new();
 
     if !branch_exists(project_root) {
+        tracing::debug!("orphan branch does not exist");
         return (anchors, links_map);
     }
 
@@ -374,11 +273,11 @@ pub fn read_all_anchors(project_root: &str) -> (Vec<Anchor>, HashMap<String, Vec
         let parts: Vec<&str> = line.split('/').collect();
         if parts.len() == 3 && parts[2] == "metadata.json" {
             let hash = format!("{}{}", parts[0], parts[1]);
-            anchor_paths.push((hash, format!("{}:{}", BRANCH, line)));
+            anchor_paths.push((hash, format!("{BRANCH}:{line}")));
         } else if parts.len() == 4 && parts[3] == "metadata.json" && parts[2].parse::<u32>().is_ok()
         {
             let hash = format!("{}{}", parts[0], parts[1]);
-            session_paths.push((hash, format!("{}:{}", BRANCH, line)));
+            session_paths.push((hash, format!("{BRANCH}:{line}")));
         }
     }
 
@@ -408,6 +307,7 @@ pub fn read_all_anchors(project_root: &str) -> (Vec<Anchor>, HashMap<String, Vec
         }
     }
 
+    tracing::debug!(anchors = anchors.len(), sessions = links_map.len(), "read_all_anchors done");
     (anchors, links_map)
 }
 
@@ -442,7 +342,7 @@ fn batch_cat_file(project_root: &str, refs: &[&str]) -> Vec<Option<String>> {
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
 
-    let refs_owned: Vec<String> = refs.iter().map(|r| r.to_string()).collect();
+    let refs_owned: Vec<String> = refs.iter().map(std::string::ToString::to_string).collect();
     let n = refs.len();
 
     let writer = std::thread::spawn(move || {
@@ -497,272 +397,9 @@ fn batch_cat_file(project_root: &str, refs: &[&str]) -> Vec<Option<String>> {
     results
 }
 
-fn anchor_remote(project_root: &str) -> String {
-    crate::project_config::anchor_remote(project_root).unwrap_or_else(|| "origin".to_string())
-}
-
-pub fn remote_branch_exists(project_root: &str) -> bool {
-    let remote = anchor_remote(project_root);
-    if validate_anchor_remote(project_root, &remote).is_err() {
-        return false;
-    }
-    git_in(project_root, &["ls-remote", "--heads", &remote, BRANCH])
-        .map(|out| !out.trim().is_empty())
-        .unwrap_or(false)
-}
-
-/// 5 retries: remote push contention is common in multi-user/agent
-/// workflows and each attempt requires a network round-trip.
-const MAX_PUSH_ATTEMPTS: u32 = 5;
-
-/// Push the orphan branch to the configured anchor remote with retry on
-/// contention. Defaults to `origin`; `.oobo/config [anchors].remote` can point
-/// at another Git remote name or Git URL.
-pub fn push(project_root: &str) -> Result<(), String> {
-    let remote = anchor_remote(project_root);
-    validate_anchor_remote(project_root, &remote)?;
-    retry_pending_pushes(project_root);
-
-    let mut last_err = String::new();
-    for attempt in 0..MAX_PUSH_ATTEMPTS {
-        match git_in(project_root, &["push", "--no-verify", &remote, BRANCH]) {
-            Ok(_) => {
-                clear_pending_push(project_root);
-                return Ok(());
-            }
-            Err(e) if e.contains("non-fast-forward") || e.contains("rejected") => {
-                last_err = e;
-                if attempt < MAX_PUSH_ATTEMPTS - 1 {
-                    if let Err(re) = reconcile_with_remote(project_root, &remote) {
-                        last_err = format!("{last_err}; reconcile failed: {re}");
-                    }
-                    jitter_sleep(attempt);
-                }
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    mark_pending_push(project_root);
-    Err(format!(
-        "push failed after {MAX_PUSH_ATTEMPTS} attempts: {last_err}"
-    ))
-}
-
-pub fn retry_pending_pushes(project_root: &str) {
-    let remote = anchor_remote(project_root);
-    if validate_anchor_remote(project_root, &remote).is_err() {
-        return;
-    }
-    let path = pending_push_path(project_root);
-    if !path.exists() {
-        return;
-    }
-    let _ = reconcile_with_remote(project_root, &remote);
-    if git_in(project_root, &["push", "--no-verify", &remote, BRANCH]).is_ok() {
-        let _ = fs::remove_file(&path);
-    }
-}
-
-fn pending_push_path(project_root: &str) -> std::path::PathBuf {
-    crate::git::detect::resolve_git_common_dir(project_root).join("oobo-push-pending")
-}
-
-fn mark_pending_push(project_root: &str) {
-    let path = pending_push_path(project_root);
-    let _ = fs::write(&path, chrono::Utc::now().to_rfc3339());
-}
-
-fn clear_pending_push(project_root: &str) {
-    let path = pending_push_path(project_root);
-    let _ = fs::remove_file(&path);
-}
-
-fn jitter_sleep(attempt: u32) {
-    let base_ms = 100u64 * 2u64.pow(attempt);
-    let jitter = rand_jitter_ms(base_ms / 2);
-    std::thread::sleep(std::time::Duration::from_millis(base_ms + jitter));
-}
-
-/// Mixes in PID so concurrent processes get decorrelated jitter.
-fn rand_jitter_ms(max: u64) -> u64 {
-    if max == 0 {
-        return 0;
-    }
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos() as u64;
-    let pid = std::process::id() as u64;
-    nanos.wrapping_mul(pid.wrapping_add(7)) % max
-}
-
-/// Fetch the orphan branch from the configured anchor remote and reconcile
-/// diverged branches.
-/// Working tree and HEAD are never touched.
-pub fn fetch_and_reconcile(project_root: &str) -> Result<(), String> {
-    let remote = anchor_remote(project_root);
-    validate_anchor_remote(project_root, &remote)?;
-    reconcile_with_remote(project_root, &remote).map_err(|e| format!("fetch/reconcile failed: {e}"))
-}
-
-const NULL_OID: &str = "0000000000000000000000000000000000000000";
-
-/// Fetch into a PID-namespaced temp ref to avoid FETCH_HEAD races and
-/// force-fetch data loss.
-fn reconcile_with_remote(project_root: &str, remote: &str) -> Result<(), String> {
-    let fetch_ref = format!("refs/oobo/fetch-tmp/{}", std::process::id());
-    let refspec = format!("+{BRANCH}:{fetch_ref}");
-
-    let fetch_result = git_in(project_root, &["fetch", remote, &refspec]);
-
-    let cleanup = |pr: &str| {
-        let _ = git_in(pr, &["update-ref", "-d", &fetch_ref]);
-    };
-
-    if let Err(e) = fetch_result {
-        cleanup(project_root);
-        return Err(e);
-    }
-
-    let remote_tip = match git_in(project_root, &["rev-parse", &fetch_ref]) {
-        Ok(tip) => tip,
-        Err(e) => {
-            cleanup(project_root);
-            return Err(e);
-        }
-    };
-
-    let result = reconcile_local_with(project_root, &remote_tip);
-    cleanup(project_root);
-    result
-}
-
-fn validate_anchor_remote(project_root: &str, remote: &str) -> Result<(), String> {
-    if !looks_like_remote_name(remote) {
-        return Ok(());
-    }
-    git_in(project_root, &["remote", "get-url", remote])
-        .map(|_| ())
-        .map_err(|_| {
-            format!(
-                "anchor remote '{remote}' is not configured. Run `git remote add {remote} <url>` \
-                 or set `[anchors].remote` to a full Git URL in .oobo/config."
-            )
-        })
-}
-
-fn looks_like_remote_name(remote: &str) -> bool {
-    !remote.is_empty()
-        && !remote.contains('/')
-        && !remote.contains('\\')
-        && !remote.contains(':')
-        && !remote.contains('@')
-        && !remote.contains("://")
-}
-
-fn reconcile_local_with(project_root: &str, remote_tip: &str) -> Result<(), String> {
-    if !branch_exists(project_root) {
-        git_in(
-            project_root,
-            &[
-                "update-ref",
-                &format!("refs/heads/{BRANCH}"),
-                remote_tip,
-                NULL_OID,
-            ],
-        )?;
-        return Ok(());
-    }
-
-    let local_tip = git_in(project_root, &["rev-parse", BRANCH])?;
-
-    if local_tip == remote_tip {
-        return Ok(());
-    }
-
-    if git_in(
-        project_root,
-        &["merge-base", "--is-ancestor", remote_tip, &local_tip],
-    )
-    .is_ok()
-    {
-        return Ok(());
-    }
-
-    if git_in(
-        project_root,
-        &["merge-base", "--is-ancestor", &local_tip, remote_tip],
-    )
-    .is_ok()
-    {
-        git_in(
-            project_root,
-            &[
-                "update-ref",
-                &format!("refs/heads/{BRANCH}"),
-                remote_tip,
-                &local_tip,
-            ],
-        )?;
-        return Ok(());
-    }
-
-    replay_local_files(project_root, &local_tip, remote_tip)
-}
-
-/// Builds a merged commit before moving the branch ref — if any step
-/// fails, the branch is untouched.
-fn replay_local_files(project_root: &str, local_tip: &str, remote_tip: &str) -> Result<(), String> {
-    let local_tree = git_in(project_root, &["ls-tree", "-r", "--name-only", local_tip])?;
-    let remote_tree = git_in(project_root, &["ls-tree", "-r", "--name-only", remote_tip])?;
-
-    let remote_set: HashSet<&str> = remote_tree.lines().collect();
-
-    let mut entries: Vec<(String, String)> = Vec::new();
-    let mut skipped = 0u32;
-    for path in local_tree.lines() {
-        if !remote_set.contains(path) {
-            match git_in(project_root, &["show", &format!("{local_tip}:{path}")]) {
-                Ok(content) => entries.push((path.to_string(), content)),
-                Err(e) => {
-                    eprintln!("anchor: warning: could not read {path} from local anchors: {e}");
-                    skipped += 1;
-                }
-            }
-        }
-    }
-
-    if skipped > 0 {
-        eprintln!("anchor: warning: {skipped} local anchor file(s) could not be replayed");
-    }
-
-    let target = if entries.is_empty() {
-        remote_tip.to_string()
-    } else {
-        build_commit_on(
-            project_root,
-            remote_tip,
-            &entries,
-            "anchor: replay local anchors after reconcile",
-        )?
-    };
-
-    git_in(
-        project_root,
-        &[
-            "update-ref",
-            &format!("refs/heads/{BRANCH}"),
-            &target,
-            local_tip,
-        ],
-    )?;
-
-    Ok(())
-}
-
 /// Shard a commit hash into directory prefix + remainder.
 /// `c8e12fa9b3d4...` → ("c8", "e12fa9b3d4...")
-fn shard_key(hash: &str) -> (&str, &str) {
+pub(super) fn shard_key(hash: &str) -> (&str, &str) {
     if hash.len() >= 3 {
         (&hash[..2], &hash[2..])
     } else {
@@ -772,12 +409,12 @@ fn shard_key(hash: &str) -> (&str, &str) {
 
 /// Create the orphan branch using plumbing commands only — never touches
 /// the working tree or index, so uncommitted changes are safe.
-fn ensure_branch(project_root: &str) -> Result<(), String> {
+fn ensure_branch(project_root: &str) -> Result<(), CliError> {
     if branch_exists(project_root) {
         return Ok(());
     }
 
-    let readme_content = "# Anchors\n\nThis branch contains anchor metadata managed by anchor.\nDo not edit manually.\n";
+    let readme_content = "# Anchors\n\nThis branch contains anchor metadata managed by oobo.\nDo not edit manually.\n";
     let blob = git_stdin_in(
         project_root,
         &["hash-object", "-w", "--stdin"],
@@ -810,34 +447,37 @@ fn ensure_branch(project_root: &str) -> Result<(), String> {
 const MAX_WRITE_ATTEMPTS: u32 = 3;
 
 /// Write entries to the orphan branch, retrying on CAS contention.
-fn write_to_branch(project_root: &str, entries: &[(String, String)]) -> Result<(), String> {
+pub(super) fn write_to_branch(project_root: &str, entries: &[(String, String)]) -> Result<(), CliError> {
     let mut last_err = String::new();
     for attempt in 0..MAX_WRITE_ATTEMPTS {
         match try_write_to_branch(project_root, entries) {
             Ok(()) => return Ok(()),
-            Err(e)
+            Err(ref e)
                 if attempt < MAX_WRITE_ATTEMPTS - 1
-                    && (e.contains("but expected") || e.contains("cannot lock ref")) =>
+                    && {
+                        let msg = e.to_string();
+                        msg.contains("but expected") || msg.contains("cannot lock ref")
+                    } =>
             {
-                last_err = e;
-                jitter_sleep(attempt);
+                last_err = e.to_string();
+                sync::jitter_sleep(attempt);
             }
             Err(e) => return Err(e),
         }
     }
-    Err(format!(
+    Err(CliError::Git(format!(
         "write failed after {MAX_WRITE_ATTEMPTS} attempts: {last_err}"
-    ))
+    )))
 }
 
 /// Build a commit on top of `parent` with `entries` added. Returns the
 /// commit hash without updating any ref.
-fn build_commit_on(
+pub(super) fn build_commit_on(
     project_root: &str,
     parent: &str,
     entries: &[(String, String)],
     message: &str,
-) -> Result<String, String> {
+) -> Result<String, CliError> {
     let tree_hash = git_in(project_root, &["rev-parse", &format!("{parent}^{{tree}}")])?;
 
     let env_key = "GIT_INDEX_FILE";
@@ -891,15 +531,15 @@ fn build_commit_on(
 }
 
 /// hash-object → update-index → write-tree → commit-tree → CAS update-ref.
-fn try_write_to_branch(project_root: &str, entries: &[(String, String)]) -> Result<(), String> {
+fn try_write_to_branch(project_root: &str, entries: &[(String, String)]) -> Result<(), CliError> {
     let parent = git_in(project_root, &["rev-parse", BRANCH])?;
     let new_commit = build_commit_on(
         project_root,
         &parent,
         entries,
         &format!(
-            "anchor: add anchor for {}",
-            entries.first().map(|(p, _)| p.as_str()).unwrap_or("?")
+            "oobo: add anchor for {}",
+            entries.first().map_or("?", |(p, _)| p.as_str())
         ),
     )?;
 
@@ -916,14 +556,14 @@ fn try_write_to_branch(project_root: &str, entries: &[(String, String)]) -> Resu
     Ok(())
 }
 
-fn read_from_branch(project_root: &str, path: &str) -> Option<String> {
+pub(super) fn read_from_branch(project_root: &str, path: &str) -> Option<String> {
     git_in(project_root, &["show", &format!("{BRANCH}:{path}")]).ok()
 }
 
 /// Run a git command in a specific directory and capture stdout.
 /// Uses the real git binary and clears hook-related env vars so this
 /// works correctly when called from inside a git hook.
-fn git_in(project_root: &str, args: &[&str]) -> Result<String, String> {
+pub(super) fn git_in(project_root: &str, args: &[&str]) -> Result<String, CliError> {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let output = Command::new(git)
         .args(args)
@@ -935,7 +575,7 @@ fn git_in(project_root: &str, args: &[&str]) -> Result<String, String> {
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_QUARANTINE_PATH")
         .output()
-        .map_err(|e| format!("git: {e}"))?;
+        .map_err(|e| CliError::Git(format!("git: {e}")))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout)
@@ -943,12 +583,14 @@ fn git_in(project_root: &str, args: &[&str]) -> Result<String, String> {
             .trim()
             .to_string())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        Err(CliError::Git(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ))
     }
 }
 
 /// Run a git command with extra environment variables.
-fn git_env_in(project_root: &str, args: &[&str], env: &[(&str, &str)]) -> Result<String, String> {
+fn git_env_in(project_root: &str, args: &[&str], env: &[(&str, &str)]) -> Result<String, CliError> {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let mut cmd = Command::new(git);
     cmd.args(args)
@@ -964,7 +606,7 @@ fn git_env_in(project_root: &str, args: &[&str], env: &[(&str, &str)]) -> Result
         cmd.env(k, v);
     }
 
-    let output = cmd.output().map_err(|e| format!("git: {e}"))?;
+    let output = cmd.output().map_err(|e| CliError::Git(format!("git: {e}")))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout)
@@ -972,12 +614,14 @@ fn git_env_in(project_root: &str, args: &[&str], env: &[(&str, &str)]) -> Result
             .trim()
             .to_string())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        Err(CliError::Git(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ))
     }
 }
 
 /// Run a git command with stdin data.
-fn git_stdin_in(project_root: &str, args: &[&str], stdin_data: &str) -> Result<String, String> {
+fn git_stdin_in(project_root: &str, args: &[&str], stdin_data: &str) -> Result<String, CliError> {
     use std::io::Write;
 
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
@@ -991,15 +635,15 @@ fn git_stdin_in(project_root: &str, args: &[&str], stdin_data: &str) -> Result<S
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_QUARANTINE_PATH")
         .spawn()
-        .map_err(|e| format!("git: {e}"))?;
+        .map_err(|e| CliError::Git(format!("git: {e}")))?;
 
     if let Some(ref mut stdin) = child.stdin {
         stdin
             .write_all(stdin_data.as_bytes())
-            .map_err(|e| format!("write stdin: {e}"))?;
+            .map_err(|e| CliError::Git(format!("write stdin: {e}")))?;
     }
 
-    let output = child.wait_with_output().map_err(|e| format!("git: {e}"))?;
+    let output = child.wait_with_output().map_err(|e| CliError::Git(format!("git: {e}")))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout)
@@ -1007,13 +651,16 @@ fn git_stdin_in(project_root: &str, args: &[&str], stdin_data: &str) -> Result<S
             .trim()
             .to_string())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        Err(CliError::Git(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::sync::{replay_local_files, validate_anchor_remote};
     use crate::core::anchor::{AuthorType, Contributor, ContributorRole, LinkType};
 
     #[test]
@@ -1172,6 +819,8 @@ mod tests {
             bash_commands: None,
             thinking_duration_ms: None,
             compact_count: None,
+            context_tokens: None,
+            context_window_size: None,
             is_subagent: false,
             parent_session_id: None,
             subagent_type: None,
@@ -1277,7 +926,7 @@ mod tests {
         }
 
         let err = validate_anchor_remote(repo_str, "oobo").unwrap_err();
-        assert!(err.contains("anchor remote 'oobo' is not configured"));
+        assert!(err.to_string().contains("oobo remote 'oobo' is not configured"));
     }
 
     #[test]
@@ -1499,10 +1148,10 @@ mod tests {
         let assert_no_leftover = |label: &str| {
             let leftover: Vec<_> = std::fs::read_dir(&git_dir)
                 .unwrap()
-                .filter_map(|e| e.ok())
+                .filter_map(std::result::Result::ok)
                 .filter(|e| e.file_name().to_string_lossy().starts_with("oobo-index-"))
                 .collect();
-            assert!(leftover.is_empty(), "{label}: found {:?}", leftover);
+            assert!(leftover.is_empty(), "{label}: found {leftover:?}");
         };
 
         // Success path: full pipeline runs, temp index cleaned up.
@@ -1523,7 +1172,7 @@ mod tests {
         #[cfg(unix)]
         {
             let result =
-                build_commit_on(&repo, &parent, &[("".into(), "data".into())], "should fail");
+                build_commit_on(&repo, &parent, &[(String::new(), "data".into())], "should fail");
             assert!(result.is_err(), "empty path should fail in update-index");
             assert_no_leftover("after mid-pipeline error");
         }
@@ -1569,6 +1218,8 @@ mod tests {
                 bash_commands: None,
                 thinking_duration_ms: None,
                 compact_count: None,
+                context_tokens: None,
+                context_window_size: None,
                 is_subagent: false,
                 parent_session_id: None,
                 subagent_type: None,
@@ -1593,6 +1244,8 @@ mod tests {
                 bash_commands: None,
                 thinking_duration_ms: None,
                 compact_count: None,
+                context_tokens: None,
+                context_window_size: None,
                 is_subagent: false,
                 parent_session_id: None,
                 subagent_type: None,
@@ -1601,7 +1254,7 @@ mod tests {
             },
         ];
 
-        let json_str = build_timeline_json(&anchor, &links, &interactions).unwrap();
+        let json_str = build_timeline_json("/tmp/test-repo", &anchor, &links, &interactions).unwrap();
         let val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(val["session_count"], 2);

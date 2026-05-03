@@ -92,7 +92,7 @@ pub struct ParentTurn {
     pub session_id: String,
     pub source: String,
     pub turn_id: String,
-    #[allow(dead_code)]
+    /// Ordinal position in the session; used for ordering and debugging.
     pub turn_index: i64,
     /// Milliseconds since epoch. `None` means the candidate has no
     /// timestamp, which disqualifies it from temporal scoring.
@@ -226,7 +226,7 @@ pub fn infer(orphans: &[OrphanChild], parents: &[ParentTurn]) -> Vec<Inference> 
                 subagent_kind = Some(kind.clone());
             }
 
-            let score = signals.iter().map(|s| s.weight()).sum::<f32>().min(1.0);
+            let score = signals.iter().map(SignalHit::weight).sum::<f32>().min(1.0);
 
             let inference = Inference {
                 child_session_id: child.session_id.clone(),

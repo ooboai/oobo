@@ -122,6 +122,8 @@ mod tests {
             bash_commands: None,
             thinking_duration_ms: None,
             compact_count: None,
+            context_tokens: None,
+            context_window_size: None,
             is_subagent: false,
             parent_session_id: None,
             subagent_type: None,

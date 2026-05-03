@@ -1,11 +1,12 @@
 use std::process::{Command, Stdio};
 
 use crate::config::Config;
+use crate::error::{CliError, CmdResult};
 use crate::git::{commands, interceptor};
 
 /// Run the real git binary with the given arguments, inheriting stdio.
 /// Returns the exit code.
-pub fn run_git(cfg: &Config, args: &[&str]) -> Result<i32, String> {
+pub fn run_git(cfg: &Config, args: &[&str]) -> CmdResult {
     let git_path = cfg.git_path();
 
     let status = Command::new(git_path)
@@ -14,13 +15,13 @@ pub fn run_git(cfg: &Config, args: &[&str]) -> Result<i32, String> {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
-        .map_err(|e| format!("failed to run {git_path}: {e}"))?;
+        .map_err(|e| CliError::Git(format!("failed to run {git_path}: {e}")))?;
 
     Ok(status.code().unwrap_or(1))
 }
 
 /// Run a git command and capture its stdout (for internal use, not user-facing).
-pub fn run_git_capture(cfg: &Config, args: &[&str]) -> Result<String, String> {
+pub fn run_git_capture(cfg: &Config, args: &[&str]) -> Result<String, CliError> {
     run_git_capture_in(cfg, args, None)
 }
 
@@ -28,7 +29,7 @@ pub fn run_git_capture_in(
     cfg: &Config,
     args: &[&str],
     dir: Option<&str>,
-) -> Result<String, String> {
+) -> Result<String, CliError> {
     let git_path = cfg.git_path();
 
     let mut cmd = Command::new(git_path);
@@ -44,7 +45,7 @@ pub fn run_git_capture_in(
     }
     let output = cmd
         .output()
-        .map_err(|e| format!("failed to run {git_path}: {e}"))?;
+        .map_err(|e| CliError::Git(format!("failed to run {git_path}: {e}")))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout)
@@ -53,11 +54,11 @@ pub fn run_git_capture_in(
             .to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!(
+        Err(CliError::Git(format!(
             "git {}: {}",
             args.first().unwrap_or(&""),
             stderr.trim()
-        ))
+        )))
     }
 }
 
@@ -80,14 +81,12 @@ pub fn project_root_from(cwd: &str) -> String {
         .env_remove("GIT_QUARANTINE_PATH")
         .output()
         .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
+        .filter(|o| o.status.success()).map_or_else(|| cwd.to_string(), |o| {
             String::from_utf8_lossy(&o.stdout)
                 .replace('\r', "")
                 .trim()
                 .to_string()
         })
-        .unwrap_or_else(|| cwd.to_string())
 }
 
 /// Get current branch name.
@@ -96,7 +95,7 @@ pub fn current_branch(cfg: &Config) -> Option<String> {
 }
 
 /// Run git, then intercept write ops to collect and send context.
-pub fn run_and_intercept(cfg: &Config, args: &[&str]) -> Result<i32, String> {
+pub fn run_and_intercept(cfg: &Config, args: &[&str]) -> CmdResult {
     if commands::is_write_op(args) && cfg.telemetry.enabled {
         std::env::set_var("OOBO_INTERCEPTED", "1");
     }
@@ -116,7 +115,7 @@ pub fn run_and_intercept(cfg: &Config, args: &[&str]) -> Result<i32, String> {
     if !pre_rewrite_map.is_empty() {
         if let Some(root) = project_root(cfg) {
             if let Err(e) = super::orphan::rekey_anchors(&root, &pre_rewrite_map) {
-                log_error(&format!("anchor rekey error: {e}"));
+                log_error(&format!("oobo rekey error: {e}"));
             }
         }
     }
@@ -188,7 +187,7 @@ fn post_clone(_cfg: &Config, args: &[&str]) {
     }
 
     if let Err(e) = crate::git::orphan::fetch_and_reconcile(&root) {
-        eprintln!("anchor: could not fetch anchor metadata: {e}");
+        eprintln!("oobo: could not fetch anchor metadata: {e}");
         return;
     }
 

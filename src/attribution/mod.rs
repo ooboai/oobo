@@ -120,7 +120,7 @@ pub fn compute_windows(
             // anchor — this is the behavior the store's backfill
             // path expects (timestamps are optional per schema).
             let mut window_end: i64 = -1;
-            for t in session_turns.iter() {
+            for t in session_turns {
                 let eligible = match t.started_at {
                     Some(ts) => ts <= anchor.committed_at_ms,
                     None => true,
@@ -143,7 +143,7 @@ pub fn compute_windows(
             let mut duration_ms_acc: i64 = 0;
             let mut has_duration = false;
 
-            for t in session_turns.iter() {
+            for t in session_turns {
                 if t.turn_index < first || t.turn_index > last {
                     continue;
                 }
@@ -374,7 +374,7 @@ mod tests {
             .filter(|c| c.session_id == "s1")
             .map(|c| (c.first_turn_index, c.last_turn_index))
             .collect();
-        s1_windows.sort();
+        s1_windows.sort_unstable();
         for pair in s1_windows.windows(2) {
             assert!(pair[0].1 < pair[1].0, "overlap detected: {pair:?}");
         }

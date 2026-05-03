@@ -1,11 +1,11 @@
 use super::session_evidence::is_agent_tool_match;
 
 /// A collected transcript with optional parent linkage for subagent sessions.
-#[allow(dead_code)]
 pub(in crate::git) struct CollectedTranscript {
     pub session_id: String,
     pub content: String,
     pub parent_session_id: Option<String>,
+    /// Written to subagent metadata for type identification.
     pub subagent_type: Option<String>,
 }
 
@@ -380,17 +380,23 @@ mod tests {
             file_snapshots: None,
             edited_files: None,
             read_files: None,
+            file_events: None,
             tool_usage: None,
             tool_failures: None,
             bash_commands: None,
             subagent_runs: None,
             thinking_duration_ms: None,
             compact_count: None,
+            turn_count: None,
+            context_tokens: None,
+            context_window_size: None,
             current_turn_index: 0,
             current_turn_started_at: None,
             current_turn_hook_events: None,
             current_turn_tool_calls: None,
             last_turn_snapshot_id: None,
+            pre_edit_pending: None,
+            file_edit_chain: None,
             started_at: now,
             updated_at: now,
         };
