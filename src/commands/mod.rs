@@ -2,6 +2,7 @@ pub mod agent;
 pub mod anchors;
 pub mod bare;
 pub mod blame;
+pub mod delta;
 pub mod goto;
 pub mod legacy;
 pub mod search;

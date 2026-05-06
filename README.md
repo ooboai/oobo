@@ -255,6 +255,14 @@ oobo settings project set transparency off           # per-project override
 oobo settings set setup.scan_roots "~/src,~/work"
 ```
 
+**Note:** The `remote` key has different meanings by scope. At **default** scope it sets the API server URL. At **project** scope it sets the Git remote where anchors are pushed (defaults to `origin`). To push anchors to a separate repo:
+
+```bash
+oobo settings project set remote git@github.com:org/repo-anchors.git
+```
+
+Anchor data is always written locally first. If the push fails, data is safe — the next successful push includes all pending anchors.
+
 For full fidelity or automation, `~/.oobo/config` still works:
 
 ```toml
@@ -264,6 +272,9 @@ api_key = "sk_..."
 
 [transparency]
 mode = "off"           # off | on
+
+[anchors]
+remote = "origin"      # or a full URL for a separate anchor repo
 
 [cursor]
 enabled = true

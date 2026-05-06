@@ -368,6 +368,7 @@ fn test_config_save_and_load() {
         droid: oobo::config::ToolConfig::default(),
         junie: oobo::config::ToolConfig::default(),
         amp: oobo::config::ToolConfig::default(),
+        anchors: oobo::config::AnchorsConfig::default(),
         telemetry: oobo::config::TelemetryConfig {
             enabled: true,
             send_diffs: true,
@@ -1320,16 +1321,16 @@ fn test_e2e_remote_search_uses_default_server_remote() {
         .unwrap();
 
     let remote_url = serve_search_once();
-    let set_remote = Command::new(oobo_binary())
-        .args(["settings", "default", "set", "remote", &remote_url])
+    let set_api_url = Command::new(oobo_binary())
+        .args(["settings", "default", "set", "api_url", &remote_url])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
         .output()
         .unwrap();
     assert!(
-        set_remote.status.success(),
-        "project remote set failed: {}",
-        String::from_utf8_lossy(&set_remote.stderr)
+        set_api_url.status.success(),
+        "api_url set failed: {}",
+        String::from_utf8_lossy(&set_api_url.stderr)
     );
 
     let set_key = Command::new(oobo_binary())

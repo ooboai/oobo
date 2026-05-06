@@ -269,7 +269,7 @@ pub(super) fn draw_picker_overlay(frame: &mut ratatui::Frame<'_>, p: &PickerStat
 
 pub(super) fn draw_help_overlay(frame: &mut ratatui::Frame<'_>) {
     let area = frame.area();
-    let rect = centered(area, 62, 26);
+    let rect = centered(area, 62, 27);
 
     let lines = vec![
         Line::from(Span::styled(
@@ -285,6 +285,7 @@ pub(super) fn draw_help_overlay(frame: &mut ratatui::Frame<'_>) {
         Line::from("   b           blame (file picker)"),
         Line::from("   L           goto selected (time-travel, auto-stashes)"),
         Line::from("   /           live filter (type to narrow list)"),
+        Line::from("   s           remote search (memory + full-text)"),
         Line::from("   t           cycle time window (all / 24h / 7d / 30d)"),
         Line::from("   e           toggle tracking on/off"),
         Line::from("   r           reload"),

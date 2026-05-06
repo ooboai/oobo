@@ -218,11 +218,19 @@ pub fn record_post_edit_file(
 }
 
 /// Clean up stale session state older than `max_age_secs`.
+/// Ended sessions (those with `ended_at` set) use a shorter grace period
+/// of 1 hour — long enough for the user to commit after exiting the agent.
 pub fn cleanup_stale(project_root: &str, max_age_secs: i64) {
+    const ENDED_GRACE_SECS: i64 = 3600;
     let now = chrono::Utc::now().timestamp();
     let sessions = store::list_for_project(project_root);
     for s in sessions {
-        if now - s.updated_at > max_age_secs {
+        let stale = if let Some(ended) = s.ended_at {
+            now - ended > ENDED_GRACE_SECS
+        } else {
+            now - s.updated_at > max_age_secs
+        };
+        if stale {
             store::remove(project_root, &s.session_id);
         }
     }

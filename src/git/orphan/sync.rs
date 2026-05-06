@@ -5,8 +5,11 @@ use crate::error::CliError;
 
 use super::{branch_exists, build_commit_on, git_in, BRANCH, NULL_OID};
 
+/// Resolve the anchor remote once per call site. Uses the full precedence
+/// chain: project config > global config > "origin".
 fn anchor_remote(project_root: &str) -> String {
-    crate::project_config::anchor_remote(project_root).unwrap_or_else(|| "origin".to_string())
+    let global = crate::config::Config::load_or_default();
+    crate::commands::sync::resolve(&global, Some(project_root)).anchor_remote
 }
 
 pub fn remote_branch_exists(project_root: &str) -> bool {

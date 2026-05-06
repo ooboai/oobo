@@ -42,8 +42,8 @@ const RESERVED_COMMANDS: &[&str] = &[
 ];
 
 const PUBLIC_HELP_COMMANDS: &[&str] = &[
-    "anchors", "anchor", "goto", "back", "blame", "search", "settings", "enable", "disable",
-    "setup", "help", "update",
+    "anchors", "anchor", "delta", "goto", "back", "blame", "search", "settings", "enable",
+    "disable", "setup", "help", "update",
 ];
 
 const FORBIDDEN_COMMANDS: &[&str] = &[

@@ -146,105 +146,144 @@ pub fn handle_event(
         }
         "after-tool-use" | "after-file-edit" => {
             if let Some(sid) = session_id_field {
-                let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
-                let _ = state::record_hook_event(
-                    &project_root,
-                    sid,
-                    event_name,
-                    Some(event.extra.clone()),
-                );
-                if !project_root.is_empty() {
-                    let tool_name = event
-                        .extra
-                        .get("tool_name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                let mut batch = state::SessionBatch::open(
+                    &project_root, sid, agent, event.model.as_deref(),
+                )?;
 
-                    let tool_input = event.extra.get("tool_input");
+                let tool_name = event
+                    .extra
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let tool_input = event.extra.get("tool_input");
 
-                    // Record tool usage count by tool name.
-                    if !tool_name.is_empty() {
-                        let input_summary = summarize_tool_input_hook(tool_name, tool_input);
-                        let _ = state::record_tool_use(
-                            &project_root,
-                            sid,
-                            tool_name,
-                            input_summary.as_deref(),
-                        );
-                        let _ = state::record_tool_call(
-                            &project_root,
-                            sid,
-                            tool_name,
-                            tool_input.cloned(),
-                            event.extra.get("tool_output").cloned(),
-                            false,
-                        );
+                {
+                    let s = batch.state_mut();
+
+                    if s.current_turn_started_at.is_none() {
+                        s.current_turn_started_at = Some(chrono::Utc::now().timestamp());
                     }
+                    let mut events = s.current_turn_hook_events.take().unwrap_or_default();
+                    events.push(crate::core::turn::TurnHookEvent {
+                        name: event_name.to_string(),
+                        observed_at: chrono::Utc::now().timestamp(),
+                        payload: Some(event.extra.clone()),
+                    });
+                    s.current_turn_hook_events = Some(events);
 
-                    // Track edited files for file-modifying tools.
-                    if is_file_mutating_tool(tool_name) || tool_name.is_empty() {
-                        // Cursor: file_path at top level.
-                        // Claude PostToolUse: file_path inside tool_input.
-                        let file_path = event
-                            .extra
-                            .get("file_path")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| {
+                    if !project_root.is_empty() && !tool_name.is_empty() {
+                        let input_summary = summarize_tool_input_hook(tool_name, tool_input);
+
+                        let mut usage = s.tool_usage.take().unwrap_or_default();
+                        *usage.entry(tool_name.to_string()).or_insert(0) += 1;
+                        s.tool_usage = Some(usage);
+                        if matches!(tool_name, "Bash" | "Shell") {
+                            if let Some(cmd) = &input_summary {
+                                let mut cmds = s.bash_commands.take().unwrap_or_default();
+                                const MAX_BASH: usize = 50;
+                                if cmds.len() >= MAX_BASH {
+                                    cmds.drain(..=cmds.len() - MAX_BASH);
+                                }
+                                cmds.push(cmd.clone());
+                                s.bash_commands = Some(cmds);
+                            }
+                        }
+
+                        let mut calls = s.current_turn_tool_calls.take().unwrap_or_default();
+                        calls.push(crate::core::turn::TurnToolCall {
+                            name: tool_name.to_string(),
+                            observed_at: chrono::Utc::now().timestamp(),
+                            input: tool_input.cloned(),
+                            output: event.extra.get("tool_output").cloned(),
+                            failed: false,
+                        });
+                        s.current_turn_tool_calls = Some(calls);
+                    }
+                }
+
+                let mutating_rel = if !project_root.is_empty()
+                    && (is_file_mutating_tool(tool_name) || tool_name.is_empty())
+                {
+                    event
+                        .extra
+                        .get("file_path")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| {
+                            tool_input
+                                .and_then(|ti| ti.get("file_path").or_else(|| ti.get("path")))
+                                .and_then(|v| v.as_str())
+                        })
+                        .map(|abs| make_relative(abs, &project_root))
+                        .filter(|rel| !rel.starts_with('/') && !rel.starts_with(".."))
+                } else {
+                    None
+                };
+
+                if let Some(ref rel) = mutating_rel {
+                    let s = batch.state_mut();
+                    let mut files = s.edited_files.take().unwrap_or_default();
+                    files.insert(rel.clone());
+                    s.edited_files = Some(files);
+                    let mut fe = s.file_events.take().unwrap_or_default();
+                    fe.push(state::FileEvent {
+                        path: rel.clone(),
+                        action: "write".into(),
+                        timestamp: chrono::Utc::now().timestamp(),
+                    });
+                    s.file_events = Some(fe);
+                }
+
+                if !project_root.is_empty() && is_read_tool(tool_name) {
+                    let file_path = event
+                        .extra
+                        .get("file_path")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| {
+                            tool_input
+                                .and_then(|ti| ti.get("file_path"))
+                                .and_then(|v| v.as_str())
+                        })
+                        .or_else(|| {
+                            if is_dir_scoped_tool(tool_name) {
+                                None
+                            } else {
                                 tool_input
-                                    .and_then(|ti| ti.get("file_path").or_else(|| ti.get("path")))
+                                    .and_then(|ti| ti.get("path"))
                                     .and_then(|v| v.as_str())
-                            });
+                            }
+                        });
 
-                        if let Some(abs_path) = file_path {
+                    if let Some(abs_path) = file_path {
+                        if !abs_path.ends_with('/') && abs_path != "." {
                             let rel = make_relative(abs_path, &project_root);
                             if !rel.starts_with('/') && !rel.starts_with("..") {
-                                let _ = state::record_edited_file(&project_root, sid, &rel);
-                                let _ = state::record_post_edit_file(
-                                    &project_root,
-                                    sid,
-                                    &rel,
-                                    if tool_name.is_empty() {
-                                        None
-                                    } else {
-                                        Some(tool_name)
-                                    },
-                                );
+                                let s = batch.state_mut();
+                                let mut files = s.read_files.take().unwrap_or_default();
+                                files.insert(rel.clone());
+                                s.read_files = Some(files);
+                                let mut fe = s.file_events.take().unwrap_or_default();
+                                fe.push(state::FileEvent {
+                                    path: rel,
+                                    action: "read".into(),
+                                    timestamp: chrono::Utc::now().timestamp(),
+                                });
+                                s.file_events = Some(fe);
                             }
                         }
                     }
+                }
 
-                    // Track read files for file-reading tools.
-                    if is_read_tool(tool_name) {
-                        let file_path = event
-                            .extra
-                            .get("file_path")
-                            .and_then(|v| v.as_str())
-                            .or_else(|| {
-                                tool_input
-                                    .and_then(|ti| ti.get("file_path"))
-                                    .and_then(|v| v.as_str())
-                            })
-                            .or_else(|| {
-                                // For dir-scoped tools (Grep, Search, Glob, etc.)
-                                // only fall back to `path` if it looks like a file.
-                                if is_dir_scoped_tool(tool_name) {
-                                    None
-                                } else {
-                                    tool_input
-                                        .and_then(|ti| ti.get("path"))
-                                        .and_then(|v| v.as_str())
-                                }
-                            });
+                batch.flush()?;
 
-                        if let Some(abs_path) = file_path {
-                            if !abs_path.ends_with('/') && abs_path != "." {
-                                let rel = make_relative(abs_path, &project_root);
-                                if !rel.starts_with('/') && !rel.starts_with("..") {
-                                    let _ = state::record_read_file(&project_root, sid, &rel);
-                                }
-                            }
-                        }
-                    }
+                // record_post_edit_file does git hash-object (subprocess) +
+                // its own mutate round-trip — must happen after flush.
+                if let Some(ref rel) = mutating_rel {
+                    let _ = state::record_post_edit_file(
+                        &project_root,
+                        sid,
+                        rel,
+                        if tool_name.is_empty() { None } else { Some(tool_name) },
+                    );
                 }
             }
         }

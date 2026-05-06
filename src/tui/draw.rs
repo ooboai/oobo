@@ -5,7 +5,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
 use super::app::{visible_anchor_count, visible_anchors, App};
 use super::format::{pad_or_truncate, relative_time};
-use super::types::{DiffState, FeedState, MemoryKind, View};
+use super::types::{DiffState, FeedState, MemoryKind, SearchState, SearchStatus, View};
 
 // ── Loading skeleton ──────────────────────────────────────────────────
 
@@ -157,6 +157,8 @@ pub(super) fn draw_loading_skeleton(
     let footer = Line::from(vec![
         Span::styled(" /", Style::default().fg(Color::White)),
         Span::styled(" filter  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("s", Style::default().fg(Color::White)),
+        Span::styled(" search  ", Style::default().fg(Color::DarkGray)),
         Span::styled("enter", Style::default().fg(Color::White)),
         Span::styled(" open  ", Style::default().fg(Color::DarkGray)),
         Span::styled("?", Style::default().fg(Color::White)),
@@ -173,6 +175,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
     if let Some(first) = app.stack.first() {
         match first {
             View::Feed(feed) => draw_feed(frame, app, feed),
+            View::Search(ss) => draw_search(frame, app, ss),
             View::Transcript(ts) => super::transcript::draw_transcript(frame, ts),
             View::Diff(ds) => draw_diff(frame, ds),
             View::Picker(_) | View::Help => {}
@@ -183,6 +186,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
         if let Some(top) = app.stack.last() {
             match top {
                 View::Feed(_) => {}
+                View::Search(ss) => draw_search(frame, app, ss),
                 View::Transcript(ts) => super::transcript::draw_transcript(frame, ts),
                 View::Diff(ds) => draw_diff(frame, ds),
                 View::Picker(p) => super::detail::draw_picker_overlay(frame, p),
@@ -525,6 +529,8 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, app: &App, feed: &FeedState, area
         Line::from(vec![
             Span::styled(" /", Style::default().fg(Color::White)),
             Span::styled(" filter  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("s", Style::default().fg(Color::White)),
+            Span::styled(" search  ", Style::default().fg(Color::DarkGray)),
             Span::styled("enter", Style::default().fg(Color::White)),
             Span::styled(" open  ", Style::default().fg(Color::DarkGray)),
             Span::styled("?", Style::default().fg(Color::White)),
@@ -534,6 +540,335 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, app: &App, feed: &FeedState, area
         ])
     };
     frame.render_widget(Paragraph::new(content), area);
+}
+
+// ── Search view ──────────────────────────────────────────────────────
+
+fn draw_search(frame: &mut ratatui::Frame<'_>, app: &App, ss: &SearchState) {
+    use ratatui::widgets::Clear;
+    use super::app::SPINNER;
+
+    let area = frame.area();
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Block::default().style(Style::default().bg(Color::Reset)),
+        area,
+    );
+
+    let notice = !app.enabled;
+    let constraints = if notice {
+        vec![
+            Constraint::Length(3),
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ]
+    } else {
+        vec![
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ]
+    };
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area);
+
+    let (header_area, notice_area, body_area, footer_area) = if notice {
+        (layout[0], Some(layout[1]), layout[2], layout[3])
+    } else {
+        (layout[0], None, layout[1], layout[2])
+    };
+
+    let branch = app.branch.as_deref().unwrap_or("detached");
+    let sep = Span::styled(" · ", Style::default().fg(Color::DarkGray));
+
+    let tracking_span = if app.enabled {
+        Span::styled("on", Style::default().fg(Color::Green))
+    } else {
+        Span::styled("off", Style::default().fg(Color::Red))
+    };
+
+    let status_str = match &ss.status {
+        SearchStatus::Input => "search".to_string(),
+        SearchStatus::Loading => {
+            let s = SPINNER[app.tick % SPINNER.len()];
+            format!("{s} searching")
+        }
+        SearchStatus::Done => {
+            let n = ss.results.len();
+            let mem = ss.results.iter().filter(|r| r.source == "memory").count();
+            if mem > 0 {
+                format!("{n} results ({mem} memories)")
+            } else {
+                format!("{n} results")
+            }
+        }
+        SearchStatus::Error(_) => "search failed".to_string(),
+        SearchStatus::NoApiKey => "no API key".to_string(),
+    };
+
+    let header = vec![
+        Line::from(vec![
+            Span::styled("  ⚓ ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                "oobo",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+            Span::styled(app.project_name.clone(), Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("    ", Style::default()),
+            Span::styled(branch.to_string(), Style::default().fg(Color::DarkGray)),
+            sep.clone(),
+            Span::styled(status_str, Style::default().fg(Color::DarkGray)),
+            sep,
+            tracking_span,
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(header).alignment(Alignment::Left), header_area);
+
+    if let Some(na) = notice_area {
+        draw_tracking_notice(frame, na);
+    }
+
+    let has_answer = ss.answer.is_some();
+    if ss.results.is_empty() && !has_answer && !matches!(ss.status, SearchStatus::Loading) {
+        let hint = match &ss.status {
+            SearchStatus::Input => vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  type a question and press enter to search",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  examples:",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(Span::styled(
+                    "    why did we build the auth middleware?",
+                    Style::default().fg(Color::Gray),
+                )),
+                Line::from(Span::styled(
+                    "    what decisions were made about caching?",
+                    Style::default().fg(Color::Gray),
+                )),
+                Line::from(Span::styled(
+                    "    who worked on the payment integration?",
+                    Style::default().fg(Color::Gray),
+                )),
+            ],
+            SearchStatus::Done => vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  no results for \"{}\"", ss.query),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  press s to search again",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ],
+            SearchStatus::Error(e) => vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  search failed: {e}"),
+                    Style::default().fg(Color::Red),
+                )),
+            ],
+            SearchStatus::NoApiKey => vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  search requires an API key",
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  run: oobo settings set key <API_KEY>",
+                    Style::default().fg(Color::Gray),
+                )),
+            ],
+            SearchStatus::Loading => vec![],
+        };
+        frame.render_widget(Paragraph::new(hint).wrap(Wrap { trim: false }), body_area);
+    } else if matches!(ss.status, SearchStatus::Loading) {
+        let s = SPINNER[app.tick % SPINNER.len()];
+        let loading = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled(format!("  {s} "), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("searching for \"{}\"…", ss.query),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]),
+        ];
+        frame.render_widget(Paragraph::new(loading), body_area);
+    } else {
+        let (answer_area, list_area) = if let Some(answer) = ss.answer.as_deref() {
+            let usable_width = body_area.width.saturating_sub(6) as usize;
+            let text_lines = if usable_width > 0 {
+                (answer.len() + usable_width - 1) / usable_width
+            } else {
+                1
+            };
+            let answer_height = (text_lines as u16) + 3; // blank + text + blank + separator
+            let split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(answer_height), Constraint::Min(1)])
+                .split(body_area);
+            (Some(split[0]), split[1])
+        } else {
+            (None, body_area)
+        };
+
+        if let Some((area, answer)) = answer_area.zip(ss.answer.as_deref()) {
+            let answer_lines = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(
+                        "  💡 ",
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    Span::styled(
+                        answer.to_string(),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  ─".to_string() + &"─".repeat(area.width.saturating_sub(4) as usize),
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+            frame.render_widget(
+                Paragraph::new(answer_lines).wrap(Wrap { trim: false }),
+                area,
+            );
+        }
+
+        let items: Vec<ListItem> = ss
+            .results
+            .iter()
+            .map(|r| {
+                let is_memory = r.source == "memory";
+                let when = r
+                    .timestamp
+                    .map_or_else(|| "-".to_string(), super::format::relative_time);
+                let sha = r.anchor_sha.as_deref().unwrap_or("-");
+
+                let max_snippet = (list_area.width as usize).saturating_sub(6);
+                let snippet: String = r.snippet.chars().take(max_snippet).collect();
+
+                let score_str = format!("{:.0}%", r.score * 100.0);
+                let tok_str = r.tokens.filter(|t| *t > 0).map_or_else(
+                    String::new,
+                    |t| format!(" {}tok", super::format_tokens(t)),
+                );
+
+                let mut spans = vec![
+                    if is_memory {
+                        Span::styled(" ◆ ", Style::default().fg(Color::Magenta))
+                    } else {
+                        Span::styled(" ● ", Style::default().fg(Color::Green))
+                    },
+                    Span::styled(
+                        format!("{sha:<8}"),
+                        Style::default().fg(if is_memory {
+                            Color::Magenta
+                        } else {
+                            Color::Yellow
+                        }),
+                    ),
+                    Span::styled(format!(" {when:<5} "), Style::default().fg(Color::DarkGray)),
+                ];
+
+                if is_memory {
+                    if let Some(author) = &r.author {
+                        let short_author: String = author.split_whitespace().next().unwrap_or(author).chars().take(10).collect();
+                        spans.push(Span::styled(
+                            format!("{short_author} "),
+                            Style::default().fg(Color::Cyan),
+                        ));
+                    }
+                } else if let Some(tool) = &r.tool {
+                    spans.push(Span::styled(
+                        format!("{tool} "),
+                        Style::default().fg(Color::Blue),
+                    ));
+                }
+
+                spans.push(Span::styled(
+                    format!("{}{tok_str}", score_str),
+                    Style::default().fg(Color::DarkGray),
+                ));
+
+                let line1 = Line::from(spans);
+                let mut line2_spans = vec![Span::raw("   ")];
+                if r.project_name != "remote" {
+                    line2_spans.push(Span::styled(
+                        format!("[{}] ", r.project_name),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                line2_spans.push(Span::styled(
+                    snippet,
+                    Style::default().fg(if is_memory {
+                        Color::White
+                    } else {
+                        Color::Gray
+                    }),
+                ));
+                let line2 = Line::from(line2_spans);
+
+                ListItem::new(vec![line1, line2, Line::from("")])
+            })
+            .collect();
+
+        let list = List::new(items).highlight_style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        );
+        let mut state = ss.list;
+        frame.render_stateful_widget(list, list_area, &mut state);
+    }
+
+    let footer: Line<'static> = if matches!(ss.status, SearchStatus::Input) {
+        Line::from(vec![
+            Span::styled(
+                " 🔍 ",
+                Style::default().fg(Color::Cyan),
+            ),
+            Span::raw(ss.input.clone()),
+            Span::styled("▎", Style::default().fg(Color::Cyan)),
+        ])
+    } else if let Some(flash) = &app.flash {
+        Line::from(Span::styled(
+            format!(" {flash}"),
+            Style::default().fg(Color::Yellow),
+        ))
+    } else {
+        Line::from(vec![
+            Span::styled("s", Style::default().fg(Color::White)),
+            Span::styled(" new search  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("enter", Style::default().fg(Color::White)),
+            Span::styled(" jump to anchor  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("esc", Style::default().fg(Color::White)),
+            Span::styled(" back  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("q", Style::default().fg(Color::White)),
+            Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+        ])
+    };
+    frame.render_widget(Paragraph::new(footer), footer_area);
 }
 
 // ── Diff view ────────────────────────────────────────────────────────

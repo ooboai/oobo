@@ -127,9 +127,15 @@ pub fn run_back(cfg: &Config, mode: OutputMode) -> CmdResult {
 
     // Check if the user has made changes ON TOP of the goto state.
     let wt_dirty = git_capture(&project_root, &["diff", "--quiet"]);
-    let untracked = git_capture(&project_root, &["ls-files", "--others", "--exclude-standard"])
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
+    let untracked = git_capture(
+        &project_root,
+        &["ls-files", "--others", "--exclude-standard", "--exclude=.oobo/"],
+    )
+    .map(|s| {
+        s.lines()
+            .any(|l| !l.trim().is_empty() && !l.starts_with(".oobo/") && !l.starts_with(".oobo\\"))
+    })
+    .unwrap_or(false);
 
     if wt_dirty.is_err() || untracked {
         eprintln!("oobo: you have new changes since `goto`. Commit or stash them first.");

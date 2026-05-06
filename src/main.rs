@@ -30,6 +30,7 @@ mod utils;
 use std::process;
 
 fn main() {
+    reset_sigpipe();
     trace::init();
     let cfg = config::Config::load_or_default();
 
@@ -63,6 +64,18 @@ fn run_startup_tasks(_cfg: &config::Config) {
         eprintln!();
         eprintln!("  \x1b[1;36m  oobo {version}\x1b[0m");
         eprintln!();
+    }
+}
+
+/// Reset SIGPIPE to default so piping to `head`/`tail` terminates cleanly
+/// instead of panicking on "Broken pipe".
+fn reset_sigpipe() {
+    #[cfg(unix)]
+    unsafe {
+        extern "C" {
+            fn signal(sig: i32, handler: usize) -> usize;
+        }
+        signal(13 /* SIGPIPE */, 0 /* SIG_DFL */);
     }
 }
 

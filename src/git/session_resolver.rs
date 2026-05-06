@@ -395,6 +395,7 @@ pub(super) fn discover_sessions_from_tools(
                 file_edit_chain: None,
                 started_at: created_secs,
                 updated_at: updated_secs,
+                ended_at: None,
             });
         }
     }
@@ -745,6 +746,85 @@ mod tests {
         assert!(
             inp > user_inp,
             "input tokens should include system + tool, not just user"
+        );
+    }
+
+    fn make_session(id: &str, agent: &str) -> crate::hooks::state::ActiveSession {
+        let now = chrono::Utc::now().timestamp();
+        crate::hooks::state::ActiveSession {
+            session_id: id.to_string(),
+            agent: agent.to_string(),
+            model: None,
+            worktree: None,
+            transcript_path: None,
+            pre_agent_snapshots: None,
+            file_snapshots: None,
+            edited_files: None,
+            read_files: None,
+            file_events: None,
+            tool_usage: None,
+            tool_failures: None,
+            bash_commands: None,
+            subagent_runs: None,
+            thinking_duration_ms: None,
+            compact_count: None,
+            turn_count: None,
+            context_tokens: None,
+            context_window_size: None,
+            current_turn_index: 0,
+            current_turn_started_at: None,
+            current_turn_hook_events: None,
+            current_turn_tool_calls: None,
+            last_turn_snapshot_id: None,
+            pre_edit_pending: None,
+            file_edit_chain: None,
+            started_at: now,
+            updated_at: now,
+            ended_at: None,
+        }
+    }
+
+    #[test]
+    fn test_filter_ended_session_included_via_recency() {
+        let mut session = make_session("ended-1", "claude");
+        session.ended_at = Some(chrono::Utc::now().timestamp());
+        session.updated_at = chrono::Utc::now().timestamp();
+
+        let committed = vec!["src/main.rs".to_string()];
+        let result = filter_relevant_sessions(&[session], "/tmp/fake", &committed, 0);
+        assert_eq!(
+            result.len(),
+            1,
+            "ended session should be included via recency (same as active sessions)"
+        );
+        assert_eq!(result[0].session_id, "ended-1");
+    }
+
+    #[test]
+    fn test_filter_active_session_uses_recency() {
+        let mut session = make_session("active-1", "claude");
+        session.updated_at = chrono::Utc::now().timestamp();
+
+        let committed = vec!["src/main.rs".to_string()];
+        let result = filter_relevant_sessions(&[session], "/tmp/fake", &committed, 0);
+        assert_eq!(
+            result.len(),
+            1,
+            "active session should be included via recency fallback"
+        );
+    }
+
+    #[test]
+    fn test_filter_stale_ended_session_excluded() {
+        let mut session = make_session("stale-1", "claude");
+        session.ended_at = Some(chrono::Utc::now().timestamp() - 7200);
+        session.updated_at = chrono::Utc::now().timestamp() - 7200;
+
+        let committed = vec!["src/main.rs".to_string()];
+        let result = filter_relevant_sessions(&[session], "/tmp/fake", &committed, 0);
+        assert!(
+            result.is_empty(),
+            "stale ended session should be excluded by recency filter"
         );
     }
 }

@@ -8,7 +8,7 @@ pub async fn run(check_only: bool) -> Result<(), String> {
     let latest = fetch_latest_version().await?;
     let latest_clean = latest.trim_start_matches('v');
 
-    if latest_clean == current_version {
+    if latest_clean == current_version || !is_newer(latest_clean, current_version) {
         eprintln!("already up to date");
         return Ok(());
     }
@@ -249,4 +249,62 @@ fn is_musl() -> bool {
                 out.to_ascii_lowercase().contains("musl")
             })
             .unwrap_or(false)
+}
+
+/// Compare two version strings, returning true if `candidate` is newer than `current`.
+/// Strips pre-release suffixes (e.g. "-rc.1") for the numeric comparison,
+/// then treats a pre-release of the same base version as older than the release.
+fn is_newer(candidate: &str, current: &str) -> bool {
+    fn parse_parts(v: &str) -> (Vec<u64>, &str) {
+        let (base, pre) = v.split_once('-').map_or((v, ""), |(b, p)| (b, p));
+        let nums: Vec<u64> = base.split('.').filter_map(|s| s.parse().ok()).collect();
+        (nums, pre)
+    }
+
+    let (cand_nums, _cand_pre) = parse_parts(candidate);
+    let (curr_nums, _curr_pre) = parse_parts(current);
+
+    let max_len = cand_nums.len().max(curr_nums.len());
+    for i in 0..max_len {
+        let c = cand_nums.get(i).copied().unwrap_or(0);
+        let r = curr_nums.get(i).copied().unwrap_or(0);
+        if c > r {
+            return true;
+        }
+        if c < r {
+            return false;
+        }
+    }
+
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_newer;
+
+    #[test]
+    fn newer_major() {
+        assert!(is_newer("2.0.0", "1.0.0"));
+    }
+
+    #[test]
+    fn older_release() {
+        assert!(!is_newer("0.1.15", "1.0.0-rc.1"));
+    }
+
+    #[test]
+    fn same_version() {
+        assert!(!is_newer("1.0.0", "1.0.0"));
+    }
+
+    #[test]
+    fn newer_patch() {
+        assert!(is_newer("1.0.1", "1.0.0"));
+    }
+
+    #[test]
+    fn rc_not_newer_than_same_base() {
+        assert!(!is_newer("1.0.0-rc.2", "1.0.0-rc.1"));
+    }
 }

@@ -108,6 +108,7 @@ impl TimeWindow {
 
 pub(super) enum View {
     Feed(FeedState),
+    Search(SearchState),
     Transcript(TranscriptState),
     Diff(DiffState),
     Picker(PickerState),
@@ -203,4 +204,43 @@ pub(super) enum PickerAction {
         sha: String,
     },
     Noop,
+}
+
+// ── Remote search ────────────────────────────────────────────────────
+
+#[derive(Clone)]
+pub(super) struct SearchResultRow {
+    pub anchor_sha: Option<String>,
+    pub project_name: String,
+    pub snippet: String,
+    pub score: f64,
+    /// `"fts"`, `"memory"`, or `"local"`.
+    pub source: String,
+    pub tool: Option<String>,
+    pub tokens: Option<i64>,
+    pub timestamp: Option<i64>,
+    pub author: Option<String>,
+}
+
+pub(super) enum SearchStatus {
+    Input,
+    Loading,
+    Done,
+    Error(String),
+    NoApiKey,
+}
+
+pub(super) struct SearchResponse {
+    pub answer: Option<String>,
+    pub results: Vec<SearchResultRow>,
+}
+
+pub(super) struct SearchState {
+    pub input: String,
+    pub query: String,
+    pub answer: Option<String>,
+    pub results: Vec<SearchResultRow>,
+    pub list: ListState,
+    pub status: SearchStatus,
+    pub rx: Option<std::sync::mpsc::Receiver<Result<SearchResponse, String>>>,
 }

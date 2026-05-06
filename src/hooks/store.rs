@@ -235,6 +235,7 @@ mod tests {
             file_edit_chain: None,
             started_at: 1,
             updated_at: 1,
+            ended_at: None,
         }
     }
 

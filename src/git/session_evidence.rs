@@ -145,6 +145,7 @@ mod tests {
             file_edit_chain: None,
             started_at: now,
             updated_at: now,
+            ended_at: None,
         }
     }
 

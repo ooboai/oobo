@@ -10,7 +10,7 @@ These fields describe the current 1.0 command surface. Removed 0.1.x commands su
 
 **bare `oobo` outside a repo**: object with `projects[]` and aggregate `stats`. Each project includes `id`, `name`, `path`, `remote`, `enabled`, `last_activity`, `anchors`, `tokens`, `ai_pct`.
 
-**settings**: object/array of effective setting rows. Valid keys are `key`, `remote`, `transparency`, `tools.experimental`, and `setup.scan_roots`.
+**settings**: object/array of effective setting rows. Valid keys are `key`, `remote`, `transparency`, `tools.experimental`.
 
 **blame**: per-file/per-line attribution data including path, line numbers, commit metadata, and AI attribution when available. Machine-output git blame formats bypass the AI overlay.
 

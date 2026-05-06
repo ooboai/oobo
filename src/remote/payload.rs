@@ -155,6 +155,8 @@ pub struct SearchProjectScope {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SearchResponse {
     #[serde(default)]
+    pub answer: Option<String>,
+    #[serde(default)]
     pub hits: Vec<SearchHit>,
 }
 
@@ -166,6 +168,9 @@ pub struct SearchHit {
     pub anchor_sha: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Memory hits use plural `session_ids` instead of `session_id`.
+    #[serde(default)]
+    pub session_ids: Option<Vec<String>>,
     #[serde(default)]
     pub tool: Option<String>,
     #[serde(default)]
@@ -178,6 +183,13 @@ pub struct SearchHit {
     pub snippet: Option<String>,
     #[serde(default)]
     pub score: Option<f64>,
+    /// `"fts"` for full-text search hits, `"memory"` for semantic memory hits.
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub memory_id: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -186,6 +198,89 @@ pub struct SearchProject {
     pub id: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
+}
+
+// ── Delta (textual diff between anchors) ──────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeltaRequest {
+    pub anchor_sha: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_remote: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_id: Option<String>,
+    #[serde(default)]
+    pub full: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaResponse {
+    #[serde(default)]
+    pub current: Option<DeltaAnchorSummary>,
+    #[serde(default)]
+    pub previous: Option<DeltaAnchorSummary>,
+    #[serde(default)]
+    pub changes: Option<DeltaChanges>,
+    #[serde(default)]
+    pub current_detail: Option<serde_json::Value>,
+    #[serde(default)]
+    pub previous_detail: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaAnchorSummary {
+    #[serde(default)]
+    pub sha: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub timestamp: Option<String>,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub headline: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub outcome: Option<String>,
+    #[serde(default)]
+    pub complexity: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaChanges {
+    #[serde(default)]
+    pub category_shift: Option<DeltaShift>,
+    #[serde(default)]
+    pub complexity_shift: Option<DeltaShift>,
+    #[serde(default)]
+    pub new_areas: Vec<String>,
+    #[serde(default)]
+    pub new_techniques: Vec<String>,
+    #[serde(default)]
+    pub files_new: Vec<String>,
+    #[serde(default)]
+    pub files_continued: Vec<String>,
+    #[serde(default)]
+    pub narrative: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaShift {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeltaErrorResponse {
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
 }
 
 #[cfg(test)]

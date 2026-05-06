@@ -399,6 +399,7 @@ mod tests {
             file_edit_chain: None,
             started_at: now,
             updated_at: now,
+            ended_at: None,
         };
 
         let transcripts = collect_session_transcripts(&[session], dir.path().to_str().unwrap());

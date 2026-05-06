@@ -10,6 +10,8 @@ pub struct ProjectConfig {
     pub schema_version: u32,
     #[serde(default)]
     pub project: ProjectSection,
+    #[serde(default, skip_serializing_if = "ProjectServerSection::is_empty")]
+    pub server: ProjectServerSection,
     #[serde(default)]
     pub anchors: AnchorsSection,
     #[serde(default)]
@@ -34,11 +36,24 @@ impl Default for ProjectSection {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProjectServerSection {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub url: String,
+}
+
+impl ProjectServerSection {
+    fn is_empty(&self) -> bool {
+        self.api_key.is_empty() && self.url.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AnchorsSection {
-    /// Optional Git remote target for the anchor metadata branch.
-    ///
-    /// Defaults to `origin`. May be a configured Git remote name (`oobo`) or a
-    /// full Git URL (`git@github.com:org/repo-oobo.git`).
+    /// Git remote target for the anchor metadata branch.
+    /// Defaults to [`crate::config::DEFAULT_ANCHOR_REMOTE`].
+    /// May be a configured Git remote name (`oobo`) or a full Git URL.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub remote: String,
 }
@@ -56,6 +71,7 @@ impl Default for ProjectConfig {
         Self {
             schema_version: default_schema_version(),
             project: ProjectSection::default(),
+            server: ProjectServerSection::default(),
             anchors: AnchorsSection::default(),
             privacy: PrivacySection::default(),
         }
@@ -154,12 +170,36 @@ pub fn transparency_mode(project_root: &str) -> Option<crate::core::anchor::Tran
     })
 }
 
+/// Test-only convenience accessors that load the config from disk.
+/// Production code should use `crate::commands::sync::resolve()` instead,
+/// which loads the project config once and resolves all settings in a single pass.
+#[cfg(test)]
 pub fn anchor_remote(project_root: &str) -> Option<String> {
     let cfg = ProjectConfig::load(project_root).ok().flatten()?;
     if cfg.anchors.remote.is_empty() {
         None
     } else {
         Some(cfg.anchors.remote)
+    }
+}
+
+#[cfg(test)]
+pub fn api_key(project_root: &str) -> Option<String> {
+    let cfg = ProjectConfig::load(project_root).ok().flatten()?;
+    if cfg.server.api_key.is_empty() {
+        None
+    } else {
+        Some(cfg.server.api_key)
+    }
+}
+
+#[cfg(test)]
+pub fn api_url(project_root: &str) -> Option<String> {
+    let cfg = ProjectConfig::load(project_root).ok().flatten()?;
+    if cfg.server.url.is_empty() {
+        None
+    } else {
+        Some(cfg.server.url)
     }
 }
 
@@ -233,6 +273,41 @@ mod tests {
         let loaded = ProjectConfig::load(&root).unwrap().unwrap();
         assert_eq!(loaded.project.id, "original");
         assert_eq!(loaded.privacy.transparency.as_deref(), Some("off"));
+    }
+
+    #[test]
+    fn server_section_round_trips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_string_lossy().to_string();
+
+        let mut cfg = ProjectConfig::for_project("test");
+        cfg.server.api_key = "sk_project_test".to_string();
+        cfg.server.url = "https://staging.oobo.ai".to_string();
+        cfg.anchors.remote = "oobo".to_string();
+        cfg.save(&root).unwrap();
+
+        let loaded = ProjectConfig::load(&root).unwrap().unwrap();
+        assert_eq!(loaded.server.api_key, "sk_project_test");
+        assert_eq!(loaded.server.url, "https://staging.oobo.ai");
+        assert_eq!(loaded.anchors.remote, "oobo");
+
+        assert_eq!(api_key(&root).as_deref(), Some("sk_project_test"));
+        assert_eq!(api_url(&root).as_deref(), Some("https://staging.oobo.ai"));
+        assert_eq!(anchor_remote(&root).as_deref(), Some("oobo"));
+    }
+
+    #[test]
+    fn empty_server_section_omitted_in_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_string_lossy().to_string();
+
+        let cfg = ProjectConfig::for_project("test");
+        cfg.save(&root).unwrap();
+
+        let raw = std::fs::read_to_string(path_for(&root)).unwrap();
+        assert!(!raw.contains("[server]"), "empty server section should be omitted");
+        assert!(api_key(&root).is_none());
+        assert!(api_url(&root).is_none());
     }
 
     #[test]

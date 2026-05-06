@@ -14,6 +14,7 @@ const RESERVED_VERBS: &[&str] = &["set", "unset"];
 
 const VALID_KEYS: &[&str] = &[
     "key",
+    "api_url",
     "remote",
     "transparency",
     "tools.experimental",
@@ -168,13 +169,14 @@ fn show_effective(cfg: &Config, mode: OutputMode) -> i32 {
     print_rows(&rows, mode);
     if matches!(mode, OutputMode::Tui) {
         println!();
-        println!("  key              API key for remote sync (oobo.ai cloud)");
-        println!("  remote           API endpoint URL");
+        println!("  key              API key for remote operations (search, delta)");
+        println!("  api_url          API endpoint URL (default: https://api.oobo.ai)");
+        println!("  remote           Git remote for anchor branch (default: origin)");
         println!("  transparency     sync transcripts to anchors branch (on/off)");
         println!("  tools.experimental  enable experimental tool adapters (on/off)");
         println!();
-        println!("  set:   oobo settings set <key> <value>");
-        println!("  unset: oobo settings unset <key>");
+        println!("  set:   oobo settings [default|project] set <key> <value>");
+        println!("  unset: oobo settings [default|project] unset <key>");
     }
     0
 }
@@ -310,7 +312,7 @@ fn run_set(
                 eprintln!("error: {e}");
                 return Ok(2);
             }
-            if let Err(e) = validate_project_value(key, value) {
+            if let Err(e) = validate_value(key, value) {
                 eprintln!("error: {e}");
                 return Ok(2);
             }
@@ -438,12 +440,21 @@ fn validate_key(key: &str) -> Result<(), CliError> {
 
 fn validate_value(key: &str, value: &str) -> Result<(), CliError> {
     match key {
-        "remote" => {
+        "api_url" => {
             if value.starts_with("http://") || value.starts_with("https://") {
                 Ok(())
             } else {
                 Err(CliError::Config(format!(
-                    "invalid value for 'remote': expected http(s) URL, got '{value}'"
+                    "invalid value for 'api_url': expected http(s) URL, got '{value}'"
+                )))
+            }
+        }
+        "remote" => {
+            if !value.trim().is_empty() && !value.chars().any(char::is_whitespace) {
+                Ok(())
+            } else {
+                Err(CliError::Config(format!(
+                    "invalid value for 'remote': expected Git remote name or URL, got '{value}'"
                 )))
             }
         }
@@ -465,7 +476,7 @@ fn validate_value(key: &str, value: &str) -> Result<(), CliError> {
 
 fn validate_project_key(key: &str) -> Result<(), CliError> {
     match key {
-        "key" | "remote" | "transparency" => Ok(()),
+        "key" | "api_url" | "remote" | "transparency" => Ok(()),
         "tools.experimental" => Err(CliError::Config(format!(
             "'{key}' is a default-only setting; use `oobo settings default set {key} ...`"
         ))),
@@ -473,20 +484,6 @@ fn validate_project_key(key: &str) -> Result<(), CliError> {
     }
 }
 
-fn validate_project_value(key: &str, value: &str) -> Result<(), CliError> {
-    match key {
-        "remote" => {
-            if !value.trim().is_empty() && !value.chars().any(char::is_whitespace) {
-                Ok(())
-            } else {
-                Err(CliError::Config(format!(
-                    "invalid value for project 'remote': expected Git remote name or URL, got '{value}'"
-                )))
-            }
-        }
-        _ => validate_value(key, value),
-    }
-}
 
 fn read_default(cfg: &Config, key: &str) -> Option<String> {
     match key {
@@ -498,7 +495,15 @@ fn read_default(cfg: &Config, key: &str) -> Option<String> {
                 Some(v.clone())
             }
         }
-        "remote" => Some(cfg.server.url.clone()),
+        "api_url" => Some(cfg.server.url.clone()),
+        "remote" => {
+            let v = &cfg.anchors.remote;
+            if v.is_empty() {
+                Some(crate::config::DEFAULT_ANCHOR_REMOTE.to_string())
+            } else {
+                Some(v.clone())
+            }
+        }
         "transparency" => Some(cfg.transparency.mode.clone()),
         "tools.experimental" => Some(if cfg.tools.experimental { "on" } else { "off" }.to_string()),
         _ => None,
@@ -508,7 +513,8 @@ fn read_default(cfg: &Config, key: &str) -> Option<String> {
 fn write_default(cfg: &mut Config, key: &str, value: &str) {
     match key {
         "key" => cfg.server.api_key = value.to_string(),
-        "remote" => cfg.server.url = value.to_string(),
+        "api_url" => cfg.server.url = value.to_string(),
+        "remote" => cfg.anchors.remote = value.to_string(),
         "transparency" => cfg.transparency.mode = value.to_string(),
         "tools.experimental" => {
             cfg.tools.experimental = matches!(value, "on" | "true");
@@ -520,7 +526,8 @@ fn write_default(cfg: &mut Config, key: &str, value: &str) {
 fn unset_default(cfg: &mut Config, key: &str) {
     match key {
         "key" => cfg.server.api_key.clear(),
-        "remote" => cfg.server.url = "https://api.oobo.ai".to_string(),
+        "api_url" => cfg.server.url = crate::config::DEFAULT_SERVER_URL.to_string(),
+        "remote" => cfg.anchors.remote.clear(),
         "transparency" => cfg.transparency.mode = "on".to_string(),
         "tools.experimental" => cfg.tools.experimental = false,
         _ => {}
@@ -530,6 +537,7 @@ fn unset_default(cfg: &mut Config, key: &str) {
 #[derive(Default)]
 struct ProjectSettings {
     api_key: Option<String>,
+    api_url: Option<String>,
     remote: Option<String>,
     transparency: Option<String>,
 }
@@ -537,6 +545,7 @@ struct ProjectSettings {
 fn read_project(ps: &ProjectSettings, key: &str) -> Option<String> {
     match key {
         "key" => ps.api_key.clone().filter(|s| !s.is_empty()),
+        "api_url" => ps.api_url.clone().filter(|s| !s.is_empty()),
         "remote" => ps.remote.clone().filter(|s| !s.is_empty()),
         "transparency" => ps.transparency.clone().filter(|s| !s.is_empty()),
         _ => None,
@@ -549,37 +558,27 @@ fn write_project_setting(
     key: &str,
     value: &str,
 ) -> Result<(), CliError> {
+    let mut cfg = load_project_config_for_write(project_root, project_id)?;
     match key {
-        "remote" | "transparency" => {
-            let mut cfg = load_project_config_for_write(project_root, project_id)?;
-            match key {
-                "remote" => cfg.anchors.remote = value.to_string(),
-                "transparency" => cfg.privacy.transparency = Some(value.to_string()),
-                _ => {}
-            }
-            cfg.save(project_root).map_err(CliError::Config)
-        }
-        "key" => {
-            eprintln!("oobo: warning: project-scoped API keys require the global config. Use `oobo settings set key <value>` instead.");
-            Ok(())
-        }
-        _ => Ok(()),
+        "key" => cfg.server.api_key = value.to_string(),
+        "api_url" => cfg.server.url = value.to_string(),
+        "remote" => cfg.anchors.remote = value.to_string(),
+        "transparency" => cfg.privacy.transparency = Some(value.to_string()),
+        _ => return Ok(()),
     }
+    cfg.save(project_root).map_err(CliError::Config)
 }
 
 fn unset_project_setting(project_root: &str, project_id: &str, key: &str) -> Result<(), CliError> {
+    let mut cfg = load_project_config_for_write(project_root, project_id)?;
     match key {
-        "remote" | "transparency" => {
-            let mut cfg = load_project_config_for_write(project_root, project_id)?;
-            match key {
-                "remote" => cfg.anchors.remote.clear(),
-                "transparency" => cfg.privacy.transparency = None,
-                _ => {}
-            }
-            cfg.save(project_root).map_err(CliError::Config)
-        }
-        _ => Ok(()),
+        "key" => cfg.server.api_key.clear(),
+        "api_url" => cfg.server.url.clear(),
+        "remote" => cfg.anchors.remote.clear(),
+        "transparency" => cfg.privacy.transparency = None,
+        _ => return Ok(()),
     }
+    cfg.save(project_root).map_err(CliError::Config)
 }
 
 fn load_project_config_for_write(
@@ -631,6 +630,12 @@ fn current_project_settings(cfg: &Config) -> Option<ProjectSettings> {
     let (root, _id) = current_project_context(cfg)?;
     let mut settings = ProjectSettings::default();
     if let Ok(Some(project_cfg)) = crate::project_config::ProjectConfig::load(&root) {
+        if !project_cfg.server.api_key.is_empty() {
+            settings.api_key = Some(project_cfg.server.api_key);
+        }
+        if !project_cfg.server.url.is_empty() {
+            settings.api_url = Some(project_cfg.server.url);
+        }
         if !project_cfg.anchors.remote.is_empty() {
             settings.remote = Some(project_cfg.anchors.remote);
         }
@@ -731,7 +736,7 @@ mod tests {
             "project".to_string(),
             "set".to_string(),
             "remote".to_string(),
-            "https://x".to_string(),
+            "oobo".to_string(),
         ])
         .unwrap();
         assert_eq!(p.scope, Some(Scope::Project));
@@ -794,19 +799,25 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_value_api_url() {
+        assert!(validate_value("api_url", "https://x").is_ok());
+        assert!(validate_value("api_url", "http://x").is_ok());
+        assert!(validate_value("api_url", "not a url").is_err());
+    }
+
+    #[test]
     fn test_validate_value_remote() {
-        assert!(validate_value("remote", "https://x").is_ok());
-        assert!(validate_value("remote", "http://x").is_ok());
+        assert!(validate_value("remote", "origin").is_ok());
+        assert!(validate_value("remote", "oobo").is_ok());
+        assert!(validate_value("remote", "git@github.com:org/repo-oobo.git").is_ok());
         assert!(validate_value("remote", "not a url").is_err());
     }
 
     #[test]
-    fn test_validate_project_value_remote() {
-        assert!(validate_project_value("remote", "origin").is_ok());
-        assert!(validate_project_value("remote", "oobo").is_ok());
-        assert!(validate_project_value("remote", "git@github.com:org/repo-oobo.git").is_ok());
-        assert!(validate_project_value("remote", "https://github.com/org/repo-oobo.git").is_ok());
-        assert!(validate_project_value("remote", "not a url").is_err());
+    fn test_validate_value_remote_urls() {
+        assert!(validate_value("remote", "git@github.com:org/repo-oobo.git").is_ok());
+        assert!(validate_value("remote", "https://github.com/org/repo-oobo.git").is_ok());
+        assert!(validate_value("remote", "not a url").is_err());
     }
 
     #[test]
@@ -818,5 +829,27 @@ mod tests {
 
         unset_default(&mut cfg, "key");
         assert!(cfg.server.api_key.is_empty());
+    }
+
+    #[test]
+    fn test_default_api_url_sets_server_url() {
+        let mut cfg = Config::default();
+
+        write_default(&mut cfg, "api_url", "https://staging.oobo.ai");
+        assert_eq!(cfg.server.url, "https://staging.oobo.ai");
+
+        unset_default(&mut cfg, "api_url");
+        assert_eq!(cfg.server.url, crate::config::DEFAULT_SERVER_URL);
+    }
+
+    #[test]
+    fn test_default_remote_sets_anchors_remote() {
+        let mut cfg = Config::default();
+
+        write_default(&mut cfg, "remote", "oobo");
+        assert_eq!(cfg.anchors.remote, "oobo");
+
+        unset_default(&mut cfg, "remote");
+        assert!(cfg.anchors.remote.is_empty());
     }
 }

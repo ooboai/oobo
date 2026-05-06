@@ -1,7 +1,5 @@
 pub mod payload;
 
-use crate::config::Config;
-
 #[derive(Debug, thiserror::Error)]
 pub enum RemoteError {
     #[error("client: {0}")]
@@ -28,44 +26,69 @@ impl From<RemoteError> for String {
     }
 }
 
-pub fn effective_server_url(cfg: &Config) -> String {
-    cfg.server.url.clone()
-}
-
-fn endpoint(cfg: &Config, path: &str) -> String {
+fn endpoint_with_base(base_url: &str, path: &str) -> String {
     format!(
         "{}/{}",
-        effective_server_url(cfg).trim_end_matches('/'),
+        base_url.trim_end_matches('/'),
         path.trim_start_matches('/')
     )
 }
 
-pub async fn search_anchors_with_timeout(
-    cfg: &Config,
-    request: &payload::SearchRequest,
-    api_key_override: Option<&str>,
+async fn authenticated_post(
+    base_url: &str,
+    path: &str,
+    api_key: &str,
+    body: &impl serde::Serialize,
     timeout: std::time::Duration,
-) -> RemoteResult<payload::SearchResponse> {
-    let url = endpoint(cfg, "anchors/search");
-    let api_key = api_key_override.unwrap_or(&cfg.server.api_key);
-
+) -> RemoteResult<reqwest::Response> {
+    let url = endpoint_with_base(base_url, path);
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(2))
         .timeout(timeout)
         .build()
         .map_err(|e| RemoteError::Client(e.to_string()))?;
 
-    let resp = client
+    client
         .post(&url)
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .header("User-Agent", format!("oobo/{}", env!("CARGO_PKG_VERSION")))
-        .json(request)
+        .json(body)
         .send()
         .await
-        .map_err(|e| RemoteError::Request(e.to_string()))?;
+        .map_err(|e| RemoteError::Request(e.to_string()))
+}
 
+fn map_common_errors(status: reqwest::StatusCode) -> Option<RemoteError> {
+    if status.as_u16() == 401 {
+        return Some(RemoteError::Auth(
+            "invalid or missing API key — run: oobo settings set key <KEY>".to_string(),
+        ));
+    }
+    None
+}
+
+async fn map_server_error(status: reqwest::StatusCode, resp: reqwest::Response) -> RemoteError {
+    if status.is_server_error() {
+        let body = resp.text().await.unwrap_or_default();
+        return RemoteError::Server(if body.is_empty() {
+            format!("HTTP {status}")
+        } else {
+            body
+        });
+    }
+    RemoteError::Http(format!("HTTP {status}"))
+}
+
+pub async fn search_anchors_with_timeout(
+    request: &payload::SearchRequest,
+    api_key: &str,
+    base_url: &str,
+    timeout: std::time::Duration,
+) -> RemoteResult<payload::SearchResponse> {
+    let resp = authenticated_post(base_url, "anchors/search", api_key, request, timeout).await?;
     let status = resp.status();
+
     if status.is_success() {
         return resp
             .json::<payload::SearchResponse>()
@@ -73,38 +96,56 @@ pub async fn search_anchors_with_timeout(
             .map_err(|e| RemoteError::Parse(e.to_string()));
     }
 
-    if status.as_u16() == 401 {
-        if let Ok(err) = resp.json::<payload::IngestError>().await {
-            let detail = err
-                .detail
-                .or(err.message)
-                .unwrap_or_else(|| "invalid or missing API key".into());
-            return Err(RemoteError::Auth(detail));
-        }
-        return Err(RemoteError::Auth("invalid or missing API key".to_string()));
+    if let Some(e) = map_common_errors(status) {
+        return Err(e);
     }
 
     if status.as_u16() == 422 {
         let detail = resp.text().await.unwrap_or_default();
-        if detail.is_empty() {
-            return Err(RemoteError::Rejected(
-                "search request rejected (422)".to_string(),
-            ));
-        }
-        return Err(RemoteError::Rejected(format!(
-            "search request rejected (422): {detail}"
-        )));
+        return Err(RemoteError::Rejected(if detail.is_empty() {
+            "search request rejected (422)".to_string()
+        } else {
+            format!("search request rejected (422): {detail}")
+        }));
     }
 
-    if status.is_server_error() {
-        let body = resp.text().await.unwrap_or_default();
-        if body.is_empty() {
-            return Err(RemoteError::Server(format!("HTTP {status}")));
-        }
-        return Err(RemoteError::Server(body));
+    Err(map_server_error(status, resp).await)
+}
+
+pub async fn post_delta(
+    request: &payload::DeltaRequest,
+    api_key: &str,
+    base_url: &str,
+    timeout: std::time::Duration,
+) -> RemoteResult<payload::DeltaResponse> {
+    let resp = authenticated_post(base_url, "anchors/delta", api_key, request, timeout).await?;
+    let status = resp.status();
+
+    if status.is_success() {
+        return resp
+            .json::<payload::DeltaResponse>()
+            .await
+            .map_err(|e| RemoteError::Parse(e.to_string()));
     }
 
-    Err(RemoteError::Http(format!("HTTP {status}")))
+    if let Some(e) = map_common_errors(status) {
+        return Err(e);
+    }
+
+    if status.as_u16() == 404 {
+        let body: payload::DeltaErrorResponse = resp
+            .json()
+            .await
+            .unwrap_or(payload::DeltaErrorResponse {
+                error: Some("anchor_not_found".into()),
+                message: Some("anchor not found".into()),
+            });
+        return Err(RemoteError::Rejected(
+            body.message.unwrap_or_else(|| "anchor not found".into()),
+        ));
+    }
+
+    Err(map_server_error(status, resp).await)
 }
 
 #[cfg(test)]
@@ -112,39 +153,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn effective_server_url_falls_back_to_global_config_outside_repo() {
-        let cfg = Config {
-            server: crate::config::ServerConfig {
-                url: "https://global.example.com".to_string(),
-                ..Default::default()
-            },
-            git: crate::config::GitConfig {
-                real_git_path: "/no/such/git".to_string(),
-                ..Default::default()
-            },
-            ..Config::default()
-        };
-
-        assert_eq!(effective_server_url(&cfg), "https://global.example.com");
-    }
-
-    #[test]
     fn endpoint_joins_without_double_slashes() {
-        let cfg = Config {
-            server: crate::config::ServerConfig {
-                url: "https://global.example.com/".to_string(),
-                ..Default::default()
-            },
-            git: crate::config::GitConfig {
-                real_git_path: "/no/such/git".to_string(),
-                ..Default::default()
-            },
-            ..Config::default()
-        };
-
         assert_eq!(
-            endpoint(&cfg, "/anchors/search"),
-            "https://global.example.com/anchors/search"
+            endpoint_with_base("https://example.com/", "/anchors/search"),
+            "https://example.com/anchors/search"
+        );
+        assert_eq!(
+            endpoint_with_base("https://example.com", "anchors/search"),
+            "https://example.com/anchors/search"
         );
     }
 }

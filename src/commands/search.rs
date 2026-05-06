@@ -44,6 +44,10 @@ pub struct Hit {
     pub intent: String,
     pub snippet: String,
     pub score: f64,
+    /// `"local"`, `"fts"`, or `"memory"`.
+    pub source: String,
+    pub memory_id: Option<String>,
+    pub author: Option<String>,
 }
 
 #[tracing::instrument(skip_all, fields(query))]
@@ -53,22 +57,23 @@ pub async fn run(cfg: &Config, query: &str, opts: &Options, mode: OutputMode) ->
         return Ok(2);
     }
 
-    let effective_key = crate::commands::sync::resolve_api_key(cfg);
-    let source = resolve_source(&effective_key, opts.source);
+    let project_root = crate::git::proxy::project_root(cfg);
+    let resolved = crate::commands::sync::resolve(cfg, project_root.as_deref());
+    let source = resolve_source(&resolved.api_key, opts.source);
 
-    if !matches!(source, Source::Remote) && crate::git::proxy::project_root(cfg).is_none() {
+    if !matches!(source, Source::Remote) && project_root.is_none() {
         eprintln!("oobo: not inside a git repository.");
         return Ok(1);
     }
     match source {
         Source::Remote => {
-            if effective_key.is_empty() {
+            if !resolved.has_api_key() {
                 eprintln!("error: --remote requires an API key. run: oobo settings set key <...>");
                 return Ok(2);
             }
         }
         Source::Both => {
-            if effective_key.is_empty() {
+            if !resolved.has_api_key() {
                 eprintln!("error: --both requires an API key. run: oobo settings set key <...>");
                 return Ok(2);
             }
@@ -77,10 +82,10 @@ pub async fn run(cfg: &Config, query: &str, opts: &Options, mode: OutputMode) ->
     }
 
     if matches!(source, Source::Remote) {
-        match search_remote(cfg, &effective_key, query, opts).await {
-            Ok(mut hits) => {
+        match search_remote(&resolved.api_key, &resolved.api_url, query, opts).await {
+            Ok(RemoteResult { mut hits, answer }) => {
                 sort_and_limit(&mut hits, opts.limit);
-                emit(&hits, query, &["remote"], true, mode);
+                emit(&hits, query, &["remote"], true, answer.as_deref(), mode);
                 return Ok(0);
             }
             Err(e) => {
@@ -90,17 +95,18 @@ pub async fn run(cfg: &Config, query: &str, opts: &Options, mode: OutputMode) ->
         }
     }
 
-    let project_root = crate::git::proxy::project_root(cfg);
     let local_hits = search_local(project_root.as_deref(), query, opts);
 
     let mut hits = local_hits;
     let mut sources: Vec<&'static str> = vec!["local"];
+    let mut answer: Option<String> = None;
 
     if matches!(source, Source::Both) {
-        match search_remote(cfg, &effective_key, query, opts).await {
-            Ok(mut remote_hits) => {
+        match search_remote(&resolved.api_key, &resolved.api_url, query, opts).await {
+            Ok(remote) => {
                 sources.push("remote");
-                hits.append(&mut remote_hits);
+                answer = remote.answer;
+                hits.extend(remote.hits);
             }
             Err(e) => {
                 tracing::debug!("remote search failed: {e}");
@@ -111,8 +117,7 @@ pub async fn run(cfg: &Config, query: &str, opts: &Options, mode: OutputMode) ->
 
     sort_and_limit(&mut hits, opts.limit);
 
-    let has_key = !effective_key.is_empty();
-    emit(&hits, query, &sources, has_key, mode);
+    emit(&hits, query, &sources, resolved.has_api_key(), answer.as_deref(), mode);
     Ok(0)
 }
 
@@ -184,17 +189,25 @@ fn search_local(project_root: Option<&str>, query: &str, opts: &Options) -> Vec<
             intent: anchor.intent.unwrap_or_default(),
             snippet: snippet(&haystack, &q_terms),
             score,
+            source: "local".to_string(),
+            memory_id: None,
+            author: None,
         });
     }
     hits
 }
 
+struct RemoteResult {
+    answer: Option<String>,
+    hits: Vec<Hit>,
+}
+
 async fn search_remote(
-    cfg: &Config,
     api_key: &str,
+    base_url: &str,
     query: &str,
     opts: &Options,
-) -> Result<Vec<Hit>, CliError> {
+) -> Result<RemoteResult, CliError> {
     let request = crate::remote::payload::SearchRequest {
         query: query.to_string(),
         since: opts.since.clone(),
@@ -217,29 +230,42 @@ async fn search_remote(
     };
 
     let response = crate::remote::search_anchors_with_timeout(
-        cfg,
         &request,
-        Some(api_key),
-        std::time::Duration::from_secs(5),
+        api_key,
+        base_url,
+        std::time::Duration::from_secs(15),
     )
     .await?;
 
-    Ok(response
+    let hits = response
         .hits
         .into_iter()
-        .map(|h| Hit {
-            project_id: h.project.id.unwrap_or_default(),
-            project_name: h.project.name.unwrap_or_else(|| "remote".to_string()),
-            anchor_sha: h.anchor_sha.map(|sha| short_sha(&sha)),
-            session_id: h.session_id,
-            tool: h.tool,
-            tokens: h.tokens,
-            timestamp: h.timestamp,
-            intent: h.intent.unwrap_or_default(),
-            snippet: h.snippet.unwrap_or_default(),
-            score: h.score.unwrap_or(0.0),
+        .map(|h| {
+            let session_id = h.session_id.or_else(|| {
+                h.session_ids.as_ref().and_then(|ids| ids.first().cloned())
+            });
+            Hit {
+                project_id: h.project.id.unwrap_or_default(),
+                project_name: h.project.name.unwrap_or_else(|| "remote".to_string()),
+                anchor_sha: h.anchor_sha.map(|sha| short_sha(&sha)),
+                session_id,
+                tool: h.tool,
+                tokens: h.tokens,
+                timestamp: h.timestamp,
+                intent: h.intent.unwrap_or_default(),
+                snippet: h.snippet.unwrap_or_default(),
+                score: h.score.unwrap_or(0.0),
+                source: h.source.unwrap_or_else(|| "fts".to_string()),
+                memory_id: h.memory_id,
+                author: h.author,
+            }
         })
-        .collect())
+        .collect();
+
+    Ok(RemoteResult {
+        answer: response.answer,
+        hits,
+    })
 }
 
 fn sort_and_limit(hits: &mut Vec<Hit>, limit: usize) {
@@ -319,20 +345,27 @@ fn human_tokens(tokens: i64) -> String {
 
 // ── emitters ───────────────────────────────────────────────────────────────
 
-fn emit(hits: &[Hit], query: &str, sources: &[&str], has_key: bool, mode: OutputMode) {
+fn emit(hits: &[Hit], query: &str, sources: &[&str], has_key: bool, answer: Option<&str>, mode: OutputMode) {
     match mode {
-        OutputMode::Json => emit_json(hits, query, sources),
-        OutputMode::Agent => emit_agent(hits, sources, has_key),
-        OutputMode::Tui => emit_pretty(hits, query, sources, has_key),
+        OutputMode::Json => emit_json(hits, query, sources, answer),
+        OutputMode::Agent => emit_agent(hits, sources, has_key, answer),
+        OutputMode::Tui => emit_pretty(hits, query, sources, has_key, answer),
     }
 }
 
-fn emit_agent(hits: &[Hit], _sources: &[&str], has_key: bool) {
-    if hits.is_empty() {
+fn emit_agent(hits: &[Hit], _sources: &[&str], has_key: bool, answer: Option<&str>) {
+    if let Some(ans) = answer {
+        println!("answer: {ans}");
+        println!();
+    }
+    if hits.is_empty() && answer.is_none() {
         println!("no results");
         if !has_key {
             println!("note: cloud search not configured. run: oobo settings set key <API_KEY>");
         }
+        return;
+    }
+    if hits.is_empty() {
         return;
     }
     let multi_project = hits
@@ -342,6 +375,8 @@ fn emit_agent(hits: &[Hit], _sources: &[&str], has_key: bool) {
         .len()
         > 1;
     for h in hits {
+        let is_memory = h.source == "memory";
+        let tag = if is_memory { "[memory] " } else { "" };
         let sha = h.anchor_sha.clone().unwrap_or_else(|| "-".to_string());
         let tool = h.tool.clone().unwrap_or_else(|| "-".to_string());
         let tokens = h
@@ -351,11 +386,11 @@ fn emit_agent(hits: &[Hit], _sources: &[&str], has_key: bool) {
         let snippet: String = h.snippet.chars().take(60).collect();
         if multi_project {
             println!(
-                "{:<10} {} {} {} {} {}",
+                "{tag}{:<10} {} {} {} {} {}",
                 h.project_name, sha, tool, tokens, when, snippet
             );
         } else {
-            println!("{sha} {tool} {tokens} {when} {snippet}");
+            println!("{tag}{sha} {tool} {tokens} {when} {snippet}");
         }
     }
     if !hits.is_empty() {
@@ -366,8 +401,13 @@ fn emit_agent(hits: &[Hit], _sources: &[&str], has_key: bool) {
     }
 }
 
-fn emit_pretty(hits: &[Hit], query: &str, _sources: &[&str], has_key: bool) {
-    if hits.is_empty() {
+fn emit_pretty(hits: &[Hit], query: &str, _sources: &[&str], has_key: bool, answer: Option<&str>) {
+    if let Some(ans) = answer {
+        println!();
+        println!("  \x1b[1;36m💡 {ans}\x1b[0m");
+        println!();
+    }
+    if hits.is_empty() && answer.is_none() {
         println!("no results for \"{query}\"");
         if !has_key {
             println!();
@@ -376,36 +416,58 @@ fn emit_pretty(hits: &[Hit], query: &str, _sources: &[&str], has_key: bool) {
         }
         return;
     }
+    if hits.is_empty() {
+        return;
+    }
     for h in hits {
+        let is_memory = h.source == "memory";
         let tool = h.tool.clone().unwrap_or_else(|| "-".to_string());
         let when = h
             .timestamp.map_or_else(|| "-".to_string(), relative_time);
-        let intent = if h.intent.is_empty() {
-            "(no intent)"
+
+        if is_memory {
+            let author = h.author.as_deref().unwrap_or("");
+            let author_suffix = if author.is_empty() {
+                String::new()
+            } else {
+                format!(" · {author}")
+            };
+            println!(
+                "\x1b[35m◆ memory\x1b[0m · \x1b[1m{}\x1b[0m · {when}{author_suffix}",
+                h.project_name
+            );
+            println!("  \x1b[35m\"{}\"\x1b[0m", h.snippet);
+            if let Some(sha) = &h.anchor_sha {
+                println!("  anchor {sha}");
+            }
         } else {
-            &h.intent
-        };
-        println!(
-            "\x1b[1m{}\x1b[0m · {tool} · {when}     {intent}",
-            h.project_name
-        );
-        println!("  \"{}\"", h.snippet);
-        if let Some(sha) = &h.anchor_sha {
-            let tokens = h
-                .tokens
-                .map(|t| format!(" · {} tokens", human_tokens(t)))
-                .unwrap_or_default();
-            println!("  anchor {sha}{tokens}");
+            let intent = if h.intent.is_empty() {
+                "(no intent)"
+            } else {
+                &h.intent
+            };
+            println!(
+                "\x1b[1m{}\x1b[0m · {tool} · {when}     {intent}",
+                h.project_name
+            );
+            println!("  \"{}\"", h.snippet);
+            if let Some(sha) = &h.anchor_sha {
+                let tokens = h
+                    .tokens
+                    .map(|t| format!(" · {} tokens", human_tokens(t)))
+                    .unwrap_or_default();
+                println!("  anchor {sha}{tokens}");
+            }
         }
         println!();
     }
 }
 
-fn emit_json(hits: &[Hit], query: &str, sources: &[&str]) {
+fn emit_json(hits: &[Hit], query: &str, sources: &[&str], answer: Option<&str>) {
     let arr: Vec<serde_json::Value> = hits
         .iter()
         .map(|h| {
-            serde_json::json!({
+            let mut obj = serde_json::json!({
                 "project": { "id": h.project_id, "name": h.project_name },
                 "anchor_sha": h.anchor_sha,
                 "session_id": h.session_id,
@@ -415,10 +477,18 @@ fn emit_json(hits: &[Hit], query: &str, sources: &[&str]) {
                 "intent": h.intent,
                 "snippet": h.snippet,
                 "score": h.score,
-            })
+                "source": h.source,
+            });
+            if let Some(mid) = &h.memory_id {
+                obj["memory_id"] = serde_json::json!(mid);
+            }
+            if let Some(author) = &h.author {
+                obj["author"] = serde_json::json!(author);
+            }
+            obj
         })
         .collect();
-    let json = serde_json::json!({
+    let mut json = serde_json::json!({
         "query": query,
         "sources": sources,
         "cloud_connected": sources.contains(&"remote"),
@@ -428,6 +498,9 @@ fn emit_json(hits: &[Hit], query: &str, sources: &[&str]) {
             { "command": "oobo anchor show <sha>", "description": "show anchor details" },
         ],
     });
+    if let Some(ans) = answer {
+        json["answer"] = serde_json::json!(ans);
+    }
     crate::utils::print_json(&json);
 }
 
@@ -523,8 +596,10 @@ mod tests {
             limit: 5,
         };
 
-        let hits = search_remote(&cfg, "sk_test", "auth middleware", &opts).await.unwrap();
+        let result = search_remote("sk_test", &cfg.server.url, "auth middleware", &opts).await.unwrap();
 
+        assert!(result.answer.is_none());
+        let hits = &result.hits;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].project_id, "p1");
         assert_eq!(hits[0].project_name, "oobo-cli");
@@ -544,6 +619,47 @@ mod tests {
         assert!(request.contains(r#""value":"oobo-cli""#));
         assert!(request.contains(r#""tool":"claude""#));
         assert!(request.contains(r#""limit":5"#));
+    }
+
+    #[tokio::test]
+    async fn remote_search_parses_answer_field() {
+        let body = r#"{
+          "answer": "The greeting function was built by Teddy as a staging verification test.",
+          "hits": [
+            {
+              "source": "memory",
+              "snippet": "staging verification commit",
+              "anchor_sha": "c9543e8",
+              "score": 0.87,
+              "memory_id": "mem_abc123",
+              "author": "Teddy",
+              "session_ids": ["sess-1"],
+              "project": { "name": "oobo-agent" },
+              "timestamp": 1746450000
+            }
+          ]
+        }"#;
+        let (url, _requests) = serve_once("200 OK", body);
+        let opts = Options {
+            source: Some(Source::Remote),
+            since: None,
+            scope: Scope::Global,
+            tool: None,
+            limit: 10,
+        };
+
+        let result = search_remote("sk_test", &url, "why did we build the greeting function", &opts)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.answer.as_deref(),
+            Some("The greeting function was built by Teddy as a staging verification test.")
+        );
+        assert_eq!(result.hits.len(), 1);
+        assert_eq!(result.hits[0].source, "memory");
+        assert_eq!(result.hits[0].author.as_deref(), Some("Teddy"));
+        assert_eq!(result.hits[0].memory_id.as_deref(), Some("mem_abc123"));
     }
 
     fn serve_once(status: &str, body: &'static str) -> (String, mpsc::Receiver<String>) {

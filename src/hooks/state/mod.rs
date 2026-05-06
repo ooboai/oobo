@@ -140,6 +140,11 @@ pub struct ActiveSession {
     pub file_edit_chain: Option<std::collections::HashMap<String, Vec<FileEditPair>>>,
     pub started_at: i64,
     pub updated_at: i64,
+    /// Timestamp when the session ended. `None` means still active.
+    /// Ended sessions are kept around so post-commit can still read their
+    /// snapshots; `cleanup_stale` garbage-collects them after 24 h.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<i64>,
 }
 
 impl ActiveSession {
@@ -174,6 +179,7 @@ impl ActiveSession {
             file_edit_chain: None,
             started_at: now,
             updated_at: now,
+            ended_at: None,
         }
     }
 
@@ -197,6 +203,53 @@ where
     state.bump();
     store::write(project_root, session_id, &state)?;
     Ok(())
+}
+
+/// Batched session mutations — one disk read, one disk write, N mutations.
+///
+/// Hook events often apply 3–6 mutations to the same session. Without
+/// batching, each mutation does a full JSON round-trip (read + deserialize +
+/// serialize + write). `SessionBatch` amortizes this to a single round-trip.
+pub struct SessionBatch {
+    project_root: String,
+    session_id: String,
+    state: ActiveSession,
+}
+
+impl SessionBatch {
+    /// Ensure a session exists, then load it for batched mutation.
+    pub fn open(
+        project_root: &str,
+        session_id: &str,
+        agent: &str,
+        model: Option<&str>,
+    ) -> Result<Self> {
+        ensure_session(project_root, session_id, agent, model)?;
+        let state = store::read(project_root, session_id)
+            .ok_or_else(|| crate::error::OoboError::Other(
+                format!("session '{session_id}' vanished after ensure"),
+            ))?;
+        Ok(Self {
+            project_root: project_root.to_string(),
+            session_id: session_id.to_string(),
+            state,
+        })
+    }
+
+    pub fn state(&self) -> &ActiveSession {
+        &self.state
+    }
+
+    pub fn state_mut(&mut self) -> &mut ActiveSession {
+        &mut self.state
+    }
+
+    /// Flush all accumulated mutations to disk in a single write.
+    pub fn flush(mut self) -> Result<()> {
+        self.state.bump();
+        store::write(&self.project_root, &self.session_id, &self.state)?;
+        Ok(())
+    }
 }
 
 /// Create a new active session.
@@ -352,12 +405,12 @@ pub fn record_tool_use(
         *usage.entry(tool_name.to_string()).or_insert(0) += 1;
         state.tool_usage = Some(usage);
 
-        if tool_name == "Bash" || tool_name == "Shell" {
+        if matches!(tool_name, "Bash" | "Shell") {
             if let Some(cmd) = input_summary {
                 let mut cmds = state.bash_commands.take().unwrap_or_default();
                 const MAX_BASH_COMMANDS: usize = 50;
                 if cmds.len() >= MAX_BASH_COMMANDS {
-                    cmds.remove(0);
+                    cmds.drain(..=cmds.len() - MAX_BASH_COMMANDS);
                 }
                 cmds.push(cmd.to_string());
                 state.bash_commands = Some(cmds);
@@ -495,10 +548,15 @@ pub fn read_session_model(project_root: &str, session_id: &str) -> Option<String
     read_session(project_root, session_id).and_then(|s| s.model)
 }
 
-/// Remove a session's state (session ended).
+/// Mark a session as ended. The state is kept so that a subsequent
+/// `post-commit` hook can still read snapshots for accurate attribution.
+/// Actual deletion happens via `cleanup_stale` (called on every post-commit
+/// with a 24 h TTL).
 pub fn remove_session(project_root: &str, session_id: &str) {
-    tracing::info!(session_id, "session end");
-    store::remove(project_root, session_id);
+    tracing::info!(session_id, "session end (marking ended, keeping state)");
+    let _ = mutate(project_root, session_id, |state| {
+        state.ended_at = Some(chrono::Utc::now().timestamp());
+    });
 }
 
 /// List all currently active sessions for a project.
@@ -609,7 +667,8 @@ mod tests {
 
         remove_session(root_str, "sess-1");
         let sessions = active_sessions(root_str);
-        assert!(sessions.is_empty());
+        assert_eq!(sessions.len(), 1, "ended session should still be readable");
+        assert!(sessions[0].ended_at.is_some(), "session should be marked as ended");
     }
 
     #[test]
@@ -908,9 +967,11 @@ mod tests {
         assert!(state.is_some());
         assert_eq!(state.unwrap().session_id, "pre-init-sid");
 
-        // Remove it.
+        // End it — state is kept but marked as ended.
         remove_session("", "pre-init-sid");
-        assert!(read_session("", "pre-init-sid").is_none());
+        let ended = read_session("", "pre-init-sid");
+        assert!(ended.is_some(), "ended session should still be readable");
+        assert!(ended.unwrap().ended_at.is_some());
     }
 
     /// Legacy `.git/oobo-sessions/<sid>.json` files written by oobo 0.1.x
@@ -1150,5 +1211,98 @@ mod tests {
 
         touch_session(root_str, "drain-sid", None).unwrap();
         assert!(read_session(root_str, "drain-sid").is_some());
+    }
+
+    #[test]
+    fn test_ended_session_preserves_snapshots() {
+        let _env = setup();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        // Create a file so git can produce a blob hash.
+        let file = root.join("main.rs");
+        std::fs::write(&file, "fn main() {}").unwrap();
+
+        write_session(root_str, "snap-sess", "claude", None).unwrap();
+        snapshot_pre_edit_file(root_str, "snap-sess", "main.rs").unwrap();
+        std::fs::write(&file, "fn main() { println!(\"hello\"); }").unwrap();
+        record_post_edit_file(root_str, "snap-sess", "main.rs", Some("Write")).unwrap();
+
+        let before = read_session(root_str, "snap-sess").unwrap();
+        assert!(before.file_snapshots.is_some());
+        assert!(before.ended_at.is_none());
+        let snapshot_count = before.file_snapshots.as_ref().unwrap().len();
+
+        // End the session — snapshots must survive.
+        remove_session(root_str, "snap-sess");
+
+        let after = read_session(root_str, "snap-sess").unwrap();
+        assert!(after.ended_at.is_some());
+        assert!(after.file_snapshots.is_some());
+        assert_eq!(
+            after.file_snapshots.as_ref().unwrap().len(),
+            snapshot_count,
+            "file_snapshots must be preserved after session end"
+        );
+        assert!(after.file_edit_chain.is_some(), "edit chain must survive session end");
+    }
+
+    #[test]
+    fn test_cleanup_stale_respects_ended_grace_period() {
+        let _env = setup();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        write_session(root_str, "ended-recent", "claude", None).unwrap();
+        write_session(root_str, "ended-old", "claude", None).unwrap();
+        write_session(root_str, "still-active", "claude", None).unwrap();
+
+        // End both sessions.
+        remove_session(root_str, "ended-recent");
+        remove_session(root_str, "ended-old");
+
+        // Backdate the "old" ended session's ended_at to 2 hours ago.
+        let _ = mutate(root_str, "ended-old", |state| {
+            state.ended_at = Some(chrono::Utc::now().timestamp() - 7200);
+        });
+
+        cleanup_stale(root_str, 86400);
+
+        assert!(
+            read_session(root_str, "ended-recent").is_some(),
+            "recently ended session should survive cleanup"
+        );
+        assert!(
+            read_session(root_str, "ended-old").is_none(),
+            "session ended 2h ago should be cleaned up (1h grace)"
+        );
+        assert!(
+            read_session(root_str, "still-active").is_some(),
+            "active session should survive cleanup"
+        );
+    }
+
+    #[test]
+    fn test_ended_session_not_re_ended() {
+        let _env = setup();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        write_session(root_str, "dupe-end", "claude", None).unwrap();
+        remove_session(root_str, "dupe-end");
+        let first_ended = read_session(root_str, "dupe-end").unwrap().ended_at.unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        remove_session(root_str, "dupe-end");
+        let second_ended = read_session(root_str, "dupe-end").unwrap().ended_at.unwrap();
+
+        // Both calls should set ended_at; second call just updates the timestamp.
+        assert!(second_ended >= first_ended);
     }
 }

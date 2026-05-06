@@ -25,6 +25,7 @@ Usage: oobo [OPTIONS] [COMMAND]
 Commands (require a git repository):
   anchors      Memory feed — list anchors and active sessions
   anchor       Inspect a single anchor (show, blame)
+  delta        Textual diff between two anchors
   goto         Travel to a turn or commit (auto-stashes)
   back         Return to where you were before goto
   blame        Per-line AI/human attribution
@@ -108,9 +109,28 @@ pub enum Command {
         action: AnchorAction,
     },
 
-    /// Travel to a turn or commit (auto-stashes dirty changes)
+    /// Textual diff between two anchors (requires API key)
     #[command(
         display_order = 3,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo delta                     Compare HEAD to previous anchor\n  \
+                       oobo delta abc123               Compare abc123 to its predecessor\n  \
+                       oobo delta abc123 def456        Compare abc123 against def456\n  \
+                       oobo delta --full               Include detailed sessions and decisions"
+    )]
+    Delta {
+        /// Commit SHA of the anchor to inspect (defaults to HEAD)
+        anchor_sha: Option<String>,
+        /// Commit SHA to compare against (auto-found if omitted)
+        previous_sha: Option<String>,
+        /// Include detailed sessions, decisions, and techniques
+        #[arg(long)]
+        full: bool,
+    },
+
+    /// Travel to a turn or commit (auto-stashes dirty changes)
+    #[command(
+        display_order = 4,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo goto t123abc     Load a turn snapshot\n  \
                        oobo goto abc123      Load a commit\n  \
@@ -125,12 +145,12 @@ pub enum Command {
     },
 
     /// Return to where you were before `goto` (restores stash if one was created)
-    #[command(display_order = 4)]
+    #[command(display_order = 5)]
     Back {},
 
     /// Show per-line AI/human attribution for a file
     #[command(
-        display_order = 5,
+        display_order = 6,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo blame src/main.rs          Show AI attribution at HEAD\n  \
                        oobo blame src/main.rs abc123   At a specific commit\n  \
@@ -147,7 +167,7 @@ pub enum Command {
 
     /// Search sessions and anchors (this project by default; --global for all)
     #[command(
-        display_order = 6,
+        display_order = 7,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo search \"auth middleware\"      This project (inside a repo)\n  \
                        oobo search foo --global            Across all projects\n  \
@@ -187,7 +207,7 @@ pub enum Command {
 
     /// Declarative KV config (no OAuth, no login flow)
     #[command(
-        display_order = 6,
+        display_order = 8,
         after_help = "\x1b[1mGrammar:\x1b[0m  oobo settings [scope] [verb] <key> [value]\n\n\
                        \x1b[1mExamples:\x1b[0m\n  \
                        oobo settings                       Show all effective settings\n  \
@@ -485,6 +505,10 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                     dispatch_blame(cfg, no_ai, args, mode)
                 }
             }
+        }
+        Some(Command::Delta { anchor_sha, previous_sha, full }) => {
+            let code = crate::commands::delta::run(cfg, anchor_sha.as_deref(), previous_sha.as_deref(), full, mode).await?;
+            Ok(code)
         }
         Some(Command::Goto { target, no_stash }) => {
             let code = crate::commands::goto::run(cfg, &target, no_stash, mode)?;

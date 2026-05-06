@@ -17,7 +17,7 @@ Oobo is open-source software published by [NoCode Inc](https://nocode.inc).
 
 ## Supported Tools
 
-Cursor, Claude Code, Gemini CLI, Codex CLI, OpenCode, GitHub Copilot Chat, Windsurf, Aider, Zed AI, Trae.
+Cursor, Claude Code, Gemini CLI, Codex CLI, OpenCode, GitHub Copilot Chat, Windsurf, Aider, Zed AI, Trae, Amp, Continue, Factory Droid, Junie, Kiro.
 
 ## Architecture
 
@@ -30,7 +30,6 @@ Agents should operate with **transparency on** — this is the recommended defau
 | Setting | Value | Why |
 |---------|-------|-----|
 | `transparency.mode` | `on` | Metadata + redacted transcripts sync |
-| `git.alias_enabled` | `true` | Automatic enrichment on every commit |
 | `server.api_key` | empty | For remote search only; no cloud upload pipeline exists |
 | `--agent` flag | Always use | Compact output, low token cost |
 | `--json` flag | When needed | Full structured data for parsing |

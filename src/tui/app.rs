@@ -128,7 +128,10 @@ pub(super) struct App {
     pub(super) time_window: TimeWindow,
     pub(super) stack: Vec<View>,
     pub(super) flash: Option<String>,
+    pub(super) tick: usize,
 }
+
+pub(super) const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 // ── Loading ───────────────────────────────────────────────────────────
 
@@ -147,7 +150,7 @@ impl App {
         tracing::debug!(anchor_count = anchors.len(), "TUI anchors loaded");
         let branch = current_branch(&root);
         let anchor_remote =
-            crate::project_config::anchor_remote(&root).unwrap_or_else(|| "origin".to_string());
+            crate::commands::sync::resolve(&cfg, Some(&root)).anchor_remote;
         let dirty = worktree_dirty(&root);
 
         let mut feed = FeedState {
@@ -172,6 +175,7 @@ impl App {
             time_window: TimeWindow::All,
             stack: vec![View::Feed(feed)],
             flash: None,
+            tick: 0,
         })
     }
 
@@ -184,8 +188,8 @@ impl App {
         }
         self.enabled = crate::project_config::is_enabled(&self.root);
         self.branch = current_branch(&self.root);
-        self.anchor_remote = crate::project_config::anchor_remote(&self.root)
-            .unwrap_or_else(|| "origin".to_string());
+        self.anchor_remote =
+            crate::commands::sync::resolve(&self.cfg, Some(&self.root)).anchor_remote;
         self.dirty = worktree_dirty(&self.root);
         if let Some(View::Feed(feed)) = self.stack.first_mut() {
             let visible = visible_anchor_count(&self.anchors, &self.filter);
@@ -213,6 +217,101 @@ impl App {
     pub(super) fn flash(&mut self, msg: impl Into<String>) {
         self.flash = Some(msg.into());
     }
+
+    /// Launch a remote search in a background thread. Returns a SearchState
+    /// ready to be pushed onto the view stack.
+    pub(super) fn start_search(&self, query: String) -> super::types::SearchState {
+        use super::types::{SearchState, SearchStatus};
+
+        let resolved = crate::commands::sync::resolve(&self.cfg, Some(&self.root));
+        if !resolved.has_api_key() {
+            return SearchState {
+                input: query.clone(),
+                query,
+                answer: None,
+                results: Vec::new(),
+                list: ratatui::widgets::ListState::default(),
+                status: SearchStatus::NoApiKey,
+                rx: None,
+            };
+        }
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let api_key = resolved.api_key.clone();
+        let api_url = resolved.api_url.clone();
+        let q = query.clone();
+
+        std::thread::spawn(move || {
+            let result = run_blocking_search(&api_key, &api_url, &q);
+            let _ = tx.send(result);
+        });
+
+        SearchState {
+            input: query.clone(),
+            query,
+            answer: None,
+            results: Vec::new(),
+            list: ratatui::widgets::ListState::default(),
+            status: SearchStatus::Loading,
+            rx: Some(rx),
+        }
+    }
+}
+
+fn run_blocking_search(
+    api_key: &str,
+    api_url: &str,
+    query: &str,
+) -> Result<super::types::SearchResponse, String> {
+    use super::types::{SearchResponse, SearchResultRow};
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("runtime: {e}"))?;
+    let request = crate::remote::payload::SearchRequest {
+        query: query.to_string(),
+        since: None,
+        project: Some(crate::remote::payload::SearchProjectScope {
+            kind: "global".to_string(),
+            value: None,
+        }),
+        tool: None,
+        limit: 20,
+    };
+
+    let response = rt
+        .block_on(crate::remote::search_anchors_with_timeout(
+            &request,
+            api_key,
+            api_url,
+            std::time::Duration::from_secs(15),
+        ))
+        .map_err(|e| format!("{e}"))?;
+
+    let results = response
+        .hits
+        .into_iter()
+        .map(|h| {
+            let short_sha = h.anchor_sha.as_ref().map(|s| s.chars().take(7).collect());
+            SearchResultRow {
+                anchor_sha: short_sha,
+                project_name: h.project.name.unwrap_or_else(|| "remote".to_string()),
+                snippet: h.snippet.unwrap_or_default(),
+                score: h.score.unwrap_or(0.0),
+                source: h.source.unwrap_or_else(|| "fts".to_string()),
+                tool: h.tool,
+                tokens: h.tokens,
+                timestamp: h.timestamp,
+                author: h.author,
+            }
+        })
+        .collect();
+
+    Ok(SearchResponse {
+        answer: response.answer,
+        results,
+    })
 }
 
 pub(super) fn visible_anchors<'a>(
@@ -244,20 +343,28 @@ pub(super) fn visible_anchor_count(rows: &[AnchorRow], filter: &str) -> usize {
 
 // ── Search entry point ────────────────────────────────────────────
 
-/// Same TUI as `oobo`, but with the filter bar pre-activated/pre-filled.
+/// Opens the TUI with the remote search view. If a query is provided,
+/// fires the search immediately; otherwise opens the search input.
 pub fn run_search(cfg: &Config, query: &str) -> CmdResult {
+    use super::types::{SearchState, SearchStatus, View};
+
     let Some((mut terminal, mut app)) = bootstrap(cfg)? else {
         return Ok(0);
     };
 
     if !query.is_empty() {
-        app.filter = query.to_string();
-        if let Some(View::Feed(feed)) = app.stack.first_mut() {
-            let count = visible_anchor_count(&app.anchors, &app.filter);
-            feed.list.select(if count > 0 { Some(0) } else { None });
-        }
-    } else if let Some(View::Feed(feed)) = app.stack.last_mut() {
-        feed.filter_input_open = true;
+        let ss = app.start_search(query.to_string());
+        app.stack.push(View::Search(ss));
+    } else {
+        app.stack.push(View::Search(SearchState {
+            input: String::new(),
+            query: String::new(),
+            answer: None,
+            results: Vec::new(),
+            list: ratatui::widgets::ListState::default(),
+            status: SearchStatus::Input,
+            rx: None,
+        }));
     }
 
     run_tui(&mut terminal, &mut app)
@@ -291,11 +398,14 @@ pub(super) fn event_loop(
     app: &mut App,
 ) -> CmdResult {
     loop {
+        poll_search_results(app);
+        app.tick = app.tick.wrapping_add(1);
+
         terminal
             .draw(|frame| draw(frame, app))
             .map_err(|e| CliError::User(format!("tui draw: {e}")))?;
 
-        let Some(key) = super::next_key(Duration::from_millis(200))
+        let Some(key) = super::next_key(Duration::from_millis(100))
             .map_err(|e: io::Error| CliError::Io {
                 context: "key read".into(),
                 source: e,
@@ -308,6 +418,38 @@ pub(super) fn event_loop(
 
         if handle_key(terminal, app, key)? {
             return Ok(0);
+        }
+    }
+}
+
+fn poll_search_results(app: &mut App) {
+    use super::types::{SearchStatus, View};
+
+    let Some(View::Search(ss)) = app.stack.last_mut() else {
+        return;
+    };
+    let Some(rx) = &ss.rx else {
+        return;
+    };
+    match rx.try_recv() {
+        Ok(Ok(resp)) => {
+            let count = resp.results.len();
+            ss.answer = resp.answer;
+            ss.results = resp.results;
+            ss.status = SearchStatus::Done;
+            ss.rx = None;
+            if count > 0 {
+                ss.list.select(Some(0));
+            }
+        }
+        Ok(Err(e)) => {
+            ss.status = SearchStatus::Error(e);
+            ss.rx = None;
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            ss.status = SearchStatus::Error("search thread panicked".to_string());
+            ss.rx = None;
         }
     }
 }

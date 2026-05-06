@@ -24,15 +24,14 @@ struct CommitEvidence {
 
 impl CommitEvidence {
     fn resolved_author_type(&self) -> AuthorType {
-        // If detect said "assisted" but no sessions are actually relevant to
-        // this commit, downgrade to human.
-        if self.initial_author_type == AuthorType::Assisted
-            && self.active_sessions.is_empty()
-            && self.ai_files_touched.is_empty()
-        {
-            AuthorType::Human
-        } else {
-            self.initial_author_type.clone()
+        let has_ai_evidence = !self.active_sessions.is_empty() || !self.ai_files_touched.is_empty();
+        match &self.initial_author_type {
+            // Downgrade: detect said assisted but no sessions overlap this commit.
+            AuthorType::Assisted if !has_ai_evidence => AuthorType::Human,
+            // Upgrade: detect said human (e.g. ended session was skipped, no env
+            // vars) but file-overlap matching found a relevant session.
+            AuthorType::Human if has_ai_evidence => AuthorType::Assisted,
+            other => other.clone(),
         }
     }
 }
@@ -346,4 +345,87 @@ fn collect_enabled_taps(cfg: &Config) -> Vec<Box<dyn crate::taps::TurnTap>> {
     }
 
     taps
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::anchor::AuthorType;
+
+    fn empty_evidence(author_type: AuthorType) -> CommitEvidence {
+        CommitEvidence {
+            initial_author_type: author_type,
+            per_file: Vec::new(),
+            files_changed: Vec::new(),
+            active_sessions: Vec::new(),
+            ai_files_touched: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_resolved_downgrades_assisted_without_evidence() {
+        let evidence = empty_evidence(AuthorType::Assisted);
+        assert_eq!(evidence.resolved_author_type(), AuthorType::Human);
+    }
+
+    #[test]
+    fn test_resolved_keeps_assisted_with_sessions() {
+        let mut evidence = empty_evidence(AuthorType::Assisted);
+        let now = chrono::Utc::now().timestamp();
+        evidence.active_sessions.push(crate::hooks::state::ActiveSession {
+            session_id: "s1".into(),
+            agent: "claude".into(),
+            model: None,
+            worktree: None,
+            transcript_path: None,
+            pre_agent_snapshots: None,
+            file_snapshots: None,
+            edited_files: None,
+            read_files: None,
+            file_events: None,
+            tool_usage: None,
+            tool_failures: None,
+            bash_commands: None,
+            subagent_runs: None,
+            thinking_duration_ms: None,
+            compact_count: None,
+            turn_count: None,
+            context_tokens: None,
+            context_window_size: None,
+            current_turn_index: 0,
+            current_turn_started_at: None,
+            current_turn_hook_events: None,
+            current_turn_tool_calls: None,
+            last_turn_snapshot_id: None,
+            pre_edit_pending: None,
+            file_edit_chain: None,
+            started_at: now,
+            updated_at: now,
+            ended_at: None,
+        });
+        assert_eq!(evidence.resolved_author_type(), AuthorType::Assisted);
+    }
+
+    #[test]
+    fn test_resolved_upgrades_human_with_ai_evidence() {
+        let mut evidence = empty_evidence(AuthorType::Human);
+        evidence.ai_files_touched.push(("src/main.rs".into(), "claude".into()));
+        assert_eq!(
+            evidence.resolved_author_type(),
+            AuthorType::Assisted,
+            "human should upgrade to assisted when AI file evidence exists"
+        );
+    }
+
+    #[test]
+    fn test_resolved_keeps_human_without_evidence() {
+        let evidence = empty_evidence(AuthorType::Human);
+        assert_eq!(evidence.resolved_author_type(), AuthorType::Human);
+    }
+
+    #[test]
+    fn test_resolved_keeps_agent_regardless() {
+        let evidence = empty_evidence(AuthorType::Agent);
+        assert_eq!(evidence.resolved_author_type(), AuthorType::Agent);
+    }
 }

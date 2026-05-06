@@ -9,8 +9,8 @@ use super::external::{run_oobo_blame, run_oobo_goto, suspend_and_run};
 use super::format::short_sha;
 use super::transcript::load_transcript_lines;
 use super::types::{
-    DiffState, FeedState, MemoryKind, PickerAction, PickerKind, PickerState, SessionLink,
-    TranscriptState, View,
+    DiffState, FeedState, MemoryKind, PickerAction, PickerKind, PickerState, SearchState,
+    SearchStatus, SessionLink, TranscriptState, View,
 };
 
 // ── Key dispatcher ────────────────────────────────────────────────────
@@ -24,6 +24,10 @@ pub(super) fn handle_key(
         app.stack.last(),
         Some(View::Feed(FeedState { filter_input_open: true, .. }))
     );
+    let in_search = matches!(
+        app.stack.last(),
+        Some(View::Search(_))
+    );
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         if in_filter {
             if let Some(View::Feed(feed)) = app.stack.last_mut() {
@@ -32,6 +36,10 @@ pub(super) fn handle_key(
                 let total = visible_anchor_count(&app.anchors, &app.filter);
                 if total > 0 { feed.list.select(Some(0)); } else { feed.list.select(None); }
             }
+            return Ok(false);
+        }
+        if in_search {
+            app.stack.pop();
             return Ok(false);
         }
         return Ok(true);
@@ -44,6 +52,7 @@ pub(super) fn handle_key(
 
     match app.stack.last_mut() {
         Some(View::Feed(_)) => handle_feed_key(terminal, app, key),
+        Some(View::Search(_)) => Ok(handle_search_key(app, key)),
         Some(View::Transcript(_)) => Ok(handle_transcript_key(app, key)),
         Some(View::Diff(_)) => Ok(handle_diff_key(app, key)),
         Some(View::Picker(_)) => handle_picker_key(terminal, app, key),
@@ -139,6 +148,18 @@ fn handle_feed_key(
                 app.filter.clear();
             }
         }
+        KeyCode::Char('s') => {
+            let ss = SearchState {
+                input: String::new(),
+                query: String::new(),
+                answer: None,
+                results: Vec::new(),
+                list: ListState::default(),
+                status: SearchStatus::Input,
+                rx: None,
+            };
+            app.stack.push(View::Search(ss));
+        }
         KeyCode::Char('t') => {
             app.time_window = app.time_window.cycle();
             app.reload_anchors();
@@ -189,6 +210,107 @@ fn select_first_visible(app: &mut App) {
             feed.list.select(Some(0));
         }
     }
+}
+
+// ── Search view keys ──────────────────────────────────────────────────
+
+fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
+    let is_input = matches!(
+        app.stack.last(),
+        Some(View::Search(SearchState { status: SearchStatus::Input, .. }))
+    );
+
+    if is_input {
+        match key.code {
+            KeyCode::Esc => {
+                app.stack.pop();
+            }
+            KeyCode::Enter => {
+                let query = match app.stack.last() {
+                    Some(View::Search(ss)) => {
+                        let q = ss.input.trim().to_string();
+                        if q.is_empty() { None } else { Some(q) }
+                    }
+                    _ => None,
+                };
+                if let Some(q) = query {
+                    let new_ss = app.start_search(q);
+                    if let Some(View::Search(ss)) = app.stack.last_mut() {
+                        *ss = new_ss;
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(View::Search(ss)) = app.stack.last_mut() {
+                    ss.input.pop();
+                }
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(View::Search(ss)) = app.stack.last_mut() {
+                    ss.input.push(c);
+                }
+            }
+            _ => {}
+        }
+        return false;
+    }
+
+    if let Some(View::Search(ss)) = app.stack.last_mut() {
+        match key.code {
+            KeyCode::Char('q') => return true,
+            KeyCode::Esc => {
+                app.stack.pop();
+            }
+            KeyCode::Char('s') | KeyCode::Char('/') => {
+                ss.rx = None;
+                ss.status = SearchStatus::Input;
+                ss.input = ss.query.clone();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let n = ss.results.len() as i32;
+                if n > 0 {
+                    let cur = ss.list.selected().unwrap_or(0) as i32;
+                    ss.list.select(Some((cur - 1).max(0) as usize));
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let n = ss.results.len() as i32;
+                if n > 0 {
+                    let cur = ss.list.selected().unwrap_or(0) as i32;
+                    ss.list.select(Some(((cur + 1).min(n - 1)) as usize));
+                }
+            }
+            KeyCode::Enter => {
+                let action = ss.list.selected().and_then(|idx| {
+                    ss.results.get(idx).map(|row| {
+                        (row.anchor_sha.clone(), row.source.clone())
+                    })
+                });
+                if let Some((sha_opt, source)) = action {
+                    match sha_opt {
+                        Some(sha) => {
+                            if let Some(pos) = app.anchors.iter().position(|a| {
+                                a.sha.starts_with(&sha)
+                            }) {
+                                app.stack.pop();
+                                if let Some(View::Feed(feed)) = app.stack.first_mut() {
+                                    feed.list.select(Some(pos));
+                                }
+                            } else {
+                                app.flash(format!("anchor {sha} not in local history"));
+                            }
+                        }
+                        None => {
+                            let label = if source == "memory" { "memory hit" } else { "result" };
+                            app.flash(format!("{label} has no anchor to navigate to"));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 // ── Transcript view keys ──────────────────────────────────────────────

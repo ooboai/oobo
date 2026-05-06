@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-const DEFAULT_SERVER_URL: &str = "https://api.oobo.ai";
+pub const DEFAULT_SERVER_URL: &str = "https://api.oobo.ai";
+pub const DEFAULT_ANCHOR_REMOTE: &str = "origin";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -41,6 +42,8 @@ pub struct Config {
     #[serde(default)]
     pub amp: ToolConfig,
     #[serde(default)]
+    pub anchors: AnchorsConfig,
+    #[serde(default)]
     pub telemetry: TelemetryConfig,
     #[serde(default)]
     pub scan: ScanConfig,
@@ -64,6 +67,14 @@ pub struct ToolsConfig {
     /// integrations. Disabled by default in 1.0.
     #[serde(default)]
     pub experimental: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AnchorsConfig {
+    /// Default Git remote for the anchor metadata branch.
+    /// Empty means [`DEFAULT_ANCHOR_REMOTE`]. Can be overridden per-project in `.oobo/config`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub remote: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -510,6 +521,7 @@ mod tests {
             droid: ToolConfig::default(),
             junie: ToolConfig::default(),
             amp: ToolConfig::default(),
+            anchors: AnchorsConfig::default(),
             telemetry: TelemetryConfig {
                 enabled: true,
                 send_diffs: true,
