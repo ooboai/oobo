@@ -130,19 +130,28 @@ Configure cloud search:
 ";
 
 const HELP_BLAME: &str = "\
-oobo blame overlays AI attribution on top of git blame output. For each
-line, you see WHO wrote it (human or AI) in addition to WHEN and by whom.
+oobo blame traces every line back to the commit that introduced it, then
+loads that commit's anchor to resolve AI vs human attribution. This gives
+historically accurate blame across the full file history.
 
 Usage:
-  oobo blame src/main.rs          At HEAD
-  oobo blame src/main.rs abc123   At a specific commit
-  oobo blame src/main.rs --no-ai  Pure git blame (no AI column)
-  oobo blame src/main.rs --json   Structured output
+  oobo blame src/main.rs              Color-coded blame at HEAD
+  oobo blame src/main.rs abc123       At a specific commit
+  oobo blame src/main.rs --agent      Compact text columns
+  oobo blame src/main.rs --json       Rich per-line JSON (for plugins)
+  oobo blame src/main.rs --no-ai      Pure git blame (no AI column)
 
-The AI column shows:
-  H  = human-written line
-  AI = AI-generated line (tool name shown if known)
-  ?  = attribution unknown (pre-oobo history)
+Color coding (pretty mode):
+  magenta  = AI-generated (tool name shown, e.g. cursor, claude)
+  yellow   = mixed (both AI and human contributed)
+  green    = human-written
+  dim gray = unknown (pre-oobo or no anchor)
+
+JSON output includes per line: origin_sha, ai, agent, session_ids,
+tokens, committed_at, and commit message — designed for IDE plugins.
+
+Every git blame flag is forwarded. Machine-output formats (--porcelain,
+--line-porcelain, --incremental) bypass the AI column automatically.
 ";
 
 const HELP_HOOKS: &str = "\
