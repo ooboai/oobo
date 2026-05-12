@@ -3,7 +3,9 @@ use std::fs;
 
 use crate::error::CliError;
 
-use super::{branch_exists, build_commit_on, git_in, BRANCH, NULL_OID};
+use super::{branch_exists, build_commit_on, git_in, git_in_timeout, BRANCH, NULL_OID};
+
+const NETWORK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Resolve the anchor remote once per call site. Uses the full precedence
 /// chain: project config > global config > "origin".
@@ -17,7 +19,7 @@ pub fn remote_branch_exists(project_root: &str) -> bool {
     if validate_anchor_remote(project_root, &remote).is_err() {
         return false;
     }
-    git_in(project_root, &["ls-remote", "--heads", &remote, BRANCH])
+    git_in_timeout(project_root, &["ls-remote", "--heads", &remote, BRANCH], NETWORK_TIMEOUT)
         .map(|out| !out.trim().is_empty())
         .unwrap_or(false)
 }
@@ -37,7 +39,7 @@ pub fn push(project_root: &str) -> Result<(), CliError> {
 
     let mut last_err = String::new();
     for attempt in 0..MAX_PUSH_ATTEMPTS {
-        match git_in(project_root, &["push", "--no-verify", &remote, BRANCH]) {
+        match git_in_timeout(project_root, &["push", "--no-verify", &remote, BRANCH], NETWORK_TIMEOUT) {
             Ok(_) => {
                 clear_pending_push(project_root);
                 return Ok(());
@@ -73,7 +75,7 @@ pub fn retry_pending_pushes(project_root: &str) {
         return;
     }
     let _ = reconcile_with_remote(project_root, &remote);
-    if git_in(project_root, &["push", "--no-verify", &remote, BRANCH]).is_ok() {
+    if git_in_timeout(project_root, &["push", "--no-verify", &remote, BRANCH], NETWORK_TIMEOUT).is_ok() {
         let _ = fs::remove_file(&path);
     }
 }
@@ -126,7 +128,7 @@ fn reconcile_with_remote(project_root: &str, remote: &str) -> Result<(), CliErro
     let fetch_ref = format!("refs/oobo/fetch-tmp/{}", std::process::id());
     let refspec = format!("+{BRANCH}:{fetch_ref}");
 
-    let fetch_result = git_in(project_root, &["fetch", remote, &refspec]);
+    let fetch_result = git_in_timeout(project_root, &["fetch", remote, &refspec], NETWORK_TIMEOUT);
 
     let cleanup = |pr: &str| {
         let _ = git_in(pr, &["update-ref", "-d", &fetch_ref]);

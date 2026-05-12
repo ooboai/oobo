@@ -2,7 +2,7 @@ mod rekey;
 mod sync;
 
 pub use rekey::{parse_rewrite_pairs, rekey_anchors, rekey_anchors_from_rewrite_pairs};
-pub use sync::{fetch_and_reconcile, push, remote_branch_exists, retry_pending_pushes};
+pub use sync::{fetch_and_reconcile, push, remote_branch_exists};
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -576,6 +576,61 @@ pub(super) fn git_in(project_root: &str, args: &[&str]) -> Result<String, CliErr
         .env_remove("GIT_QUARANTINE_PATH")
         .output()
         .map_err(|e| CliError::Git(format!("git: {e}")))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .replace('\r', "")
+            .trim()
+            .to_string())
+    } else {
+        Err(CliError::Git(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ))
+    }
+}
+
+/// Like `git_in` but kills the child after `timeout` elapses.
+/// Used for network-facing commands (push, fetch, ls-remote) that can
+/// hang indefinitely when the remote is unreachable.
+pub(super) fn git_in_timeout(
+    project_root: &str,
+    args: &[&str],
+    timeout: std::time::Duration,
+) -> Result<String, CliError> {
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+    let mut child = Command::new(git)
+        .args(args)
+        .current_dir(project_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_QUARANTINE_PATH")
+        .spawn()
+        .map_err(|e| CliError::Git(format!("git: {e}")))?;
+
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => break,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(CliError::Git(format!(
+                        "git {} timed out after {}s",
+                        args.first().unwrap_or(&""),
+                        timeout.as_secs()
+                    )));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => return Err(CliError::Git(format!("git: {e}"))),
+        }
+    }
+
+    let output = child.wait_with_output().map_err(|e| CliError::Git(format!("git: {e}")))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout)

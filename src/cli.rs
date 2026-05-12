@@ -654,7 +654,6 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                                 eprintln!("oobo: warning: could not push anchors: {e}");
                             }
                         }
-                        crate::git::orphan::retry_pending_pushes(&root);
                     }
                 }
                 HookAction::PostMerge { .. } => {

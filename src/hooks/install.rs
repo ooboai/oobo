@@ -463,7 +463,22 @@ pub fn install_git_hook(project_root: &str, hook_name: &str, script: &str) -> Re
 
     if hook_path.exists() {
         let existing = fs::read_to_string(&hook_path).unwrap_or_default();
-        if existing.contains("oobo hooks") {
+        let is_oobo_hook =
+            existing.contains("oobo hooks") || existing.contains("anchor hooks");
+        if is_oobo_hook {
+            // Overwrite in-place; no backup needed since this is our own hook.
+            // Also clean up any stale .pre-anchor backup that may reference itself.
+            let stale_backup = hooks_dir.join(format!("{hook_name}.pre-anchor"));
+            if stale_backup.exists() {
+                let backup_content = fs::read_to_string(&stale_backup).unwrap_or_default();
+                if backup_content.contains("oobo hooks")
+                    || backup_content.contains("anchor hooks")
+                {
+                    let _ = fs::remove_file(&stale_backup);
+                }
+            }
+            fs::write(&hook_path, script)
+                .map_err(|e| format!("cannot write hook: {e}"))?;
             return Ok(());
         }
 
@@ -579,6 +594,61 @@ mod tests {
 
         let backup = fs::read_to_string(hooks_dir.join("post-commit.pre-anchor")).unwrap();
         assert!(backup.contains("original"));
+    }
+
+    #[test]
+    fn test_install_git_hook_overwrites_old_anchor_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        let hooks_dir = dir.path().join(".git/hooks");
+        fs::create_dir_all(&hooks_dir).unwrap();
+
+        // Old hook using legacy `anchor` binary name
+        fs::write(
+            hooks_dir.join("post-commit"),
+            "#!/bin/sh\nanchor hooks post-commit\n",
+        )
+        .unwrap();
+
+        install_git_hook(root, "post-commit", "#!/bin/sh\noobo hooks post-commit\n").unwrap();
+
+        let hook = fs::read_to_string(hooks_dir.join("post-commit")).unwrap();
+        assert!(hook.contains("oobo hooks"));
+        assert!(!hook.contains("pre-anchor"), "must not chain to itself");
+        assert!(
+            !hooks_dir.join("post-commit.pre-anchor").exists(),
+            "must not create a self-referencing backup"
+        );
+    }
+
+    #[test]
+    fn test_install_git_hook_cleans_stale_pre_anchor() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        let hooks_dir = dir.path().join(".git/hooks");
+        fs::create_dir_all(&hooks_dir).unwrap();
+
+        // Simulate the broken state: hook with oobo AND a self-referencing backup
+        fs::write(
+            hooks_dir.join("post-commit"),
+            "#!/bin/sh\noobo hooks post-commit\nif [ -x post-commit.pre-anchor ]; then post-commit.pre-anchor; fi\n",
+        )
+        .unwrap();
+        fs::write(
+            hooks_dir.join("post-commit.pre-anchor"),
+            "#!/bin/sh\nanchor hooks post-commit\nif [ -x post-commit.pre-anchor ]; then post-commit.pre-anchor; fi\n",
+        )
+        .unwrap();
+
+        install_git_hook(root, "post-commit", "#!/bin/sh\noobo hooks post-commit\n").unwrap();
+
+        let hook = fs::read_to_string(hooks_dir.join("post-commit")).unwrap();
+        assert!(hook.contains("oobo hooks"));
+        assert!(!hook.contains("pre-anchor"), "cleaned hook must not chain");
+        assert!(
+            !hooks_dir.join("post-commit.pre-anchor").exists(),
+            "stale self-referencing backup must be removed"
+        );
     }
 
     #[test]
