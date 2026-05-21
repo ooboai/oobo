@@ -5,8 +5,8 @@ mod draw;
 mod external;
 pub mod format;
 mod input;
-pub(crate) mod status;
 pub mod setup;
+pub(crate) mod status;
 pub mod transcript;
 mod types;
 
@@ -48,7 +48,6 @@ pub fn format_tokens(n: i64) -> String {
         n.to_string()
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -28,7 +28,5 @@ pub(in crate::git) fn persist_anchor_portable(
     super::anchor_cache::invalidate(project_root);
 }
 
-
 #[cfg(test)]
-mod tests {
-}
+mod tests {}

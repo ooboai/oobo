@@ -66,7 +66,9 @@ impl CliError {
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::User(_) => 2,
-            Self::NotARepo | Self::Io { .. } | Self::Git(_) | Self::Config(_) | Self::Remote(_) => 1,
+            Self::NotARepo | Self::Io { .. } | Self::Git(_) | Self::Config(_) | Self::Remote(_) => {
+                1
+            }
         }
     }
 }

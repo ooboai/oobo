@@ -67,15 +67,18 @@ pub(super) fn resolve_file_attribution(
             agent,
             line_attrs,
         ) = if let Some((agent_blob, agent_name)) = snapshot_lookup.get(path.as_str()) {
-            compute_precise_attribution(cfg, &FileAttributionInput {
-                file_path: path,
-                agent_blob,
-                pre_agent_blob: pre_blob.as_deref(),
-                total_added: *added,
-                total_deleted: *deleted,
-                agent_name: agent_name.clone(),
-                edit_chain: edit_chain_lookup.get(path.as_str()),
-            })
+            compute_precise_attribution(
+                cfg,
+                &FileAttributionInput {
+                    file_path: path,
+                    agent_blob,
+                    pre_agent_blob: pre_blob.as_deref(),
+                    total_added: *added,
+                    total_deleted: *deleted,
+                    agent_name: agent_name.clone(),
+                    edit_chain: edit_chain_lookup.get(path.as_str()),
+                },
+            )
         } else if ai_file_set.contains(path.as_str()) {
             let agent_name = ai_files_touched
                 .iter()
@@ -198,9 +201,7 @@ fn build_snapshot_lookups<'a>(
 }
 
 /// Build a lookup of per-file edit chains from all active sessions.
-fn build_edit_chain_lookup<'a>(
-    sessions: &'a [hooks::state::ActiveSession],
-) -> EditChainLookup<'a> {
+fn build_edit_chain_lookup<'a>(sessions: &'a [hooks::state::ActiveSession]) -> EditChainLookup<'a> {
     let mut lookup: EditChainLookup<'a> = std::collections::HashMap::new();
     for session in sessions {
         if let Some(ref chain) = session.file_edit_chain {

@@ -69,31 +69,30 @@ cargo run -- anchor show <sha>
 
 ### Project Overview
 
-oobo is a Rust binary that acts as a transparent git decorator. Key modules:
+oobo is a Rust binary that enriches git commits with AI context via hooks. Key modules:
 
 | Module | Purpose |
 |--------|---------|
 | `src/cli.rs` | Command-line argument parsing and routing |
-| `src/git/` | Git decorator, write operation detection, interceptor, orphan branch |
-| `src/tools/cursor/` | Cursor IDE local data extraction (transcripts) |
+| `src/commands/` | CLI subcommands (anchors, blame, delta, goto, search, settings, etc.) |
+| `src/git/` | Interceptor, orphan branch, anchor builder, session resolver, line attribution |
+| `src/hooks/` | Git hook handlers and agent lifecycle event processing |
+| `src/taps/` | TurnTap pipeline — per-turn workspace snapshots (Claude, Cursor, Codex, OpenCode) |
+| `src/attribution/` | Turn store, inference engine, backfill, code attribution |
+| `src/tools/cursor/` | Cursor IDE local data extraction (transcripts, composer) |
 | `src/tools/claude/` | Claude Code local data extraction (JSONL sessions) |
-| `src/tools/vscode_fork.rs` | Shared VS Code fork extraction (Copilot, contrib/Windsurf, contrib/Trae) |
-| `src/tools/aider.rs` | Aider chat history (markdown) |
-| `src/tools/copilot.rs` | GitHub Copilot Chat session support |
-| `src/tools/zed.rs` | Zed AI conversation support |
-| `src/tools/codex.rs` | OpenAI Codex CLI session support |
-| `src/tools/opencode.rs` | OpenCode session support |
-| `src/tools/gemini.rs` | Gemini CLI session support |
-| `src/tools/continue_dev.rs` | Continue session support |
-| `src/tools/droid.rs` | Factory Droid session support |
+| `src/tools/vscode_fork.rs` | Shared VS Code fork extraction (Copilot, contrib adapters) |
 | `src/tools/contrib/` | Community-maintained adapters gated behind `tools.experimental` (Windsurf, Trae, Kiro, Junie, Amp) |
-| `src/core/` | Domain types: anchor, message, session, tool trait |
-| `src/commands/` | CLI subcommands (23 commands) |
-| `src/attribution/` | Token computation, turn caching, code attribution |
-| `src/remote/` | Remote search API (`/anchors/search`, `/anchors/health`) |
-| `src/session.rs` | Multi-source session dispatch |
-| `src/tui/` | Ratatui terminal UI for interactive commands |
-| `src/config.rs` | Configuration file management |
+| `src/tools/opencode/` | OpenCode session and transcript support |
+| `src/core/` | Domain types: anchor, session, turn, tool trait, contribution |
+| `src/tui/` | Ratatui terminal UI (anchor feed, search, transcript viewer) |
+| `src/feed.rs` | Anchor feed data loading |
+| `src/help.rs` | Built-in documentation topics |
+| `src/project.rs` | Stable project identity (remote URL canonicalization) |
+| `src/project_config.rs` | Per-project `.oobo/config` management |
+| `src/trace.rs` | Diagnostics and structured tracing |
+| `src/remote/` | Remote search API (`/anchors/search`, `/anchors/delta`) |
+| `src/config.rs` | Global configuration file management |
 
 ### Running Tests
 

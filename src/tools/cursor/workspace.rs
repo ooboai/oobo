@@ -68,7 +68,8 @@ fn read_workspace_folder(ws_dir: &Path) -> Option<String> {
 /// Convert a file:// URI to a filesystem path.
 fn uri_to_path(uri: &str) -> String {
     if let Ok(url) = url::Url::parse(uri) {
-        url.to_file_path().map_or_else(|()| uri.to_string(), |p| p.to_string_lossy().to_string())
+        url.to_file_path()
+            .map_or_else(|()| uri.to_string(), |p| p.to_string_lossy().to_string())
     } else {
         uri.to_string()
     }

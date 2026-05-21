@@ -28,8 +28,7 @@ pub async fn run(
         Some(s) => resolve_full_sha(cfg, s).unwrap_or_else(|_| s.to_string()),
         None => resolve_head_sha(cfg)?,
     };
-    let prev = previous_sha
-        .map(|s| resolve_full_sha(cfg, s).unwrap_or_else(|_| s.to_string()));
+    let prev = previous_sha.map(|s| resolve_full_sha(cfg, s).unwrap_or_else(|_| s.to_string()));
 
     let request = DeltaRequest {
         anchor_sha: sha,
@@ -78,14 +77,20 @@ fn emit_json(resp: &DeltaResponse) {
 fn emit_agent(request: &DeltaRequest, resp: &DeltaResponse) {
     if let Some(cur) = &resp.current {
         let sha = cur.sha.as_deref().unwrap_or("?");
-        let headline = cur.headline.as_deref().unwrap_or(cur.message.as_deref().unwrap_or("-"));
+        let headline = cur
+            .headline
+            .as_deref()
+            .unwrap_or(cur.message.as_deref().unwrap_or("-"));
         let cat = cur.category.as_deref().unwrap_or("-");
         let cx = cur.complexity.as_deref().unwrap_or("-");
         println!("current  {sha}  [{cat}/{cx}]  {headline}");
     }
     if let Some(prev) = &resp.previous {
         let sha = prev.sha.as_deref().unwrap_or("?");
-        let headline = prev.headline.as_deref().unwrap_or(prev.message.as_deref().unwrap_or("-"));
+        let headline = prev
+            .headline
+            .as_deref()
+            .unwrap_or(prev.message.as_deref().unwrap_or("-"));
         let cat = prev.category.as_deref().unwrap_or("-");
         let cx = prev.complexity.as_deref().unwrap_or("-");
         println!("previous {sha}  [{cat}/{cx}]  {headline}");
@@ -137,10 +142,16 @@ fn emit_pretty(request: &DeltaRequest, resp: &DeltaResponse) {
         println!();
         println!("\x1b[1mChanges\x1b[0m");
         if let Some(cs) = &ch.category_shift {
-            println!("  category:   \x1b[33m{}\x1b[0m → \x1b[36m{}\x1b[0m", cs.from, cs.to);
+            println!(
+                "  category:   \x1b[33m{}\x1b[0m → \x1b[36m{}\x1b[0m",
+                cs.from, cs.to
+            );
         }
         if let Some(cs) = &ch.complexity_shift {
-            println!("  complexity: \x1b[33m{}\x1b[0m → \x1b[36m{}\x1b[0m", cs.from, cs.to);
+            println!(
+                "  complexity: \x1b[33m{}\x1b[0m → \x1b[36m{}\x1b[0m",
+                cs.from, cs.to
+            );
         }
         if !ch.new_areas.is_empty() {
             println!("  new areas:  {}", ch.new_areas.join(", "));
@@ -210,5 +221,137 @@ fn print_detail_block(detail: &serde_json::Value) {
                 _ => println!("  {k}: {v}"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::remote::payload::{
+        DeltaAnchorSummary, DeltaChanges, DeltaRequest, DeltaResponse, DeltaShift,
+    };
+
+    fn sample_request() -> DeltaRequest {
+        DeltaRequest {
+            anchor_sha: "abc123".into(),
+            previous_sha: Some("def789".into()),
+            git_remote: None,
+            repo_id: None,
+            full: false,
+        }
+    }
+
+    fn sample_response() -> DeltaResponse {
+        DeltaResponse {
+            current: Some(DeltaAnchorSummary {
+                sha: Some("abc123".into()),
+                message: Some("feat: add auth".into()),
+                author: Some("dev".into()),
+                timestamp: Some("2026-05-20".into()),
+                project: None,
+                headline: Some("Added auth module".into()),
+                category: Some("feature".into()),
+                outcome: None,
+                complexity: Some("moderate".into()),
+            }),
+            previous: Some(DeltaAnchorSummary {
+                sha: Some("def789".into()),
+                message: Some("fix: typo".into()),
+                author: Some("dev".into()),
+                timestamp: Some("2026-05-19".into()),
+                project: None,
+                headline: Some("Fixed typo".into()),
+                category: Some("fix".into()),
+                outcome: None,
+                complexity: Some("trivial".into()),
+            }),
+            changes: Some(DeltaChanges {
+                category_shift: Some(DeltaShift {
+                    from: "fix".into(),
+                    to: "feature".into(),
+                }),
+                complexity_shift: Some(DeltaShift {
+                    from: "trivial".into(),
+                    to: "moderate".into(),
+                }),
+                new_areas: vec!["auth".into()],
+                new_techniques: vec!["JWT".into()],
+                files_new: vec!["src/auth.rs".into()],
+                files_continued: vec!["src/main.rs".into()],
+                narrative: Some("Moved from bugfix to feature work.".into()),
+            }),
+            current_detail: None,
+            previous_detail: None,
+        }
+    }
+
+    fn empty_response() -> DeltaResponse {
+        DeltaResponse {
+            current: None,
+            previous: None,
+            changes: None,
+            current_detail: None,
+            previous_detail: None,
+        }
+    }
+
+    #[test]
+    fn emit_json_produces_valid_json() {
+        let resp = sample_response();
+        let value = serde_json::to_value(&resp).unwrap();
+        assert!(value.get("current").is_some());
+        assert!(value.get("previous").is_some());
+        assert!(value.get("changes").is_some());
+    }
+
+    #[test]
+    fn emit_agent_empty_response_does_not_panic() {
+        let req = sample_request();
+        let resp = empty_response();
+        emit_agent(&req, &resp);
+    }
+
+    #[test]
+    fn emit_pretty_empty_response_does_not_panic() {
+        let req = sample_request();
+        let resp = empty_response();
+        emit_pretty(&req, &resp);
+    }
+
+    #[test]
+    fn emit_agent_with_data_does_not_panic() {
+        let req = sample_request();
+        let resp = sample_response();
+        emit_agent(&req, &resp);
+    }
+
+    #[test]
+    fn emit_pretty_with_data_does_not_panic() {
+        let req = sample_request();
+        let resp = sample_response();
+        emit_pretty(&req, &resp);
+    }
+
+    #[test]
+    fn delta_response_deserializes_empty_object() {
+        let json = "{}";
+        let resp: DeltaResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.current.is_none());
+        assert!(resp.previous.is_none());
+        assert!(resp.changes.is_none());
+    }
+
+    #[test]
+    fn delta_request_serializes_without_optionals() {
+        let req = DeltaRequest {
+            anchor_sha: "abc".into(),
+            previous_sha: None,
+            git_remote: None,
+            repo_id: None,
+            full: false,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("previous_sha"));
+        assert!(!json.contains("git_remote"));
     }
 }

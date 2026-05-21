@@ -1,6 +1,6 @@
 # Commands
 
-Current command reference for `oobo` 1.0. Commands support global `--agent`, `--json`, and `--interactive` output-mode flags. Filter flags (`-n`, `--since`, `--tool`) are also global.
+Current command reference for `oobo` 1.0.0-rc.1. Commands support global `--agent`, `--json`, and `--interactive` output-mode flags. Filter flags (`-n`, `--since`, `--tool`) are also global.
 
 ## Memory Feed (bare command)
 
@@ -51,6 +51,18 @@ oobo search "auth" --project oobo-cli --json       # Explicit project scope
 
 Search is local-first. With an API key, default search merges local and remote results; use `--local`, `--remote`, or `--both` to force a source.
 
+## Delta — compare two anchors
+
+```bash
+oobo delta                                         # Compare HEAD to its previous anchor
+oobo delta abc123                                  # Compare a specific anchor to its previous
+oobo delta abc123 def789                           # Explicit pair
+oobo delta --full                                  # Include sessions, decisions, techniques
+oobo delta abc123 --full --json                    # Full structured output
+```
+
+Shows what changed between two anchors: category shifts, complexity changes, new areas, new techniques, and a narrative summary. Requires an API key.
+
 ## Project Tracking
 
 ```bash
@@ -80,11 +92,16 @@ Interactive setup discovers git repos and lets users choose which to enable.
 oobo settings                                      # Show effective settings
 oobo settings set key <api_key>                    # Store remote API key
 oobo settings unset key                            # Remove persisted API key
-oobo settings set remote https://oobo.example.com  # Point to self-hosted server
+oobo settings set api_url https://oobo.example.com # Point to self-hosted server
 oobo settings set transparency on                  # Enable transcript sync (default: on)
+oobo settings set tools.experimental on            # Enable experimental tool detection
+oobo settings set setup.scan_roots ~/dev,~/work    # Directories to scan for repos
+oobo settings project set remote oobo              # Push anchor branch to specific remote
 ```
 
-A non-empty default API key is used for remote search. `oobo settings unset key` removes the persisted key. `OOBO_SECRET_KEY` overrides the persisted key for the current process only. There is no cloud upload pipeline; team sync is Git-first via the orphan branch.
+Valid keys: `key`, `api_url`, `remote` (project-only), `transparency`, `tools.experimental`, `setup.scan_roots`.
+
+A non-empty default API key is used for remote search and delta. `oobo settings unset key` removes the persisted key. `OOBO_SECRET_KEY` overrides the persisted key for the current process only. There is no cloud upload pipeline; team sync is Git-first via the orphan branch.
 
 ## Help
 

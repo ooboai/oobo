@@ -261,12 +261,22 @@ fn draw_feed(frame: &mut ratatui::Frame<'_>, app: &App, feed: &FeedState) {
 
 fn draw_tracking_notice(frame: &mut ratatui::Frame<'_>, area: Rect) {
     let line = Line::from(vec![
-        Span::styled("  tracking off", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "  tracking off",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             " — new sessions won't be captured on commit. press ",
             Style::default().fg(Color::Yellow),
         ),
-        Span::styled("e", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "e",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" to enable", Style::default().fg(Color::Yellow)),
     ]);
     frame.render_widget(Paragraph::new(line), area);
@@ -321,11 +331,17 @@ fn draw_empty_state(frame: &mut ratatui::Frame<'_>, app: &App, area: Rect) {
             Line::from(""),
             Line::from(vec![
                 Span::styled("  · press ", Style::default().fg(Color::Gray)),
-                Span::styled("e", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "e",
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" to enable tracking now", Style::default().fg(Color::Gray)),
             ]),
             Line::from(Span::styled(
-                "  · or run:  oobo enable", Style::default().fg(Color::Gray),
+                "  · or run:  oobo enable",
+                Style::default().fg(Color::Gray),
             )),
             Line::from(""),
             Line::from(Span::styled(
@@ -455,7 +471,8 @@ fn draw_anchor_list(frame: &mut ratatui::Frame<'_>, app: &App, feed: &FeedState,
                 MemoryKind::Anchor => {
                     let tok_str = r
                         .tokens
-                        .filter(|t| *t > 0).map_or_else(|| "-".into(), super::format_tokens);
+                        .filter(|t| *t > 0)
+                        .map_or_else(|| "-".into(), super::format_tokens);
                     let sessions = if r.session_count > 0 {
                         format!("{}s", r.session_count)
                     } else {
@@ -506,7 +523,12 @@ fn draw_anchor_list(frame: &mut ratatui::Frame<'_>, app: &App, feed: &FeedState,
 fn draw_footer(frame: &mut ratatui::Frame<'_>, app: &App, feed: &FeedState, area: Rect) {
     let content: Line<'static> = if feed.filter_input_open {
         Line::from(vec![
-            Span::styled(" / ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " / ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(app.filter.clone()),
             Span::styled("▎", Style::default().fg(Color::Cyan)),
         ])
@@ -545,8 +567,8 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, app: &App, feed: &FeedState, area
 // ── Search view ──────────────────────────────────────────────────────
 
 fn draw_search(frame: &mut ratatui::Frame<'_>, app: &App, ss: &SearchState) {
-    use ratatui::widgets::Clear;
     use super::app::SPINNER;
+    use ratatui::widgets::Clear;
 
     let area = frame.area();
     frame.render_widget(Clear, area);
@@ -630,7 +652,10 @@ fn draw_search(frame: &mut ratatui::Frame<'_>, app: &App, ss: &SearchState) {
             tracking_span,
         ]),
     ];
-    frame.render_widget(Paragraph::new(header).alignment(Alignment::Left), header_area);
+    frame.render_widget(
+        Paragraph::new(header).alignment(Alignment::Left),
+        header_area,
+    );
 
     if let Some(na) = notice_area {
         draw_tracking_notice(frame, na);
@@ -686,7 +711,9 @@ fn draw_search(frame: &mut ratatui::Frame<'_>, app: &App, ss: &SearchState) {
                 Line::from(""),
                 Line::from(Span::styled(
                     "  search requires an API key",
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
@@ -714,7 +741,7 @@ fn draw_search(frame: &mut ratatui::Frame<'_>, app: &App, ss: &SearchState) {
         let (answer_area, list_area) = if let Some(answer) = ss.answer.as_deref() {
             let usable_width = body_area.width.saturating_sub(6) as usize;
             let text_lines = if usable_width > 0 {
-                (answer.len() + usable_width - 1) / usable_width
+                answer.len().div_ceil(usable_width)
             } else {
                 1
             };
@@ -732,10 +759,7 @@ fn draw_search(frame: &mut ratatui::Frame<'_>, app: &App, ss: &SearchState) {
             let answer_lines = vec![
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled(
-                        "  💡 ",
-                        Style::default().fg(Color::Cyan),
-                    ),
+                    Span::styled("  💡 ", Style::default().fg(Color::Cyan)),
                     Span::styled(
                         answer.to_string(),
                         Style::default()
@@ -769,10 +793,10 @@ fn draw_search(frame: &mut ratatui::Frame<'_>, app: &App, ss: &SearchState) {
                 let snippet: String = r.snippet.chars().take(max_snippet).collect();
 
                 let score_str = format!("{:.0}%", r.score * 100.0);
-                let tok_str = r.tokens.filter(|t| *t > 0).map_or_else(
-                    String::new,
-                    |t| format!(" {}tok", super::format_tokens(t)),
-                );
+                let tok_str = r
+                    .tokens
+                    .filter(|t| *t > 0)
+                    .map_or_else(String::new, |t| format!(" {}tok", super::format_tokens(t)));
 
                 let mut spans = vec![
                     if is_memory {
@@ -793,7 +817,13 @@ fn draw_search(frame: &mut ratatui::Frame<'_>, app: &App, ss: &SearchState) {
 
                 if is_memory {
                     if let Some(author) = &r.author {
-                        let short_author: String = author.split_whitespace().next().unwrap_or(author).chars().take(10).collect();
+                        let short_author: String = author
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or(author)
+                            .chars()
+                            .take(10)
+                            .collect();
                         spans.push(Span::styled(
                             format!("{short_author} "),
                             Style::default().fg(Color::Cyan),
@@ -807,7 +837,7 @@ fn draw_search(frame: &mut ratatui::Frame<'_>, app: &App, ss: &SearchState) {
                 }
 
                 spans.push(Span::styled(
-                    format!("{}{tok_str}", score_str),
+                    format!("{score_str}{tok_str}"),
                     Style::default().fg(Color::DarkGray),
                 ));
 
@@ -821,11 +851,7 @@ fn draw_search(frame: &mut ratatui::Frame<'_>, app: &App, ss: &SearchState) {
                 }
                 line2_spans.push(Span::styled(
                     snippet,
-                    Style::default().fg(if is_memory {
-                        Color::White
-                    } else {
-                        Color::Gray
-                    }),
+                    Style::default().fg(if is_memory { Color::White } else { Color::Gray }),
                 ));
                 let line2 = Line::from(line2_spans);
 
@@ -844,10 +870,7 @@ fn draw_search(frame: &mut ratatui::Frame<'_>, app: &App, ss: &SearchState) {
 
     let footer: Line<'static> = if matches!(ss.status, SearchStatus::Input) {
         Line::from(vec![
-            Span::styled(
-                " 🔍 ",
-                Style::default().fg(Color::Cyan),
-            ),
+            Span::styled(" 🔍 ", Style::default().fg(Color::Cyan)),
             Span::raw(ss.input.clone()),
             Span::styled("▎", Style::default().fg(Color::Cyan)),
         ])
@@ -901,10 +924,7 @@ fn draw_diff(frame: &mut ratatui::Frame<'_>, ds: &DiffState) {
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                format!("  {short}"),
-                Style::default().fg(Color::Yellow),
-            ),
+            Span::styled(format!("  {short}"), Style::default().fg(Color::Yellow)),
             Span::styled(
                 format!("  {}", ds.subject),
                 Style::default().fg(Color::DarkGray),
@@ -935,10 +955,7 @@ fn draw_diff(frame: &mut ratatui::Frame<'_>, ds: &DiffState) {
         Span::styled(" back  ", Style::default().fg(Color::DarkGray)),
         Span::styled("j/k", Style::default().fg(Color::White)),
         Span::styled(" scroll  ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            format!("{pct}%"),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(format!("{pct}%"), Style::default().fg(Color::DarkGray)),
     ]);
     frame.render_widget(Paragraph::new(footer), layout[2]);
 }

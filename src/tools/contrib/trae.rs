@@ -67,9 +67,10 @@ fn sessions_from_workspaces() -> Vec<Session> {
 
                         let name = if i == 0 { first_input.clone() } else { None };
 
-                        let name = name.map_or_else(|| "Trae session".to_string(), |s| {
-                                crate::utils::truncate_name(&s, crate::utils::MAX_SESSION_NAME_LEN)
-                            });
+                        let name = name.map_or_else(
+                            || "Trae session".to_string(),
+                            |s| crate::utils::truncate_name(&s, crate::utils::MAX_SESSION_NAME_LEN),
+                        );
 
                         let ts = trae_db_mtime();
 

@@ -22,19 +22,23 @@ pub(super) fn handle_key(
 ) -> Result<bool, String> {
     let in_filter = matches!(
         app.stack.last(),
-        Some(View::Feed(FeedState { filter_input_open: true, .. }))
+        Some(View::Feed(FeedState {
+            filter_input_open: true,
+            ..
+        }))
     );
-    let in_search = matches!(
-        app.stack.last(),
-        Some(View::Search(_))
-    );
+    let in_search = matches!(app.stack.last(), Some(View::Search(_)));
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         if in_filter {
             if let Some(View::Feed(feed)) = app.stack.last_mut() {
                 app.filter.clear();
                 feed.filter_input_open = false;
                 let total = visible_anchor_count(&app.anchors, &app.filter);
-                if total > 0 { feed.list.select(Some(0)); } else { feed.list.select(None); }
+                if total > 0 {
+                    feed.list.select(Some(0));
+                } else {
+                    feed.list.select(None);
+                }
             }
             return Ok(false);
         }
@@ -81,7 +85,11 @@ fn handle_feed_key(
                     feed.filter_input_open = false;
                     app.filter.clear();
                     let total = visible_anchor_count(&app.anchors, &app.filter);
-                    if total > 0 { feed.list.select(Some(0)); } else { feed.list.select(None); }
+                    if total > 0 {
+                        feed.list.select(Some(0));
+                    } else {
+                        feed.list.select(None);
+                    }
                 }
                 KeyCode::Enter => {
                     let total = visible_anchor_count(&app.anchors, &app.filter);
@@ -93,7 +101,11 @@ fn handle_feed_key(
                 KeyCode::Backspace => {
                     app.filter.pop();
                     let total = visible_anchor_count(&app.anchors, &app.filter);
-                    if total > 0 { feed.list.select(Some(0)); } else { feed.list.select(None); }
+                    if total > 0 {
+                        feed.list.select(Some(0));
+                    } else {
+                        feed.list.select(None);
+                    }
                 }
                 KeyCode::Up => {
                     let total = visible_anchor_count(&app.anchors, &app.filter) as i32;
@@ -112,7 +124,11 @@ fn handle_feed_key(
                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.filter.push(c);
                     let total = visible_anchor_count(&app.anchors, &app.filter);
-                    if total > 0 { feed.list.select(Some(0)); } else { feed.list.select(None); }
+                    if total > 0 {
+                        feed.list.select(Some(0));
+                    } else {
+                        feed.list.select(None);
+                    }
                 }
                 _ => {}
             }
@@ -120,8 +136,7 @@ fn handle_feed_key(
         return Ok(false);
     }
 
-    if key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('f' | '/'))
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('f' | '/'))
     {
         if let Some(View::Feed(feed)) = app.stack.last_mut() {
             feed.filter_input_open = true;
@@ -217,7 +232,10 @@ fn select_first_visible(app: &mut App) {
 fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
     let is_input = matches!(
         app.stack.last(),
-        Some(View::Search(SearchState { status: SearchStatus::Input, .. }))
+        Some(View::Search(SearchState {
+            status: SearchStatus::Input,
+            ..
+        }))
     );
 
     if is_input {
@@ -229,7 +247,11 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
                 let query = match app.stack.last() {
                     Some(View::Search(ss)) => {
                         let q = ss.input.trim().to_string();
-                        if q.is_empty() { None } else { Some(q) }
+                        if q.is_empty() {
+                            None
+                        } else {
+                            Some(q)
+                        }
                     }
                     _ => None,
                 };
@@ -261,7 +283,7 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
             KeyCode::Esc => {
                 app.stack.pop();
             }
-            KeyCode::Char('s') | KeyCode::Char('/') => {
+            KeyCode::Char('s' | '/') => {
                 ss.rx = None;
                 ss.status = SearchStatus::Input;
                 ss.input = ss.query.clone();
@@ -282,28 +304,28 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
             }
             KeyCode::Enter => {
                 let action = ss.list.selected().and_then(|idx| {
-                    ss.results.get(idx).map(|row| {
-                        (row.anchor_sha.clone(), row.source.clone())
-                    })
+                    ss.results
+                        .get(idx)
+                        .map(|row| (row.anchor_sha.clone(), row.source.clone()))
                 });
                 if let Some((sha_opt, source)) = action {
-                    match sha_opt {
-                        Some(sha) => {
-                            if let Some(pos) = app.anchors.iter().position(|a| {
-                                a.sha.starts_with(&sha)
-                            }) {
-                                app.stack.pop();
-                                if let Some(View::Feed(feed)) = app.stack.first_mut() {
-                                    feed.list.select(Some(pos));
-                                }
-                            } else {
-                                app.flash(format!("anchor {sha} not in local history"));
+                    if let Some(sha) = sha_opt {
+                        if let Some(pos) = app.anchors.iter().position(|a| a.sha.starts_with(&sha))
+                        {
+                            app.stack.pop();
+                            if let Some(View::Feed(feed)) = app.stack.first_mut() {
+                                feed.list.select(Some(pos));
                             }
+                        } else {
+                            app.flash(format!("anchor {sha} not in local history"));
                         }
-                        None => {
-                            let label = if source == "memory" { "memory hit" } else { "result" };
-                            app.flash(format!("{label} has no anchor to navigate to"));
-                        }
+                    } else {
+                        let label = if source == "memory" {
+                            "memory hit"
+                        } else {
+                            "result"
+                        };
+                        app.flash(format!("{label} has no anchor to navigate to"));
                     }
                 }
             }
@@ -605,13 +627,15 @@ fn resolve_picker_action(p: &PickerState) -> PickerAction {
                 siblings: sessions.clone(),
                 idx,
             }),
-        PickerKind::BlameFile { files, sha, root } => files
-            .get(idx)
-            .map_or(PickerAction::Noop, |f| PickerAction::Blame {
-                root: root.clone(),
-                file: f.clone(),
-                sha: sha.clone(),
-            }),
+        PickerKind::BlameFile { files, sha, root } => {
+            files
+                .get(idx)
+                .map_or(PickerAction::Noop, |f| PickerAction::Blame {
+                    root: root.clone(),
+                    file: f.clone(),
+                    sha: sha.clone(),
+                })
+        }
     }
 }
 
@@ -689,10 +713,7 @@ fn open_selected_memory(app: &mut App) {
     }
 }
 
-fn goto_selected(
-    terminal: &mut ratatui::DefaultTerminal,
-    app: &mut App,
-) -> Result<(), String> {
+fn goto_selected(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<(), String> {
     let Some(anchor) = app.selected_anchor() else {
         return Ok(());
     };

@@ -376,7 +376,7 @@ fn test_config_save_and_load() {
         },
         scan: oobo::config::ScanConfig::default(),
         update: oobo::config::UpdateConfig::default(),
-        transparency: oobo::config::TransparencyConfig::default(),
+        privacy: oobo::config::TransparencyConfig::default(),
         tools: oobo::config::ToolsConfig::default(),
         setup: oobo::config::SetupConfig::default(),
         ignored_repos: Vec::new(),
@@ -540,9 +540,10 @@ fn test_view_does_not_create_project_config() {
         .unwrap();
 
     assert!(output.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .expect("oobo --json should return valid JSON");
-    let arr = json["anchors"].as_array()
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("oobo --json should return valid JSON");
+    let arr = json["anchors"]
+        .as_array()
         .expect("expected anchors array in JSON output");
     assert!(arr.is_empty(), "should have no anchors");
     assert!(
@@ -751,9 +752,10 @@ fn test_disable_persists_project_config_state() {
         .output()
         .unwrap();
     assert!(anchors.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&anchors.stdout)
-        .expect("oobo --json should return valid JSON");
-    let arr = json["anchors"].as_array()
+    let json: serde_json::Value =
+        serde_json::from_slice(&anchors.stdout).expect("oobo --json should return valid JSON");
+    let arr = json["anchors"]
+        .as_array()
         .expect("expected anchors array in JSON output");
     assert!(arr.is_empty(), "should have no anchors");
 }
@@ -826,7 +828,8 @@ fn test_e2e_commit_creates_anchor() {
 
     let wrapper: serde_json::Value =
         serde_json::from_str(&stdout).expect("oobo --json should return valid JSON");
-    let entries = wrapper["anchors"].as_array()
+    let entries = wrapper["anchors"]
+        .as_array()
         .unwrap_or_else(|| panic!("expected anchors array in JSON output: {stdout}"));
 
     assert_eq!(entries.len(), 1, "should have exactly 1 commit");
@@ -999,7 +1002,8 @@ fn test_e2e_turn_capture_and_from_preview() {
     );
     let memory: serde_json::Value =
         serde_json::from_slice(&anchors_with_turns.stdout).expect("anchors should emit JSON");
-    let anchors_arr = memory["anchors"].as_array()
+    let anchors_arr = memory["anchors"]
+        .as_array()
         .unwrap_or_else(|| panic!("expected anchors array in JSON: {memory}"));
     let turn_memory = anchors_arr
         .iter()
@@ -1147,7 +1151,8 @@ fn test_e2e_turn_capture_and_from_preview() {
     assert!(resumed_turns.status.success());
     let resumed_json: serde_json::Value =
         serde_json::from_slice(&resumed_turns.stdout).expect("anchors should emit JSON");
-    let resumed_arr = resumed_json["anchors"].as_array()
+    let resumed_arr = resumed_json["anchors"]
+        .as_array()
         .unwrap_or_else(|| panic!("expected anchors array: {resumed_json}"));
     let restored_turn = resumed_arr
         .iter()
@@ -2522,7 +2527,8 @@ fn test_pre_tool_use_creates_edit_chain() {
     );
     let memory: serde_json::Value =
         serde_json::from_slice(&anchors.stdout).expect("anchors should emit JSON");
-    let anchors_arr = memory["anchors"].as_array()
+    let anchors_arr = memory["anchors"]
+        .as_array()
         .unwrap_or_else(|| panic!("expected anchors array: {memory}"));
     let turn = anchors_arr
         .iter()
@@ -2533,11 +2539,8 @@ fn test_pre_tool_use_creates_edit_chain() {
     assert_eq!(turn["files"], 1);
 
     let turn_id = turn["turn_id"].as_str().unwrap();
-    let turn_snapshot = oobo::git::turns::read_turn_snapshot(
-        tmp.path().to_str().unwrap(),
-        turn_id,
-    )
-    .expect("turn snapshot should exist");
+    let turn_snapshot = oobo::git::turns::read_turn_snapshot(tmp.path().to_str().unwrap(), turn_id)
+        .expect("turn snapshot should exist");
 
     let file_snap = turn_snapshot
         .files

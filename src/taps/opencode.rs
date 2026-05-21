@@ -115,7 +115,9 @@ fn ingest_modern(
 
     for row in rows.flatten() {
         let (msg_id, ts, data_str) = row;
-        let v: serde_json::Value = if let Ok(v) = serde_json::from_str(&data_str) { v } else {
+        let v: serde_json::Value = if let Ok(v) = serde_json::from_str(&data_str) {
+            v
+        } else {
             summary.turns_skipped += 1;
             continue;
         };
@@ -192,8 +194,12 @@ fn extract_modern_tokens(v: &serde_json::Value) -> TurnTokens {
     let input = tokens.get("input").and_then(serde_json::Value::as_i64);
     let output = tokens.get("output").and_then(serde_json::Value::as_i64);
     let cache = tokens.get("cache");
-    let cache_read = cache.and_then(|c| c.get("read")).and_then(serde_json::Value::as_i64);
-    let cache_creation = cache.and_then(|c| c.get("write")).and_then(serde_json::Value::as_i64);
+    let cache_read = cache
+        .and_then(|c| c.get("read"))
+        .and_then(serde_json::Value::as_i64);
+    let cache_creation = cache
+        .and_then(|c| c.get("write"))
+        .and_then(serde_json::Value::as_i64);
     TurnTokens {
         input: input.filter(|n| *n > 0),
         cache_read: cache_read.filter(|n| *n > 0),
@@ -292,7 +298,9 @@ fn ingest_legacy(
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
     );
 
-    let (prompt, completion, cost, created_at, updated_at) = if let Ok(t) = row { t } else {
+    let (prompt, completion, cost, created_at, updated_at) = if let Ok(t) = row {
+        t
+    } else {
         summary
             .warnings
             .push(format!("opencode: legacy session {session_id} not found"));

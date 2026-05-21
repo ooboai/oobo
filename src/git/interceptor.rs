@@ -372,44 +372,48 @@ mod tests {
     fn test_resolved_keeps_assisted_with_sessions() {
         let mut evidence = empty_evidence(AuthorType::Assisted);
         let now = chrono::Utc::now().timestamp();
-        evidence.active_sessions.push(crate::hooks::state::ActiveSession {
-            session_id: "s1".into(),
-            agent: "claude".into(),
-            model: None,
-            worktree: None,
-            transcript_path: None,
-            pre_agent_snapshots: None,
-            file_snapshots: None,
-            edited_files: None,
-            read_files: None,
-            file_events: None,
-            tool_usage: None,
-            tool_failures: None,
-            bash_commands: None,
-            subagent_runs: None,
-            thinking_duration_ms: None,
-            compact_count: None,
-            turn_count: None,
-            context_tokens: None,
-            context_window_size: None,
-            current_turn_index: 0,
-            current_turn_started_at: None,
-            current_turn_hook_events: None,
-            current_turn_tool_calls: None,
-            last_turn_snapshot_id: None,
-            pre_edit_pending: None,
-            file_edit_chain: None,
-            started_at: now,
-            updated_at: now,
-            ended_at: None,
-        });
+        evidence
+            .active_sessions
+            .push(crate::hooks::state::ActiveSession {
+                session_id: "s1".into(),
+                agent: "claude".into(),
+                model: None,
+                worktree: None,
+                transcript_path: None,
+                pre_agent_snapshots: None,
+                file_snapshots: None,
+                edited_files: None,
+                read_files: None,
+                file_events: None,
+                tool_usage: None,
+                tool_failures: None,
+                bash_commands: None,
+                subagent_runs: None,
+                thinking_duration_ms: None,
+                compact_count: None,
+                turn_count: None,
+                context_tokens: None,
+                context_window_size: None,
+                current_turn_index: 0,
+                current_turn_started_at: None,
+                current_turn_hook_events: None,
+                current_turn_tool_calls: None,
+                last_turn_snapshot_id: None,
+                pre_edit_pending: None,
+                file_edit_chain: None,
+                started_at: now,
+                updated_at: now,
+                ended_at: None,
+            });
         assert_eq!(evidence.resolved_author_type(), AuthorType::Assisted);
     }
 
     #[test]
     fn test_resolved_upgrades_human_with_ai_evidence() {
         let mut evidence = empty_evidence(AuthorType::Human);
-        evidence.ai_files_touched.push(("src/main.rs".into(), "claude".into()));
+        evidence
+            .ai_files_touched
+            .push(("src/main.rs".into(), "claude".into()));
         assert_eq!(
             evidence.resolved_author_type(),
             AuthorType::Assisted,

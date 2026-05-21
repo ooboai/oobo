@@ -225,10 +225,9 @@ impl SessionBatch {
         model: Option<&str>,
     ) -> Result<Self> {
         ensure_session(project_root, session_id, agent, model)?;
-        let state = store::read(project_root, session_id)
-            .ok_or_else(|| crate::error::OoboError::Other(
-                format!("session '{session_id}' vanished after ensure"),
-            ))?;
+        let state = store::read(project_root, session_id).ok_or_else(|| {
+            crate::error::OoboError::Other(format!("session '{session_id}' vanished after ensure"))
+        })?;
         Ok(Self {
             project_root: project_root.to_string(),
             session_id: session_id.to_string(),
@@ -576,7 +575,8 @@ pub fn active_sessions_for_worktree(project_root: &str) -> Vec<ActiveSession> {
             .into_iter()
             .filter(|s| match &s.worktree {
                 Some(session_wt) => {
-                    let canonical = std::fs::canonicalize(session_wt).map_or_else(|_| session_wt.clone(), |p| p.to_string_lossy().to_string());
+                    let canonical = std::fs::canonicalize(session_wt)
+                        .map_or_else(|_| session_wt.clone(), |p| p.to_string_lossy().to_string());
                     canonical == wt
                 }
                 None => true,
@@ -614,7 +614,9 @@ mod tests {
     }
 
     fn setup() -> TestEnv {
-        let guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let prev = std::env::var_os("OOBO_HOME");
         let oobo_home = tempfile::tempdir().unwrap();
         unsafe {
@@ -668,7 +670,10 @@ mod tests {
         remove_session(root_str, "sess-1");
         let sessions = active_sessions(root_str);
         assert_eq!(sessions.len(), 1, "ended session should still be readable");
-        assert!(sessions[0].ended_at.is_some(), "session should be marked as ended");
+        assert!(
+            sessions[0].ended_at.is_some(),
+            "session should be marked as ended"
+        );
     }
 
     #[test]
@@ -1070,7 +1075,12 @@ mod tests {
 
         let state = read_session(root_str, "pair-sess").unwrap();
         assert_eq!(
-            state.pre_edit_pending.as_ref().unwrap().get("edit.txt").unwrap(),
+            state
+                .pre_edit_pending
+                .as_ref()
+                .unwrap()
+                .get("edit.txt")
+                .unwrap(),
             &pre_hash
         );
 
@@ -1125,7 +1135,8 @@ mod tests {
 
         for i in 0..2 {
             assert_eq!(
-                pairs[i].post_blob, pairs[i + 1].pre_blob,
+                pairs[i].post_blob,
+                pairs[i + 1].pre_blob,
                 "post_blob of pair {i} should equal pre_blob of pair {}",
                 i + 1
             );
@@ -1246,7 +1257,10 @@ mod tests {
             snapshot_count,
             "file_snapshots must be preserved after session end"
         );
-        assert!(after.file_edit_chain.is_some(), "edit chain must survive session end");
+        assert!(
+            after.file_edit_chain.is_some(),
+            "edit chain must survive session end"
+        );
     }
 
     #[test]
@@ -1296,11 +1310,17 @@ mod tests {
 
         write_session(root_str, "dupe-end", "claude", None).unwrap();
         remove_session(root_str, "dupe-end");
-        let first_ended = read_session(root_str, "dupe-end").unwrap().ended_at.unwrap();
+        let first_ended = read_session(root_str, "dupe-end")
+            .unwrap()
+            .ended_at
+            .unwrap();
 
         std::thread::sleep(std::time::Duration::from_millis(50));
         remove_session(root_str, "dupe-end");
-        let second_ended = read_session(root_str, "dupe-end").unwrap().ended_at.unwrap();
+        let second_ended = read_session(root_str, "dupe-end")
+            .unwrap()
+            .ended_at
+            .unwrap();
 
         // Both calls should set ended_at; second call just updates the timestamp.
         assert!(second_ended >= first_ended);

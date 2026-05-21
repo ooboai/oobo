@@ -273,8 +273,10 @@ pub(super) fn filter_relevant_sessions(
         return Vec::new();
     }
 
-    let committed_set: std::collections::HashSet<&str> =
-        committed_files.iter().map(std::string::String::as_str).collect();
+    let committed_set: std::collections::HashSet<&str> = committed_files
+        .iter()
+        .map(std::string::String::as_str)
+        .collect();
 
     let mut matched_by_files: Vec<crate::hooks::state::ActiveSession> = Vec::new();
     let mut unresolved: Vec<&crate::hooks::state::ActiveSession> = Vec::new();
@@ -495,8 +497,7 @@ fn count_tokens_from_messages(
         return None;
     }
 
-    let family = model
-        .map_or(tokenizer::ModelFamily::Cl100k, tokenizer::detect_family);
+    let family = model.map_or(tokenizer::ModelFamily::Cl100k, tokenizer::detect_family);
     let inp: u64 = messages
         .iter()
         .filter(|m| tokenizer::is_input_role(&m.role))

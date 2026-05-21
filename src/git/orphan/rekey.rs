@@ -79,7 +79,6 @@ pub fn rekey_anchors(
                     entries.push((new_path, content));
                 }
             }
-
         }
     }
 

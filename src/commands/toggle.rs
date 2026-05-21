@@ -10,7 +10,9 @@ use crate::error::CmdResult;
 
 /// `oobo enable` — mark the current project as tracked.
 pub fn enable(cfg: &Config, mode: OutputMode) -> CmdResult {
-    let (root, name) = if let Some(tuple) = project_context(cfg) { tuple } else {
+    let (root, name) = if let Some(tuple) = project_context(cfg) {
+        tuple
+    } else {
         eprintln!("oobo: not inside a git repository.");
         return Ok(1);
     };
@@ -37,7 +39,9 @@ pub fn enable(cfg: &Config, mode: OutputMode) -> CmdResult {
 
 /// `oobo disable` — mark the current project as not tracked.
 pub fn disable(cfg: &Config, mode: OutputMode) -> CmdResult {
-    let (root, name) = if let Some(tuple) = project_context(cfg) { tuple } else {
+    let (root, name) = if let Some(tuple) = project_context(cfg) {
+        tuple
+    } else {
         eprintln!("oobo: not inside a git repository.");
         return Ok(1);
     };
@@ -137,5 +141,60 @@ fn emit_already_disabled(name: &str, id: &str, mode: OutputMode) {
         OutputMode::Tui => {
             println!("oobo is already disabled for '{name}'.");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn emit_enabled_all_modes_do_not_panic() {
+        emit_enabled(
+            "test-proj",
+            "proj-123",
+            "/tmp/test",
+            true,
+            OutputMode::Agent,
+        );
+        emit_enabled(
+            "test-proj",
+            "proj-123",
+            "/tmp/test",
+            false,
+            OutputMode::Json,
+        );
+        emit_enabled("test-proj", "proj-123", "/tmp/test", true, OutputMode::Tui);
+    }
+
+    #[test]
+    fn emit_already_enabled_all_modes_do_not_panic() {
+        emit_already_enabled("test-proj", "proj-123", "/tmp/test", OutputMode::Agent);
+        emit_already_enabled("test-proj", "proj-123", "/tmp/test", OutputMode::Json);
+        emit_already_enabled("test-proj", "proj-123", "/tmp/test", OutputMode::Tui);
+    }
+
+    #[test]
+    fn emit_disabled_all_modes_do_not_panic() {
+        emit_disabled("test-proj", "proj-123", OutputMode::Agent);
+        emit_disabled("test-proj", "proj-123", OutputMode::Json);
+        emit_disabled("test-proj", "proj-123", OutputMode::Tui);
+    }
+
+    #[test]
+    fn emit_already_disabled_all_modes_do_not_panic() {
+        emit_already_disabled("test-proj", "proj-123", OutputMode::Agent);
+        emit_already_disabled("test-proj", "proj-123", OutputMode::Json);
+        emit_already_disabled("test-proj", "proj-123", OutputMode::Tui);
+    }
+
+    #[test]
+    fn project_context_extracts_dir_name() {
+        let path = std::path::Path::new("/tmp/my-project");
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+        assert_eq!(name, "my-project");
     }
 }

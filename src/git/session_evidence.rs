@@ -15,7 +15,10 @@ pub(in crate::git) fn is_agent_tool_match(session_agent: &str, tool_name: &str) 
 pub(in crate::git) fn normalize_path(file_path: &str, project_root: &str) -> String {
     let path = std::path::Path::new(file_path);
     if path.is_absolute() {
-        path.strip_prefix(project_root).map_or_else(|_| file_path.to_string(), |p| p.to_string_lossy().to_string())
+        path.strip_prefix(project_root).map_or_else(
+            |_| file_path.to_string(),
+            |p| p.to_string_lossy().to_string(),
+        )
     } else {
         file_path.to_string()
     }
@@ -119,12 +122,21 @@ mod tests {
             edited_files: if edited.is_empty() {
                 None
             } else {
-                Some(edited.into_iter().map(std::string::ToString::to_string).collect())
+                Some(
+                    edited
+                        .into_iter()
+                        .map(std::string::ToString::to_string)
+                        .collect(),
+                )
             },
             read_files: if read.is_empty() {
                 None
             } else {
-                Some(read.into_iter().map(std::string::ToString::to_string).collect())
+                Some(
+                    read.into_iter()
+                        .map(std::string::ToString::to_string)
+                        .collect(),
+                )
             },
             file_events: None,
             tool_usage: None,

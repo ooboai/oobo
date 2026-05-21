@@ -1,5 +1,5 @@
-pub mod anchor_cache;
 mod anchor_builder;
+pub mod anchor_cache;
 mod anchor_persist;
 pub mod commands;
 mod context;

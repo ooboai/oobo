@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::tools::cursor::transcript::Message;
 
-use super::{DbSchema, detect_schema, find_db_path, stats_from_legacy_db, stats_from_modern_db};
+use super::{detect_schema, find_db_path, stats_from_legacy_db, stats_from_modern_db, DbSchema};
 
 pub fn find_transcript_path(_project_path: &str, session_id: &str) -> Option<PathBuf> {
     let db_path = find_db_path()?;
@@ -92,9 +92,9 @@ fn parse_modern_messages(conn: &rusqlite::Connection, session_id: &str) -> Vec<M
         let data: String = row.get(1)?;
         Ok((mid, data))
     }) {
-        let mut msg_stmt = match conn.prepare(
-            "SELECT id, data FROM message WHERE session_id = ?1 ORDER BY time_created ASC",
-        ) {
+        let mut msg_stmt = match conn
+            .prepare("SELECT id, data FROM message WHERE session_id = ?1 ORDER BY time_created ASC")
+        {
             Ok(s) => s,
             Err(_) => return messages,
         };
@@ -240,11 +240,7 @@ pub fn read_transcript(path: &Path, max_messages: u32) -> String {
 }
 
 #[cfg(test)]
-pub fn read_transcript_for_session(
-    db_path: &Path,
-    session_id: &str,
-    max_messages: u32,
-) -> String {
+pub fn read_transcript_for_session(db_path: &Path, session_id: &str, max_messages: u32) -> String {
     let messages = parse_messages_for_session(db_path, session_id);
     crate::utils::format_transcript(&messages, max_messages, "Assistant")
 }

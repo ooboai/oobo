@@ -8,7 +8,7 @@ Oobo is open-source software published by [NoCode Inc](https://nocode.inc).
 | Security policy | [SECURITY.md](https://github.com/ooboai/oobo/blob/main/SECURITY.md) — responsible disclosure, safe harbor |
 | Privacy policy | [oobo.ai/privacy](https://oobo.ai/privacy) |
 | Read-only | Never writes to AI tool directories — only reads session metadata (timestamps, model names, token counts) |
-| Local-first | All data stays in `~/.oobo/`. Nothing leaves the machine unless the user explicitly configures sync |
+| Local-first | All data stays in `~/.oobo/`. Nothing leaves the machine unless the user configures a remote API key |
 | No telemetry | Does not phone home or collect usage data |
 | No credentials | Never accesses API keys, browsing history, or file contents outside of AI tool storage |
 | Secret redaction | Sessions scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before any sharing |
@@ -29,7 +29,7 @@ Agents should operate with **transparency on** — this is the recommended defau
 
 | Setting | Value | Why |
 |---------|-------|-----|
-| `transparency.mode` | `on` | Metadata + redacted transcripts sync |
-| `server.api_key` | empty | For remote search only; no cloud upload pipeline exists |
+| `transparency` | `on` | Metadata + redacted transcripts sync |
+| `key` | *(optional)* | For remote search and delta only; no cloud upload pipeline exists |
 | `--agent` flag | Always use | Compact output, low token cost |
 | `--json` flag | When needed | Full structured data for parsing |

@@ -208,7 +208,9 @@ fn extract_assistant_metadata(
     let tokens = match msg.get("usage") {
         Some(u) => TurnTokens {
             input: u.get("input_tokens").and_then(serde_json::Value::as_i64),
-            cache_read: u.get("cache_read_input_tokens").and_then(serde_json::Value::as_i64),
+            cache_read: u
+                .get("cache_read_input_tokens")
+                .and_then(serde_json::Value::as_i64),
             cache_creation: u
                 .get("cache_creation_input_tokens")
                 .and_then(serde_json::Value::as_i64),

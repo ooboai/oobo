@@ -1,10 +1,11 @@
 # Remote API Surface
 
-Remotes implement endpoints under `/anchors`. The CLI only calls search (authenticated) and health (unauthenticated). There is no cloud upload/ingest pipeline; team sync is Git-first via the orphan branch.
+Remotes implement endpoints under `/anchors`. The CLI calls search and delta (both authenticated). There is no cloud upload/ingest pipeline; team sync is Git-first via the orphan branch.
 
 | Endpoint | Method | Auth | Required | Purpose |
 |----------|--------|------|----------|---------|
 | `/anchors/search` | POST | Bearer | **Yes** | Search anchors/sessions |
+| `/anchors/delta` | POST | Bearer | **Yes** | Compare two anchors |
 | `/anchors/health` | GET | None | No | Connectivity check |
 
 ## Agent Lifecycle Hooks

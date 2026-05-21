@@ -200,7 +200,10 @@ fn parse_claude_jsonl(
         // Claude subagent JSONL entries carry isSidechain+sessionId (parent's
         // UUID) + agentId (subagent hash) on every user/assistant entry.
         if !checked_sidechain {
-            if let Some(is_side) = entry.get("isSidechain").and_then(serde_json::Value::as_bool) {
+            if let Some(is_side) = entry
+                .get("isSidechain")
+                .and_then(serde_json::Value::as_bool)
+            {
                 checked_sidechain = true;
                 if is_side {
                     parent_session_id = entry

@@ -525,7 +525,9 @@ diff --git a/blob1 b/blob2
 
     #[test]
     fn test_compute_chain_line_attrs_empty_chain() {
-        let _guard = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = init_test_repo();
         let (cfg, prev_cwd) = make_test_cfg(dir.path());
 
@@ -541,7 +543,9 @@ diff --git a/blob1 b/blob2
         use crate::core::anchor::FileAttribution;
         use crate::hooks::state::FileEditPair;
 
-        let _guard = CWD_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = init_test_repo();
         let (cfg, prev_cwd) = make_test_cfg(dir.path());
 
@@ -555,13 +559,7 @@ diff --git a/blob1 b/blob2
             timestamp: 1000,
         }];
 
-        let result = compute_chain_line_attrs(
-            &cfg,
-            &chain,
-            "",
-            &post_blob,
-            Some("cursor"),
-        );
+        let result = compute_chain_line_attrs(&cfg, &chain, "", &post_blob, Some("cursor"));
         assert!(!result.is_empty(), "new file chain should attribute lines");
 
         let ai_attr = result

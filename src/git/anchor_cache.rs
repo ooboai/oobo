@@ -23,9 +23,7 @@ fn cache_path(project_root: &str) -> PathBuf {
 }
 
 /// Load anchors from cache if valid, otherwise rebuild from orphan branch.
-pub fn load_anchors_cached(
-    project_root: &str,
-) -> (Vec<Anchor>, HashMap<String, Vec<SessionLink>>) {
+pub fn load_anchors_cached(project_root: &str) -> (Vec<Anchor>, HashMap<String, Vec<SessionLink>>) {
     let tip = super::orphan::branch_tip(project_root);
 
     if let Some(ref tip_hash) = tip {

@@ -194,7 +194,7 @@ oobo back                               # return to where you were
 
 ```bash
 oobo blame src/main.rs                       # git blame with an extra AI column
-oobo blame src/main.rs @abc123               # at a specific commit
+oobo blame src/main.rs abc123                # at a specific commit
 oobo blame --no-ai src/main.rs               # byte-identical to `git blame`
 oobo blame src/main.rs --json                # per-line AI attribution as JSON
 ```
@@ -209,13 +209,31 @@ oobo search "auth" --since 7d --tool claude --project myapp
 oobo search "auth" --json                    # structured results
 ```
 
+### Delta — compare two anchors
+
+```bash
+oobo delta                                   # compare HEAD to its previous anchor
+oobo delta abc123 def789                     # explicit pair
+oobo delta --full --json                     # include sessions, decisions, techniques
+```
+
+Requires an API key (`oobo settings set key <...>`).
+
+### Help — built-in documentation
+
+```bash
+oobo help                                    # list all topics
+oobo help blame                              # reading the AI attribution overlay
+oobo help hooks                              # git and agent hooks explained
+```
+
 ### Settings — declarative per-scope config
 
 ```bash
 oobo settings                                # list default-scope keys
 oobo settings key                            # get the API key (default scope)
 oobo settings set key sk_...                 # set API key (remote search)
-oobo settings set remote https://oobo.mycompany.com
+oobo settings set api_url https://oobo.mycompany.com
 oobo settings project set remote oobo        # push anchor branch to git remote "oobo"
 oobo settings unset transparency             # remove a key
 ```
@@ -249,13 +267,13 @@ Most config is now declarative via `oobo settings`:
 
 ```bash
 oobo settings set key sk_...                         # API key for remote search
-oobo settings set remote https://oobo.mycompany.com  # self-hosted backend
+oobo settings set api_url https://oobo.mycompany.com  # self-hosted backend
 oobo settings set transparency on                    # store redacted transcripts
 oobo settings project set transparency off           # per-project override
 oobo settings set setup.scan_roots "~/src,~/work"
 ```
 
-**Note:** The `remote` key has different meanings by scope. At **default** scope it sets the API server URL. At **project** scope it sets the Git remote where anchors are pushed (defaults to `origin`). To push anchors to a separate repo:
+**Note:** `api_url` sets the API server for remote search and delta. `remote` is project-scope only and controls which Git remote the anchor branch is pushed to (defaults to `origin`). To push anchors to a separate repo:
 
 ```bash
 oobo settings project set remote git@github.com:org/repo-anchors.git
@@ -270,8 +288,8 @@ For full fidelity or automation, `~/.oobo/config` still works:
 url = "https://api.oobo.ai"
 api_key = "sk_..."
 
-[transparency]
-mode = "off"           # off | on
+[privacy]
+transparency = "off"   # off | on
 
 [anchors]
 remote = "origin"      # or a full URL for a separate anchor repo
@@ -300,7 +318,7 @@ That stores the key for authenticated API use (e.g. `oobo search --remote`). Tea
 To run your own server:
 
 ```bash
-oobo settings set remote https://oobo.mycompany.com
+oobo settings set api_url https://oobo.mycompany.com
 ```
 
 Your backend implements endpoints under `/anchors`:
@@ -308,6 +326,7 @@ Your backend implements endpoints under `/anchors`:
 | Endpoint           | Method | Auth            | Required | Purpose                          |
 | ------------------ | ------ | --------------- | -------- | -------------------------------- |
 | `/anchors/search`  | POST   | Bearer token    | **Yes**  | Search anchors/sessions          |
+| `/anchors/delta`   | POST   | Bearer token    | **Yes**  | Compare two anchors              |
 | `/anchors/health`  | GET    | None            | No       | Health check (connectivity test) |
 
 ---

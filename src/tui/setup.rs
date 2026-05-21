@@ -152,7 +152,6 @@ impl Wizard {
     fn enabled_project_count(&self) -> usize {
         self.projects.iter().filter(|p| p.enabled).count()
     }
-
 }
 
 /// Build a default outcome without showing the TUI wizard (for non-interactive environments).
@@ -356,10 +355,7 @@ fn render_projects(f: &mut Frame, area: ratatui::layout::Rect, wiz: &Wizard) {
     let total = wiz.projects.len();
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(""),
-        Line::from(Span::styled(
-            "  Select projects to track.",
-            bold,
-        )),
+        Line::from(Span::styled("  Select projects to track.", bold)),
         Line::from(Span::styled(
             "  Projects with AI sessions are pre-enabled. Toggle with space, a for all.",
             dim,
@@ -441,10 +437,17 @@ fn project_line(idx: usize, p: &ProjectChoice, focus: usize) -> Line<'static> {
         Span::styled(format!(" {:<18}", truncate_str(&p.name, 18)), label_style),
         Span::styled(
             format!("  {:>4} sessions", p.sessions),
-            Style::default().fg(if p.sessions > 0 { Color::Gray } else { Color::DarkGray }),
+            Style::default().fg(if p.sessions > 0 {
+                Color::Gray
+            } else {
+                Color::DarkGray
+            }),
         ),
         Span::styled(tools_str, Style::default().fg(Color::DarkGray)),
-        Span::styled(format!("  {path_display}"), Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("  {path_display}"),
+            Style::default().fg(Color::DarkGray),
+        ),
     ])
 }
 
@@ -488,7 +491,6 @@ fn tool_abbrev(key: &str) -> &str {
         other => other,
     }
 }
-
 
 fn render_save(f: &mut Frame, area: ratatui::layout::Rect, wiz: &Wizard) {
     let dim = Style::default().fg(Color::DarkGray);

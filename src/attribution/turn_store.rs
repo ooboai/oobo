@@ -49,7 +49,11 @@ pub fn read_all_turns(project_root: &str) -> Vec<Turn> {
     let mut all = Vec::new();
     if let Ok(sources) = std::fs::read_dir(&dir) {
         for source_entry in sources.flatten() {
-            if !source_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            if !source_entry
+                .file_type()
+                .map(|t| t.is_dir())
+                .unwrap_or(false)
+            {
                 continue;
             }
             if let Ok(sessions) = std::fs::read_dir(source_entry.path()) {

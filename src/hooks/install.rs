@@ -384,7 +384,7 @@ fn merge_claude_hooks_file(path: &Path, oobo_config: &serde_json::Value) -> Opti
             // Remove stale oobo matcher groups (any group whose hooks contain "oobo hooks agent")
             existing_arr.retain(|group| {
                 let hooks = group.get("hooks").and_then(|h| h.as_array());
-                    !hooks.is_some_and(|arr| {
+                !hooks.is_some_and(|arr| {
                     arr.iter().any(|h| {
                         h.get("command")
                             .and_then(|c| c.as_str())
@@ -463,22 +463,19 @@ pub fn install_git_hook(project_root: &str, hook_name: &str, script: &str) -> Re
 
     if hook_path.exists() {
         let existing = fs::read_to_string(&hook_path).unwrap_or_default();
-        let is_oobo_hook =
-            existing.contains("oobo hooks") || existing.contains("anchor hooks");
+        let is_oobo_hook = existing.contains("oobo hooks") || existing.contains("anchor hooks");
         if is_oobo_hook {
             // Overwrite in-place; no backup needed since this is our own hook.
             // Also clean up any stale .pre-anchor backup that may reference itself.
             let stale_backup = hooks_dir.join(format!("{hook_name}.pre-anchor"));
             if stale_backup.exists() {
                 let backup_content = fs::read_to_string(&stale_backup).unwrap_or_default();
-                if backup_content.contains("oobo hooks")
-                    || backup_content.contains("anchor hooks")
+                if backup_content.contains("oobo hooks") || backup_content.contains("anchor hooks")
                 {
                     let _ = fs::remove_file(&stale_backup);
                 }
             }
-            fs::write(&hook_path, script)
-                .map_err(|e| format!("cannot write hook: {e}"))?;
+            fs::write(&hook_path, script).map_err(|e| format!("cannot write hook: {e}"))?;
             return Ok(());
         }
 

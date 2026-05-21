@@ -195,4 +195,3 @@ Files:
   ~/.oobo/config.toml    Global defaults
   .oobo/config           Per-project overrides (git-ignored cache dir)
 ";
-

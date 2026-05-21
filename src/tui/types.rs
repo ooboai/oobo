@@ -143,7 +143,6 @@ pub(super) struct TranscriptState {
     pub(super) tool_call_cursor: usize,
 }
 
-
 /// Generic modal picker used for session and file selection.
 pub(super) struct PickerState {
     pub(super) title: String,

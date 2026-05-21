@@ -182,11 +182,20 @@ pub fn preload_bubble_data_for(
         let mut bubble_count = 0u32;
 
         for row in rows {
-            let (btype, text_opt, inp, outp, created, thinking_opt, tool_name_opt, tool_result_opt, model_id_opt) =
-                match row {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
+            let (
+                btype,
+                text_opt,
+                inp,
+                outp,
+                created,
+                thinking_opt,
+                tool_name_opt,
+                tool_result_opt,
+                model_id_opt,
+            ) = match row {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
 
             let role = match btype {
                 1 => "user",
@@ -346,7 +355,9 @@ fn parse_composer_session(data: &serde_json::Value) -> Option<ComposerSession> {
         .to_string();
 
     let created_at = data.get("createdAt").and_then(serde_json::Value::as_i64);
-    let last_updated_at = data.get("lastUpdatedAt").and_then(serde_json::Value::as_i64);
+    let last_updated_at = data
+        .get("lastUpdatedAt")
+        .and_then(serde_json::Value::as_i64);
 
     let model = data
         .get("modelConfig")
@@ -363,7 +374,10 @@ fn parse_composer_session(data: &serde_json::Value) -> Option<ComposerSession> {
 
     if let Some(conv) = conversation {
         for msg in conv {
-            let msg_type = msg.get("type").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            let msg_type = msg
+                .get("type")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
             let text = msg
                 .get("text")
                 .and_then(|v| v.as_str())
@@ -724,7 +738,10 @@ fn bubble_to_transcript_entry(data: &serde_json::Value) -> Option<serde_json::Va
             if !think_text.is_empty() {
                 let mut think_obj = serde_json::Map::new();
                 think_obj.insert("text".into(), think_text.into());
-                if let Some(ms) = data.get("thinkingDurationMs").and_then(serde_json::Value::as_u64) {
+                if let Some(ms) = data
+                    .get("thinkingDurationMs")
+                    .and_then(serde_json::Value::as_u64)
+                {
                     think_obj.insert("duration_ms".into(), ms.into());
                 }
                 entry.insert("thinking".into(), think_obj.into());
@@ -753,8 +770,14 @@ fn bubble_to_transcript_entry(data: &serde_json::Value) -> Option<serde_json::Va
     }
 
     if let Some(tc) = data.get("tokenCount").and_then(|v| v.as_object()) {
-        let inp = tc.get("inputTokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
-        let outp = tc.get("outputTokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        let inp = tc
+            .get("inputTokens")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let outp = tc
+            .get("outputTokens")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
         if inp > 0 || outp > 0 {
             entry.insert(
                 "tokens".into(),

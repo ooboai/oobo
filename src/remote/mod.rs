@@ -133,10 +133,8 @@ pub async fn post_delta(
     }
 
     if status.as_u16() == 404 {
-        let body: payload::DeltaErrorResponse = resp
-            .json()
-            .await
-            .unwrap_or(payload::DeltaErrorResponse {
+        let body: payload::DeltaErrorResponse =
+            resp.json().await.unwrap_or(payload::DeltaErrorResponse {
                 error: Some("anchor_not_found".into()),
                 message: Some("anchor not found".into()),
             });

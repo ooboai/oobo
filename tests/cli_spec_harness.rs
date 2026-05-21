@@ -37,8 +37,8 @@ const SPECS: &[(&str, &str)] = &[
 ];
 
 const RESERVED_COMMANDS: &[&str] = &[
-    "anchor", "anchors", "search", "enable", "disable", "setup", "settings",
-    "update", "hooks", "goto", "back",
+    "anchor", "anchors", "search", "enable", "disable", "setup", "settings", "update", "hooks",
+    "goto", "back",
 ];
 
 const PUBLIC_HELP_COMMANDS: &[&str] = &[
@@ -114,10 +114,7 @@ fn top_level_help_keeps_public_command_footprint_small() {
     assert!(output.status.success(), "oobo --help should succeed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let public_help = stdout
-        .split("OPTIONS:")
-        .next()
-        .unwrap_or(stdout.as_ref());
+    let public_help = stdout.split("OPTIONS:").next().unwrap_or(stdout.as_ref());
     let mut commands = std::collections::BTreeSet::new();
 
     for line in public_help.lines() {
@@ -467,11 +464,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: false,
-            stdout_contains: &[
-                "Usage:",
-                "Commands",
-                "Options:",
-            ],
+            stdout_contains: &["Usage:", "Commands", "Options:"],
             stderr_contains: &[],
             compare_to_git: None,
         },
@@ -807,5 +800,3 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> std::process::Output {
         .output()
         .unwrap_or_else(|e| panic!("git {args:?} failed to spawn: {e}"))
 }
-
-

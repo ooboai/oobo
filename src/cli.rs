@@ -294,24 +294,20 @@ pub enum Command {
 #[derive(Subcommand, Debug)]
 pub enum AnchorAction {
     /// Drill into one commit's anchor by SHA (prefix OK if unambiguous)
-    #[command(
-        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+    #[command(after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo anchor show a1b2c3d               Drill into a commit\n  \
                        oobo anchor show a1b2c3d --agent       Compact output\n  \
-                       oobo anchor show a1b2c3d --json        Full JSON output"
-    )]
+                       oobo anchor show a1b2c3d --json        Full JSON output")]
     Show {
         /// Commit SHA (full or unambiguous prefix).
         sha: String,
     },
 
     /// Show per-line AI/human attribution (alias for `oobo blame`)
-    #[command(
-        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+    #[command(after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo blame src/main.rs          Show AI attribution at HEAD\n  \
                        oobo blame src/main.rs abc123   At a specific commit\n  \
-                       oobo blame src/main.rs --json   JSON output"
-    )]
+                       oobo blame src/main.rs --json   JSON output")]
     Blame {
         /// Pure `git blame` output (no AI column).
         #[arg(long = "no-ai")]
@@ -320,7 +316,6 @@ pub enum AnchorAction {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-
 }
 
 #[derive(Subcommand, Debug)]
@@ -361,7 +356,10 @@ pub enum HookAction {
 
 /// Re-parse the CLI with a synthetic argv and dispatch. Used by the legacy
 /// hint system to rewrite e.g. `oobo scan` → `oobo setup --reindex`.
-fn dispatch_with_argv(cfg: &Config, argv: Vec<String>) -> std::pin::Pin<Box<dyn std::future::Future<Output = CmdResult> + '_>> {
+fn dispatch_with_argv(
+    cfg: &Config,
+    argv: Vec<String>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = CmdResult> + '_>> {
     Box::pin(async move {
         let cli = Cli::try_parse_from(argv).map_err(|e| format!("dispatch rewrite: {e}"))?;
         let mode = resolve_output_mode(cli.json, cli.agent, cli.interactive);
@@ -430,7 +428,9 @@ pub async fn route(cfg: &Config) -> CmdResult {
     // Legacy 0.1.x command hints.
     if let Some(verb) = raw_args.get(1) {
         if let Some(hint) = crate::commands::legacy::lookup(verb) {
-            if let Some(code) = crate::commands::legacy::handle(hint) { return Ok(code) }
+            if let Some(code) = crate::commands::legacy::handle(hint) {
+                return Ok(code);
+            }
             if let Some(mapped) = hint.mapped {
                 let mut new_argv: Vec<String> = vec![raw_args[0].clone()];
                 for m in mapped {
@@ -492,22 +492,27 @@ fn payload_project_root(payload: &str) -> Option<String> {
 /// the same code path after swapping argv.
 async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult {
     let result = match cli.command {
-        Some(Command::Anchors {}) => {
-            run_anchors_feed(cfg, &cli, mode)
-        }
-        Some(Command::Anchor { action }) => {
-            match action {
-                AnchorAction::Show { sha } => {
-                    let code = crate::commands::anchors::run_show(cfg, &sha, mode)?;
-                    Ok(code)
-                }
-                AnchorAction::Blame { no_ai, args } => {
-                    dispatch_blame(cfg, no_ai, args, mode)
-                }
+        Some(Command::Anchors {}) => run_anchors_feed(cfg, &cli, mode),
+        Some(Command::Anchor { action }) => match action {
+            AnchorAction::Show { sha } => {
+                let code = crate::commands::anchors::run_show(cfg, &sha, mode)?;
+                Ok(code)
             }
-        }
-        Some(Command::Delta { anchor_sha, previous_sha, full }) => {
-            let code = crate::commands::delta::run(cfg, anchor_sha.as_deref(), previous_sha.as_deref(), full, mode).await?;
+            AnchorAction::Blame { no_ai, args } => dispatch_blame(cfg, no_ai, args, mode),
+        },
+        Some(Command::Delta {
+            anchor_sha,
+            previous_sha,
+            full,
+        }) => {
+            let code = crate::commands::delta::run(
+                cfg,
+                anchor_sha.as_deref(),
+                previous_sha.as_deref(),
+                full,
+                mode,
+            )
+            .await?;
             Ok(code)
         }
         Some(Command::Goto { target, no_stash }) => {
@@ -518,9 +523,7 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
             let code = crate::commands::goto::run_back(cfg, mode)?;
             Ok(code)
         }
-        Some(Command::Blame { no_ai, args }) => {
-            dispatch_blame(cfg, no_ai, args, mode)
-        }
+        Some(Command::Blame { no_ai, args }) => dispatch_blame(cfg, no_ai, args, mode),
         Some(Command::Search {
             query,
             global,
@@ -618,10 +621,11 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                         payload = "{}".to_string();
                     }
 
-                    let project_root = payload_project_root(&payload)
-                        .or_else(|| git::proxy::project_root(cfg));
+                    let project_root =
+                        payload_project_root(&payload).or_else(|| git::proxy::project_root(cfg));
                     if project_root
-                        .as_deref().is_none_or(|x| !crate::project_config::is_enabled(x))
+                        .as_deref()
+                        .is_none_or(|x| !crate::project_config::is_enabled(x))
                     {
                         return Ok(0);
                     }
@@ -636,8 +640,7 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                             return Ok(0);
                         }
                         if std::env::var("OOBO_INTERCEPTED").is_err() {
-                            if let Err(e) = crate::git::interceptor::on_write_op(cfg, &["commit"])
-                            {
+                            if let Err(e) = crate::git::interceptor::on_write_op(cfg, &["commit"]) {
                                 eprintln!("oobo: warning: {e}");
                             }
                         }

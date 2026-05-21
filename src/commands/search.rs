@@ -117,7 +117,14 @@ pub async fn run(cfg: &Config, query: &str, opts: &Options, mode: OutputMode) ->
 
     sort_and_limit(&mut hits, opts.limit);
 
-    emit(&hits, query, &sources, resolved.has_api_key(), answer.as_deref(), mode);
+    emit(
+        &hits,
+        query,
+        &sources,
+        resolved.has_api_key(),
+        answer.as_deref(),
+        mode,
+    );
     Ok(0)
 }
 
@@ -169,15 +176,25 @@ fn search_local(project_root: Option<&str>, query: &str, opts: &Options) -> Vec<
             Some(a) => a,
             None => continue,
         };
-        let haystack = format!("{} {}", anchor.intent.as_deref().unwrap_or(""), anchor.message);
+        let haystack = format!(
+            "{} {}",
+            anchor.intent.as_deref().unwrap_or(""),
+            anchor.message
+        );
         let score = term_score(&haystack, &q_terms);
-        if score <= 0.0 { continue; }
+        if score <= 0.0 {
+            continue;
+        }
         if let Some(ts) = since_ts {
-            if anchor.committed_at < ts { continue; }
+            if anchor.committed_at < ts {
+                continue;
+            }
         }
         let project_name = std::path::Path::new(root)
-            .file_name().and_then(|s| s.to_str())
-            .unwrap_or("unknown").to_string();
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
         hits.push(Hit {
             project_id: crate::project::id_for_root(root),
             project_name,
@@ -241,9 +258,9 @@ async fn search_remote(
         .hits
         .into_iter()
         .map(|h| {
-            let session_id = h.session_id.or_else(|| {
-                h.session_ids.as_ref().and_then(|ids| ids.first().cloned())
-            });
+            let session_id = h
+                .session_id
+                .or_else(|| h.session_ids.as_ref().and_then(|ids| ids.first().cloned()));
             Hit {
                 project_id: h.project.id.unwrap_or_default(),
                 project_name: h.project.name.unwrap_or_else(|| "remote".to_string()),
@@ -345,7 +362,14 @@ fn human_tokens(tokens: i64) -> String {
 
 // ── emitters ───────────────────────────────────────────────────────────────
 
-fn emit(hits: &[Hit], query: &str, sources: &[&str], has_key: bool, answer: Option<&str>, mode: OutputMode) {
+fn emit(
+    hits: &[Hit],
+    query: &str,
+    sources: &[&str],
+    has_key: bool,
+    answer: Option<&str>,
+    mode: OutputMode,
+) {
     match mode {
         OutputMode::Json => emit_json(hits, query, sources, answer),
         OutputMode::Agent => emit_agent(hits, sources, has_key, answer),
@@ -379,10 +403,8 @@ fn emit_agent(hits: &[Hit], _sources: &[&str], has_key: bool, answer: Option<&st
         let tag = if is_memory { "[memory] " } else { "" };
         let sha = h.anchor_sha.clone().unwrap_or_else(|| "-".to_string());
         let tool = h.tool.clone().unwrap_or_else(|| "-".to_string());
-        let tokens = h
-            .tokens.map_or_else(|| "-".to_string(), human_tokens);
-        let when = h
-            .timestamp.map_or_else(|| "-".to_string(), relative_time);
+        let tokens = h.tokens.map_or_else(|| "-".to_string(), human_tokens);
+        let when = h.timestamp.map_or_else(|| "-".to_string(), relative_time);
         let snippet: String = h.snippet.chars().take(60).collect();
         if multi_project {
             println!(
@@ -422,8 +444,7 @@ fn emit_pretty(hits: &[Hit], query: &str, _sources: &[&str], has_key: bool, answ
     for h in hits {
         let is_memory = h.source == "memory";
         let tool = h.tool.clone().unwrap_or_else(|| "-".to_string());
-        let when = h
-            .timestamp.map_or_else(|| "-".to_string(), relative_time);
+        let when = h.timestamp.map_or_else(|| "-".to_string(), relative_time);
 
         if is_memory {
             let author = h.author.as_deref().unwrap_or("");
@@ -596,7 +617,9 @@ mod tests {
             limit: 5,
         };
 
-        let result = search_remote("sk_test", &cfg.server.url, "auth middleware", &opts).await.unwrap();
+        let result = search_remote("sk_test", &cfg.server.url, "auth middleware", &opts)
+            .await
+            .unwrap();
 
         assert!(result.answer.is_none());
         let hits = &result.hits;
@@ -648,9 +671,14 @@ mod tests {
             limit: 10,
         };
 
-        let result = search_remote("sk_test", &url, "why did we build the greeting function", &opts)
-            .await
-            .unwrap();
+        let result = search_remote(
+            "sk_test",
+            &url,
+            "why did we build the greeting function",
+            &opts,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             result.answer.as_deref(),

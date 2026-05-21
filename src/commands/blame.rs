@@ -68,12 +68,16 @@ pub fn run(cfg: &Config, no_ai: bool, args: &[String], mode: OutputMode) -> CmdR
 /// Run `git blame --porcelain` and parse into structured per-line data.
 /// Each line gets: originating SHA, original line number, filename in
 /// that commit (handles renames), and the source content.
-fn run_porcelain(cfg: &Config, file: &str, commit: Option<&str>) -> Result<Vec<PorcelainLine>, CliError> {
+fn run_porcelain(
+    cfg: &Config,
+    file: &str,
+    commit: Option<&str>,
+) -> Result<Vec<PorcelainLine>, CliError> {
     let rev = commit.unwrap_or("HEAD");
     let raw = proxy::run_git_capture(cfg, &["blame", "--porcelain", rev, "--", file])?;
 
     let mut lines = Vec::new();
-    let mut iter = raw.lines().peekable();
+    let iter = raw.lines();
 
     // Track the current block's metadata
     let mut cur_sha = String::new();
@@ -81,22 +85,24 @@ fn run_porcelain(cfg: &Config, file: &str, commit: Option<&str>) -> Result<Vec<P
     let mut cur_final: u32 = 0;
     let mut cur_filename = String::new();
 
-    while let Some(line) = iter.next() {
-        if line.starts_with('\t') {
-            // Content line — emit the accumulated entry
+    for line in iter {
+        if let Some(stripped) = line.strip_prefix('\t') {
             lines.push(PorcelainLine {
                 orig_sha: cur_sha.clone(),
                 orig_lineno: cur_orig,
                 final_lineno: cur_final,
                 filename: cur_filename.clone(),
-                content: line[1..].to_string(),
+                content: stripped.to_string(),
             });
             continue;
         }
 
         // Check if this is a header line (40-char hex SHA followed by numbers)
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 3 && parts[0].len() == 40 && parts[0].chars().all(|c| c.is_ascii_hexdigit()) {
+        if parts.len() >= 3
+            && parts[0].len() == 40
+            && parts[0].chars().all(|c| c.is_ascii_hexdigit())
+        {
             cur_sha = parts[0].to_string();
             cur_orig = parts[1].parse().unwrap_or(0);
             cur_final = parts[2].parse().unwrap_or(0);
@@ -171,8 +177,7 @@ fn build_full_blame(
     commit: Option<&str>,
     rich: bool,
 ) -> Result<(String, Vec<LineBlame>), CliError> {
-    let root = proxy::project_root(cfg)
-        .ok_or_else(|| CliError::Git("not in a git repo".into()))?;
+    let root = proxy::project_root(cfg).ok_or_else(|| CliError::Git("not in a git repo".into()))?;
     let commit_hash = resolve_commit(cfg, commit)?;
     let normalized = normalize_file_path(file, &root);
 
@@ -180,9 +185,16 @@ fn build_full_blame(
 
     let unique_shas: Vec<String> = {
         let mut seen = std::collections::HashSet::new();
-        porcelain.iter().filter_map(|p| {
-            if seen.insert(p.orig_sha.clone()) { Some(p.orig_sha.clone()) } else { None }
-        }).collect()
+        porcelain
+            .iter()
+            .filter_map(|p| {
+                if seen.insert(p.orig_sha.clone()) {
+                    Some(p.orig_sha.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     };
 
     let anchor_cache = load_anchors(&root, &unique_shas);
@@ -200,7 +212,14 @@ fn build_full_blame(
                             .entry(pl.orig_sha.clone())
                             .or_insert_with(|| session_summary(&root, &pl.orig_sha))
                             .clone();
-                        (attr, ag, sids, tok, Some(anchor.committed_at), Some(anchor.message.clone()))
+                        (
+                            attr,
+                            ag,
+                            sids,
+                            tok,
+                            Some(anchor.committed_at),
+                            Some(anchor.message.clone()),
+                        )
                     } else {
                         (attr, ag, Vec::new(), 0, None, None)
                     }
@@ -287,7 +306,9 @@ fn emit_json(cfg: &Config, file: &str, commit: Option<&str>, args: &[String]) ->
         .map(|lb| {
             let ai_val = match &lb.attribution {
                 Some(FileAttribution::Ai) => serde_json::json!(lb.agent.as_deref().unwrap_or("ai")),
-                Some(FileAttribution::Mixed) => serde_json::json!(lb.agent.as_deref().unwrap_or("mixed")),
+                Some(FileAttribution::Mixed) => {
+                    serde_json::json!(lb.agent.as_deref().unwrap_or("mixed"))
+                }
                 Some(FileAttribution::Human) => serde_json::json!("human"),
                 None => serde_json::Value::Null,
             };
@@ -371,17 +392,15 @@ fn emit_overlay(cfg: &Config, file: &str, commit: Option<&str>, args: &[String])
     };
 
     // Index blame_lines by final_lineno for O(1) lookup
-    let attr_map: HashMap<u32, &LineBlame> = blame_lines
-        .iter()
-        .map(|lb| (lb.final_lineno, lb))
-        .collect();
+    let attr_map: HashMap<u32, &LineBlame> =
+        blame_lines.iter().map(|lb| (lb.final_lineno, lb)).collect();
 
     for raw_line in raw.lines() {
         let n = parse_blame_line_number(raw_line);
-        let attr_str = n
-            .and_then(|n| attr_map.get(&n))
-            .map(|lb| format_attr_colored(lb))
-            .unwrap_or_else(|| "\x1b[90m-\x1b[0m       ".to_string());
+        let attr_str = n.and_then(|n| attr_map.get(&n)).map_or_else(
+            || "\x1b[90m-\x1b[0m       ".to_string(),
+            |lb| format_attr_colored(lb),
+        );
         println!("{attr_str} {raw_line}");
     }
     Ok(0)
@@ -520,25 +539,28 @@ filename src/main.rs\n\
 \tfn main() {}";
 
         let mut lines = Vec::new();
-        let mut iter = porcelain_output.lines().peekable();
+        let iter = porcelain_output.lines();
         let mut cur_sha = String::new();
         let mut cur_orig: u32 = 0;
         let mut cur_final: u32 = 0;
         let mut cur_filename = String::new();
 
-        while let Some(line) = iter.next() {
-            if line.starts_with('\t') {
+        for line in iter {
+            if let Some(stripped) = line.strip_prefix('\t') {
                 lines.push(PorcelainLine {
                     orig_sha: cur_sha.clone(),
                     orig_lineno: cur_orig,
                     final_lineno: cur_final,
                     filename: cur_filename.clone(),
-                    content: line[1..].to_string(),
+                    content: stripped.to_string(),
                 });
                 continue;
             }
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 3 && parts[0].len() == 40 && parts[0].chars().all(|c| c.is_ascii_hexdigit()) {
+            if parts.len() >= 3
+                && parts[0].len() == 40
+                && parts[0].chars().all(|c| c.is_ascii_hexdigit())
+            {
                 cur_sha = parts[0].to_string();
                 cur_orig = parts[1].parse().unwrap_or(0);
                 cur_final = parts[2].parse().unwrap_or(0);
@@ -550,7 +572,10 @@ filename src/main.rs\n\
         }
 
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].orig_sha, "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2");
+        assert_eq!(
+            lines[0].orig_sha,
+            "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+        );
         assert_eq!(lines[0].orig_lineno, 1);
         assert_eq!(lines[0].final_lineno, 1);
         assert_eq!(lines[0].filename, "src/main.rs");

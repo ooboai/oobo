@@ -49,8 +49,8 @@ pub struct Config {
     pub scan: ScanConfig,
     #[serde(default)]
     pub update: UpdateConfig,
-    #[serde(default)]
-    pub transparency: TransparencyConfig,
+    #[serde(default, alias = "transparency")]
+    pub privacy: TransparencyConfig,
     #[serde(default)]
     pub tools: ToolsConfig,
     #[serde(default)]
@@ -152,14 +152,14 @@ pub struct UpdateConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransparencyConfig {
-    #[serde(default = "default_transparency_mode")]
-    pub mode: String,
+    #[serde(default = "default_transparency_mode", alias = "mode")]
+    pub transparency: String,
 }
 
 impl Default for TransparencyConfig {
     fn default() -> Self {
         Self {
-            mode: default_transparency_mode(),
+            transparency: default_transparency_mode(),
         }
     }
 }
@@ -267,12 +267,12 @@ impl Config {
                     match toml::from_str(contents) {
                         Ok(cfg) => cfg,
                         Err(e) => {
-                    tracing::warn!(path = %effective_path.display(), %e, "invalid config");
-                    Self::default()
+                            tracing::warn!(path = %effective_path.display(), %e, "invalid config");
+                            Self::default()
+                        }
+                    }
                 }
-            }
-        }
-        Err(e) => {
+                Err(e) => {
                     tracing::warn!(path = %effective_path.display(), %e, "cannot read config");
                     Self::default()
                 }
@@ -343,7 +343,7 @@ impl Config {
     /// Transparency only controls whether redacted transcripts are included on the
     /// orphan branch. Anchor metadata is always written regardless of this setting.
     pub fn transparency_mode(&self) -> crate::core::anchor::TransparencyMode {
-        match self.transparency.mode.as_str() {
+        match self.privacy.transparency.as_str() {
             "off" | "none" | "disabled" => crate::core::anchor::TransparencyMode::Off,
             _ => crate::core::anchor::TransparencyMode::On,
         }
@@ -382,9 +382,13 @@ impl Config {
 
     /// Check if a repo path is in the ignored list.
     pub fn is_ignored(&self, project_root: &str) -> bool {
-        let canonical = std::fs::canonicalize(project_root).map_or_else(|_| project_root.to_string(), |p| p.to_string_lossy().to_string());
+        let canonical = std::fs::canonicalize(project_root).map_or_else(
+            |_| project_root.to_string(),
+            |p| p.to_string_lossy().to_string(),
+        );
         self.ignored_repos.iter().any(|p| {
-            let c = std::fs::canonicalize(p).map_or_else(|_| p.clone(), |p| p.to_string_lossy().to_string());
+            let c = std::fs::canonicalize(p)
+                .map_or_else(|_| p.clone(), |p| p.to_string_lossy().to_string());
             c == canonical
         })
     }
@@ -529,7 +533,7 @@ mod tests {
             },
             scan: ScanConfig::default(),
             update: UpdateConfig::default(),
-            transparency: TransparencyConfig::default(),
+            privacy: TransparencyConfig::default(),
             tools: ToolsConfig::default(),
             setup: SetupConfig::default(),
             ignored_repos: Vec::new(),
@@ -602,7 +606,8 @@ mod tests {
         cfg.ignored_repos.push(canonical.clone());
         assert!(cfg.is_ignored(&path));
         cfg.ignored_repos.retain(|p| {
-            let c = std::fs::canonicalize(p).map_or_else(|_| p.clone(), |p| p.to_string_lossy().to_string());
+            let c = std::fs::canonicalize(p)
+                .map_or_else(|_| p.clone(), |p| p.to_string_lossy().to_string());
             c != canonical
         });
         assert!(!cfg.is_ignored(&path));

@@ -305,7 +305,10 @@ mod tests {
         cfg.save(&root).unwrap();
 
         let raw = std::fs::read_to_string(path_for(&root)).unwrap();
-        assert!(!raw.contains("[server]"), "empty server section should be omitted");
+        assert!(
+            !raw.contains("[server]"),
+            "empty server section should be omitted"
+        );
         assert!(api_key(&root).is_none());
         assert!(api_url(&root).is_none());
     }

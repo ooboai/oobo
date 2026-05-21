@@ -67,9 +67,7 @@ fn run_repair(opts: &SetupOptions) {
 
     match mode {
         OutputMode::Agent => {
-            println!(
-                "repair {name} hooks={hooks_status} orphan={orphan_status}"
-            );
+            println!("repair {name} hooks={hooks_status} orphan={orphan_status}");
         }
         OutputMode::Json => {
             let json = serde_json::json!({
@@ -80,9 +78,7 @@ fn run_repair(opts: &SetupOptions) {
             crate::utils::print_json(&json);
         }
         OutputMode::Tui => {
-            println!(
-                "  {name:<20} hooks {hooks_status} · orphan {orphan_status}"
-            );
+            println!("  {name:<20} hooks {hooks_status} · orphan {orphan_status}");
         }
     }
 
@@ -133,7 +129,9 @@ pub fn run_setup(non_interactive: bool) -> Result<(), CliError> {
     let cfg = Config::load_or_default();
 
     let outcome = if !non_interactive && std::io::stdout().is_terminal() {
-        if let Some(outcome) = crate::tui::setup::run_setup_wizard(&cfg, scan)? { outcome } else {
+        if let Some(outcome) = crate::tui::setup::run_setup_wizard(&cfg, scan)? {
+            outcome
+        } else {
             println!();
             println!("  Setup cancelled.");
             println!();

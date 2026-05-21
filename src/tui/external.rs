@@ -1,4 +1,7 @@
-pub(super) fn suspend_and_run<F>(terminal: &mut ratatui::DefaultTerminal, f: F) -> Result<(), String>
+pub(super) fn suspend_and_run<F>(
+    terminal: &mut ratatui::DefaultTerminal,
+    f: F,
+) -> Result<(), String>
 where
     F: FnOnce() -> Result<(), String>,
 {

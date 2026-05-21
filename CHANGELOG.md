@@ -14,15 +14,22 @@ output modes, and a flagship `anchors` experience.
 
 - **`oobo anchor show <sha>`** drill-down (pretty / agent / json). Accepts unambiguous SHA prefixes.
 - **`oobo anchors` filters**: `--since <24h|7d|ISO>`, `--tool`, `--project` (outside-repo only).
-- **`oobo anchor blame`** is now a strict superset of `git blame`. Every `git blame` flag is forwarded; an AI-attribution column is overlaid for pretty/agent mode. `--no-ai`, `--porcelain`, `--line-porcelain`, `--incremental` bypass the overlay.
+- **`oobo blame`** (also available as `oobo anchor blame`) is now a strict superset of `git blame`. Every `git blame` flag is forwarded; an AI-attribution column is overlaid for pretty/agent mode. `--no-ai`, `--porcelain`, `--line-porcelain`, `--incremental` bypass the overlay.
 - **`oobo search`** promoted to a top-level verb. Local search (orphan branch) with `--since`, `--project`, `--tool`, `--limit`.
-- **`oobo settings`** declarative KV config with positional grammar: `oobo settings [scope] [verb] <key> [value]`. Scope defaults to `default`, verb defaults to `get`. Keys: `key`, `remote`, `transparency`, `tools.experimental`, `setup.scan_roots`.
+- **`oobo settings`** declarative KV config with positional grammar: `oobo settings [scope] [verb] <key> [value]`. Scope defaults to `default`, verb defaults to `get`. Keys: `key`, `api_url`, `remote`, `transparency`, `tools.experimental`, `setup.scan_roots`.
 - **`oobo enable` / `oobo disable`** per-project tracking toggles (idempotent).
-- **`oobo alias install` / `oobo alias uninstall`** manage the `alias git=oobo` shell alias.
-- **`oobo setup`** rebuilt as a composable entry point: `--non-interactive`, `--reindex`, `--uninstall-alias`, `--repair`.
+- **`oobo setup`** rebuilt as a composable entry point: `--non-interactive`, `--reindex`, `--repair`.
 - **Zero-config tool detection**: AI tools are auto-detected at commit time — no indexing, no scanning, no database.
 - **Legacy command hint system**: removed 0.1.x verbs now print a hint and, in a TTY, offer to run the replacement. Scheduled for removal in 1.1.
 - **Agent auto-detection**: `--agent` auto-activates when stdout is not a TTY or any of `CURSOR_AGENT`, `CLAUDECODE`, `AIDER`, `CONTINUE_SESSION`, `CONTINUE_IDE`, `AICOMMITS` is set.
+- **`oobo goto <turn-or-sha>`** — time-travel to any turn snapshot or commit. Auto-stashes dirty changes, loads the target tree, records a return point. Multiple `goto` calls stack.
+- **`oobo back`** — return to where you were before `goto`. Pops the navigation stack, restores stash if one was created.
+- **`oobo delta`** — compare two anchors to see what changed: category shifts, complexity, new areas, new techniques, and a narrative summary. Requires an API key.
+- **`oobo help <topic>`** — built-in offline documentation. Topics: `anchors`, `search`, `blame`, `hooks`, `config`, `keyboard`.
+- **Search answer synthesis** — when remote memory hits are available, search results include a synthesized 1–3 sentence answer displayed above individual hits.
+- **Turn capture system** — TurnTap pipeline captures per-turn workspace state (tree hashes) for Claude, Cursor, Codex, and OpenCode. Enables `goto` to restore exact workspace snapshots mid-session.
+- **Unified TUI** — full-screen interactive memory timeline with anchor feed, live search (local filter + remote semantic), transcript viewer, session/file pickers, and keybinding help overlay.
+- **Heuristic subagent detection** — infers parent-child session relationships from file access patterns and timing when explicit signals are unavailable.
 - **Four-quadrant bare `oobo`** behavior (in-repo/outside × pretty/structured).
 - **Stable project-identity helpers** (`src/project.rs`): canonicalizes git remote URLs so SSH and HTTPS forms collapse to the same key.
 - **`tests/cli-spec/`** — behavioral contract for every 1.0 command.
@@ -347,6 +354,7 @@ Historical entries below describe 0.1.x behavior and may mention commands remove
 - **CI/CD pipeline**: multi-platform testing (Ubuntu, macOS, Debian, Alpine) and 6-target release builds
 - **Dual license**: Apache 2.0 and MIT
 
+[1.0.0-rc.1]: https://github.com/ooboai/oobo/compare/v0.1.15...v1.0.0-rc.1
 [0.1.15]: https://github.com/ooboai/oobo/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/ooboai/oobo/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/ooboai/oobo/compare/v0.1.12...v0.1.13

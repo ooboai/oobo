@@ -76,7 +76,10 @@ async fn fetch_latest_version() -> Result<String, String> {
         return Err(format!("GitHub API returned {}", resp.status()));
     }
 
-    let body: serde_json::Value = resp.json().await.map_err(|e| format!("invalid response: {e}"))?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("invalid response: {e}"))?;
 
     body.get("tag_name")
         .and_then(|v| v.as_str())

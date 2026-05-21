@@ -128,6 +128,12 @@ pub fn lookup(verb: &str) -> Option<&'static Hint> {
     HINTS.iter().find(|h| h.legacy == verb)
 }
 
+/// Return all legacy command verbs (for testing/validation).
+#[cfg(test)]
+pub fn all_verbs() -> Vec<&'static str> {
+    HINTS.iter().map(|h| h.legacy).collect()
+}
+
 /// Emit the hint and (when TTY + mapped) prompt to run the new command.
 /// Returns the exit code to use, or `None` if the caller should continue
 /// execution with the mapped args.
@@ -165,5 +171,58 @@ pub fn handle(hint: &Hint) -> Option<i32> {
         None
     } else {
         Some(2)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lookup_known_commands() {
+        assert!(lookup("alias").is_some());
+        assert!(lookup("scan").is_some());
+        assert!(lookup("sync").is_some());
+        assert!(lookup("doctor").is_some());
+        assert!(lookup("version").is_some());
+    }
+
+    #[test]
+    fn lookup_unknown_returns_none() {
+        assert!(lookup("anchors").is_none());
+        assert!(lookup("blame").is_none());
+        assert!(lookup("nonexistent").is_none());
+    }
+
+    #[test]
+    fn all_hints_have_nonempty_message() {
+        for verb in all_verbs() {
+            let hint = lookup(verb).unwrap();
+            assert!(!hint.message.is_empty(), "empty message for '{verb}'");
+        }
+    }
+
+    #[test]
+    fn mapped_none_means_no_redirect() {
+        let hint = lookup("alias").unwrap();
+        assert!(hint.mapped.is_none());
+
+        let hint = lookup("card").unwrap();
+        assert!(hint.mapped.is_none());
+    }
+
+    #[test]
+    fn mapped_some_provides_args() {
+        let hint = lookup("scan").unwrap();
+        assert_eq!(hint.mapped, Some(["setup", "--reindex"].as_slice()));
+
+        let hint = lookup("ignore").unwrap();
+        assert_eq!(hint.mapped, Some(["disable"].as_slice()));
+    }
+
+    #[test]
+    fn handle_returns_exit_code_for_unmapped() {
+        let hint = lookup("alias").unwrap();
+        assert_eq!(handle(hint), Some(2));
     }
 }

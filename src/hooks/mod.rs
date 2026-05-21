@@ -136,8 +136,7 @@ pub fn handle_event(
                         if let Some(abs_path) = file_path {
                             let rel = make_relative(abs_path, &project_root);
                             if !rel.starts_with('/') && !rel.starts_with("..") {
-                                let _ =
-                                    state::snapshot_pre_edit_file(&project_root, sid, &rel);
+                                let _ = state::snapshot_pre_edit_file(&project_root, sid, &rel);
                             }
                         }
                     }
@@ -146,9 +145,8 @@ pub fn handle_event(
         }
         "after-tool-use" | "after-file-edit" => {
             if let Some(sid) = session_id_field {
-                let mut batch = state::SessionBatch::open(
-                    &project_root, sid, agent, event.model.as_deref(),
-                )?;
+                let mut batch =
+                    state::SessionBatch::open(&project_root, sid, agent, event.model.as_deref())?;
 
                 let tool_name = event
                     .extra
@@ -282,7 +280,11 @@ pub fn handle_event(
                         &project_root,
                         sid,
                         rel,
-                        if tool_name.is_empty() { None } else { Some(tool_name) },
+                        if tool_name.is_empty() {
+                            None
+                        } else {
+                            Some(tool_name)
+                        },
                     );
                 }
             }
@@ -472,7 +474,11 @@ pub fn handle_event(
             }
         }
         _ => {
-            tracing::warn!(event = event_name, tool = agent, "unknown agent event, ignored");
+            tracing::warn!(
+                event = event_name,
+                tool = agent,
+                "unknown agent event, ignored"
+            );
         }
     }
 
@@ -594,10 +600,13 @@ fn make_relative(abs_path: &str, project_root: &str) -> String {
         std::fs::canonicalize(abs_path).unwrap_or_else(|_| std::path::PathBuf::from(abs_path));
     let root = std::fs::canonicalize(project_root)
         .unwrap_or_else(|_| std::path::PathBuf::from(project_root));
-    abs.strip_prefix(&root).map_or_else(|_| abs_path.to_string(), |p| {
+    abs.strip_prefix(&root).map_or_else(
+        |_| abs_path.to_string(),
+        |p| {
             let s = p.to_string_lossy().to_string();
             s.replace('\\', "/")
-        })
+        },
+    )
 }
 
 #[cfg(test)]
@@ -629,7 +638,10 @@ mod tests {
         let event: HookEvent = serde_json::from_str(json).unwrap();
         assert_eq!(event.session_id.as_deref(), Some("s1"));
         assert_eq!(
-            event.extra.get("unknown_field").and_then(serde_json::Value::as_i64),
+            event
+                .extra
+                .get("unknown_field")
+                .and_then(serde_json::Value::as_i64),
             Some(42)
         );
     }

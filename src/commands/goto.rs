@@ -44,9 +44,17 @@ pub fn run(cfg: &Config, target: &str, no_stash: bool, mode: OutputMode) -> CmdR
             return Ok(1);
         }
         Target::Ambiguous(matches) => {
-            eprintln!("oobo: '{target}' is ambiguous — matches {} turns:", matches.len());
+            eprintln!(
+                "oobo: '{target}' is ambiguous — matches {} turns:",
+                matches.len()
+            );
             for t in &matches {
-                eprintln!("  {}  {}:{}", t.id, t.source, &t.session_id[..8.min(t.session_id.len())]);
+                eprintln!(
+                    "  {}  {}:{}",
+                    t.id,
+                    t.source,
+                    &t.session_id[..8.min(t.session_id.len())]
+                );
             }
             return Ok(1);
         }
@@ -84,11 +92,19 @@ pub fn run(cfg: &Config, target: &str, no_stash: bool, mode: OutputMode) -> CmdR
         // Leaving a previously-loaded target. Read the last stack entry's
         // "going_to" label, or fall back to a generic description.
         let stack = load_stack(&project_root);
-        stack.entries.last()
+        stack
+            .entries
+            .last()
             .and_then(|e| e.went_to_label.clone())
             .unwrap_or_else(|| "previous state".into())
     };
-    push_stack(&project_root, &current_tree, &leaving_label, stash_ref.as_deref(), &label)?;
+    push_stack(
+        &project_root,
+        &current_tree,
+        &leaving_label,
+        stash_ref.as_deref(),
+        &label,
+    )?;
 
     // Load the target tree.
     git_capture(&project_root, &["read-tree", "--reset", "-u", &tree])?;
@@ -129,7 +145,12 @@ pub fn run_back(cfg: &Config, mode: OutputMode) -> CmdResult {
     let wt_dirty = git_capture(&project_root, &["diff", "--quiet"]);
     let untracked = git_capture(
         &project_root,
-        &["ls-files", "--others", "--exclude-standard", "--exclude=.oobo/"],
+        &[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--exclude=.oobo/",
+        ],
     )
     .map(|s| {
         s.lines()
@@ -142,7 +163,10 @@ pub fn run_back(cfg: &Config, mode: OutputMode) -> CmdResult {
         return Ok(1);
     }
 
-    let entry = pop_stack(&project_root).unwrap();
+    let Some(entry) = pop_stack(&project_root) else {
+        eprintln!("oobo: navigation stack unexpectedly empty.");
+        return Ok(1);
+    };
     let remaining = stack_depth(&project_root);
 
     // Restore the tree we came from.
@@ -181,7 +205,10 @@ pub fn run_back(cfg: &Config, mode: OutputMode) -> CmdResult {
         }
         OutputMode::Tui => {
             if entry.stash_ref.is_some() {
-                println!("Returned to {} (uncommitted changes restored).", entry.label);
+                println!(
+                    "Returned to {} (uncommitted changes restored).",
+                    entry.label
+                );
             } else {
                 println!("Returned to {}.", entry.label);
             }
@@ -224,7 +251,10 @@ fn resolve_target(project_root: &str, id: &str) -> Target {
         return Target::Ambiguous(matches);
     }
     // Try as git commit.
-    if let Ok(sha) = git_capture(project_root, &["rev-parse", "--verify", &format!("{id}^{{commit}}")]) {
+    if let Ok(sha) = git_capture(
+        project_root,
+        &["rev-parse", "--verify", &format!("{id}^{{commit}}")],
+    ) {
         let subject = git_capture(project_root, &["show", "-s", "--format=%s", &sha]).ok();
         return Target::Commit(sha, subject);
     }
@@ -237,7 +267,16 @@ fn has_dirty_changes(project_root: &str) -> Result<bool, CliError> {
 }
 
 fn create_stash(project_root: &str) -> Result<String, CliError> {
-    git_capture(project_root, &["stash", "push", "-m", "oobo goto (auto-stash)", "--include-untracked"])?;
+    git_capture(
+        project_root,
+        &[
+            "stash",
+            "push",
+            "-m",
+            "oobo goto (auto-stash)",
+            "--include-untracked",
+        ],
+    )?;
     // Get the stash ref.
     let stash_ref = git_capture(project_root, &["stash", "list", "--format=%gd", "-1"])?;
     if stash_ref.is_empty() {
@@ -403,7 +442,11 @@ fn safe_file_stem(raw: &str) -> String {
         })
         .collect();
     let safe = safe.trim_matches('.').trim_matches('_');
-    if safe.is_empty() { "turn".to_string() } else { safe.to_string() }
+    if safe.is_empty() {
+        "turn".to_string()
+    } else {
+        safe.to_string()
+    }
 }
 
 fn short(hash: &str) -> &str {
@@ -477,7 +520,10 @@ mod tests {
         assert_eq!(restored.entries.len(), 2);
         assert_eq!(restored.entries[0].tree, "tree1");
         assert_eq!(restored.entries[0].stash_ref.as_deref(), Some("stash@{0}"));
-        assert_eq!(restored.entries[0].went_to_label.as_deref(), Some("second commit"));
+        assert_eq!(
+            restored.entries[0].went_to_label.as_deref(),
+            Some("second commit")
+        );
         assert_eq!(restored.entries[1].label, "second");
     }
 }

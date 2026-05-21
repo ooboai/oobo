@@ -38,8 +38,8 @@ pub(super) fn write_anchor(
     let (prefix, rest) = shard_key(&anchor.commit_hash);
     let base_path = format!("{prefix}/{rest}");
 
-    let anchor_json =
-        serde_json::to_string_pretty(anchor).map_err(|e| CliError::Git(format!("serialize anchor: {e}")))?;
+    let anchor_json = serde_json::to_string_pretty(anchor)
+        .map_err(|e| CliError::Git(format!("serialize anchor: {e}")))?;
 
     let mut entries: Vec<(String, String)> =
         vec![(format!("{base_path}/metadata.json"), anchor_json)];
@@ -74,8 +74,10 @@ pub(super) fn write_anchor(
                 if let Some(ref stype) = ct.subagent_type {
                     entries.push((
                         format!("{sub_path}/metadata.json"),
-                        format!("{{\"subagent_type\":\"{stype}\",\"session_id\":\"{}\"}}",
-                                ct.session_id),
+                        format!(
+                            "{{\"subagent_type\":\"{stype}\",\"session_id\":\"{}\"}}",
+                            ct.session_id
+                        ),
                     ));
                 }
             }
@@ -95,7 +97,10 @@ pub(super) fn write_anchor(
 
     write_to_branch(project_root, &entries)?;
 
-    tracing::info!(entries = entries.len(), "oobo anchor written to orphan branch");
+    tracing::info!(
+        entries = entries.len(),
+        "oobo anchor written to orphan branch"
+    );
     Ok(())
 }
 
@@ -146,8 +151,7 @@ fn build_timeline_json(
     // Collect timestamped file events from all linked sessions.
     let mut events_json: Vec<serde_json::Value> = Vec::new();
     for link in session_links {
-        let events =
-            crate::hooks::state::get_file_events(project_root, &link.session_id);
+        let events = crate::hooks::state::get_file_events(project_root, &link.session_id);
         for ev in events {
             events_json.push(serde_json::json!({
                 "session_id": link.session_id,
@@ -172,7 +176,8 @@ fn build_timeline_json(
         timeline["events"] = serde_json::json!(events_json);
     }
 
-    serde_json::to_string_pretty(&timeline).map_err(|e| CliError::Git(format!("serialize timeline: {e}")))
+    serde_json::to_string_pretty(&timeline)
+        .map_err(|e| CliError::Git(format!("serialize timeline: {e}")))
 }
 
 /// Delegate to the shared implementation in `redact` module.
@@ -307,7 +312,11 @@ pub fn read_all_anchors(project_root: &str) -> (Vec<Anchor>, HashMap<String, Vec
         }
     }
 
-    tracing::debug!(anchors = anchors.len(), sessions = links_map.len(), "read_all_anchors done");
+    tracing::debug!(
+        anchors = anchors.len(),
+        sessions = links_map.len(),
+        "read_all_anchors done"
+    );
     (anchors, links_map)
 }
 
@@ -447,17 +456,19 @@ fn ensure_branch(project_root: &str) -> Result<(), CliError> {
 const MAX_WRITE_ATTEMPTS: u32 = 3;
 
 /// Write entries to the orphan branch, retrying on CAS contention.
-pub(super) fn write_to_branch(project_root: &str, entries: &[(String, String)]) -> Result<(), CliError> {
+pub(super) fn write_to_branch(
+    project_root: &str,
+    entries: &[(String, String)],
+) -> Result<(), CliError> {
     let mut last_err = String::new();
     for attempt in 0..MAX_WRITE_ATTEMPTS {
         match try_write_to_branch(project_root, entries) {
             Ok(()) => return Ok(()),
             Err(ref e)
-                if attempt < MAX_WRITE_ATTEMPTS - 1
-                    && {
-                        let msg = e.to_string();
-                        msg.contains("but expected") || msg.contains("cannot lock ref")
-                    } =>
+                if attempt < MAX_WRITE_ATTEMPTS - 1 && {
+                    let msg = e.to_string();
+                    msg.contains("but expected") || msg.contains("cannot lock ref")
+                } =>
             {
                 last_err = e.to_string();
                 sync::jitter_sleep(attempt);
@@ -630,7 +641,9 @@ pub(super) fn git_in_timeout(
         }
     }
 
-    let output = child.wait_with_output().map_err(|e| CliError::Git(format!("git: {e}")))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| CliError::Git(format!("git: {e}")))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout)
@@ -661,7 +674,9 @@ fn git_env_in(project_root: &str, args: &[&str], env: &[(&str, &str)]) -> Result
         cmd.env(k, v);
     }
 
-    let output = cmd.output().map_err(|e| CliError::Git(format!("git: {e}")))?;
+    let output = cmd
+        .output()
+        .map_err(|e| CliError::Git(format!("git: {e}")))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout)
@@ -698,7 +713,9 @@ fn git_stdin_in(project_root: &str, args: &[&str], stdin_data: &str) -> Result<S
             .map_err(|e| CliError::Git(format!("write stdin: {e}")))?;
     }
 
-    let output = child.wait_with_output().map_err(|e| CliError::Git(format!("git: {e}")))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| CliError::Git(format!("git: {e}")))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout)
@@ -714,8 +731,8 @@ fn git_stdin_in(project_root: &str, args: &[&str], stdin_data: &str) -> Result<S
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::sync::{replay_local_files, validate_anchor_remote};
+    use super::*;
     use crate::core::anchor::{AuthorType, Contributor, ContributorRole, LinkType};
 
     #[test]
@@ -981,7 +998,9 @@ mod tests {
         }
 
         let err = validate_anchor_remote(repo_str, "oobo").unwrap_err();
-        assert!(err.to_string().contains("oobo remote 'oobo' is not configured"));
+        assert!(err
+            .to_string()
+            .contains("oobo remote 'oobo' is not configured"));
     }
 
     #[test]
@@ -1226,8 +1245,12 @@ mod tests {
         // verifies cleanup after a successful pipeline on all platforms.
         #[cfg(unix)]
         {
-            let result =
-                build_commit_on(&repo, &parent, &[(String::new(), "data".into())], "should fail");
+            let result = build_commit_on(
+                &repo,
+                &parent,
+                &[(String::new(), "data".into())],
+                "should fail",
+            );
             assert!(result.is_err(), "empty path should fail in update-index");
             assert_no_leftover("after mid-pipeline error");
         }
@@ -1309,7 +1332,8 @@ mod tests {
             },
         ];
 
-        let json_str = build_timeline_json("/tmp/test-repo", &anchor, &links, &interactions).unwrap();
+        let json_str =
+            build_timeline_json("/tmp/test-repo", &anchor, &links, &interactions).unwrap();
         let val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(val["session_count"], 2);

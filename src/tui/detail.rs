@@ -66,7 +66,8 @@ pub(super) fn draw_anchor_detail(frame: &mut ratatui::Frame<'_>, app: &App, area
 
     let tool = anchor.tool.as_deref().unwrap_or("-");
     let tokens = anchor
-        .tokens.map_or_else(|| "-".into(), super::format_tokens);
+        .tokens
+        .map_or_else(|| "-".into(), super::format_tokens);
     lines.push(Line::from(vec![
         Span::styled("  ", Style::default()),
         chip("tool", tool, Color::Cyan),
@@ -183,7 +184,8 @@ fn draw_shadow_detail(frame: &mut ratatui::Frame<'_>, app: &App, shadow: &Anchor
         Span::raw(
             shadow
                 .session_id
-                .as_deref().map_or_else(|| "-".to_string(), short_session),
+                .as_deref()
+                .map_or_else(|| "-".to_string(), short_session),
         ),
     ]));
     if let Some(parent) = shadow.parent_anchor.as_deref() {
@@ -233,7 +235,6 @@ fn short_session(session_id: &str) -> String {
 }
 
 // ── Search view ───────────────────────────────────────────────────────
-
 
 // ── Picker overlay ────────────────────────────────────────────────────
 

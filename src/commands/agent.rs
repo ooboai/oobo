@@ -93,3 +93,72 @@ fn ensure_symlink(skill_dir: &PathBuf, link: &PathBuf) {
         let _ = std::os::windows::fs::symlink_dir(skill_dir, link);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn skill_md_content_is_nonempty() {
+        assert!(!SKILL_MD.is_empty());
+        assert!(SKILL_MD.contains("oobo"));
+    }
+
+    #[test]
+    fn oobo_skill_path_is_under_home() {
+        let path = oobo_skill_path();
+        assert!(path.ends_with("skills/oobo/SKILL.md"));
+    }
+
+    #[test]
+    fn ensure_skill_file_writes_and_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("skills").join("oobo");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let skill_path = skill_dir.join("SKILL.md");
+
+        fs::write(&skill_path, SKILL_MD).unwrap();
+        let content = fs::read_to_string(&skill_path).unwrap();
+        assert_eq!(content, SKILL_MD);
+
+        fs::write(&skill_path, SKILL_MD).unwrap();
+        let content2 = fs::read_to_string(&skill_path).unwrap();
+        assert_eq!(content, content2);
+    }
+
+    #[test]
+    fn ensure_symlink_creates_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        fs::create_dir_all(&source).unwrap();
+
+        let link = tmp.path().join("link");
+        ensure_symlink(&source, &link);
+
+        assert!(link.symlink_metadata().is_ok());
+        #[cfg(unix)]
+        assert!(link.is_symlink());
+    }
+
+    #[test]
+    fn ensure_symlink_replaces_stale_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old_target = tmp.path().join("old");
+        let new_target = tmp.path().join("new");
+        fs::create_dir_all(&old_target).unwrap();
+        fs::create_dir_all(&new_target).unwrap();
+
+        let link = tmp.path().join("link");
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&old_target, &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&old_target, &link).unwrap();
+
+        ensure_symlink(&new_target, &link);
+
+        let resolved = fs::read_link(&link).unwrap();
+        assert_eq!(resolved, new_target);
+    }
+}

@@ -157,11 +157,7 @@ pub fn snapshot_session_files(
 
 /// Capture the git blob hash of a file BEFORE an AI edit (preToolUse).
 /// Stored in `pre_edit_pending` until paired by `record_post_edit_file`.
-pub fn snapshot_pre_edit_file(
-    project_root: &str,
-    session_id: &str,
-    rel_path: &str,
-) -> Result<()> {
+pub fn snapshot_pre_edit_file(project_root: &str, session_id: &str, rel_path: &str) -> Result<()> {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let hash = match hash_object(&git, project_root, rel_path) {
         Some(h) => h,

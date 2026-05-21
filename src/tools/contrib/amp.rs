@@ -46,7 +46,11 @@ fn session_from_thread_file(path: &Path) -> Option<Session> {
         .or_else(|| data.get("name"))
         .or_else(|| data.get("summary"))
         .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty()).map_or_else(|| "Amp thread".to_string(), |s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN));
+        .filter(|s| !s.is_empty())
+        .map_or_else(
+            || "Amp thread".to_string(),
+            |s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN),
+        );
 
     let project_path = data
         .get("workingDirectory")

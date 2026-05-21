@@ -249,7 +249,7 @@ fn sessions_from_sqlite() -> Result<Vec<Session>, String> {
 }
 
 pub mod transcript {
-    use super::{PathBuf, sessions_dir, Path, fs, Message};
+    use super::{fs, sessions_dir, Message, Path, PathBuf};
 
     pub fn find_transcript_path(_project_path: &str, session_id: &str) -> Option<PathBuf> {
         let dir = sessions_dir()?;

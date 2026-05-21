@@ -19,9 +19,13 @@ pub fn remote_branch_exists(project_root: &str) -> bool {
     if validate_anchor_remote(project_root, &remote).is_err() {
         return false;
     }
-    git_in_timeout(project_root, &["ls-remote", "--heads", &remote, BRANCH], NETWORK_TIMEOUT)
-        .map(|out| !out.trim().is_empty())
-        .unwrap_or(false)
+    git_in_timeout(
+        project_root,
+        &["ls-remote", "--heads", &remote, BRANCH],
+        NETWORK_TIMEOUT,
+    )
+    .map(|out| !out.trim().is_empty())
+    .unwrap_or(false)
 }
 
 /// 5 retries: remote push contention is common in multi-user/agent
@@ -39,15 +43,21 @@ pub fn push(project_root: &str) -> Result<(), CliError> {
 
     let mut last_err = String::new();
     for attempt in 0..MAX_PUSH_ATTEMPTS {
-        match git_in_timeout(project_root, &["push", "--no-verify", &remote, BRANCH], NETWORK_TIMEOUT) {
+        match git_in_timeout(
+            project_root,
+            &["push", "--no-verify", &remote, BRANCH],
+            NETWORK_TIMEOUT,
+        ) {
             Ok(_) => {
                 clear_pending_push(project_root);
                 return Ok(());
             }
-            Err(ref e) if {
-                let msg = e.to_string();
-                msg.contains("non-fast-forward") || msg.contains("rejected")
-            } => {
+            Err(ref e)
+                if {
+                    let msg = e.to_string();
+                    msg.contains("non-fast-forward") || msg.contains("rejected")
+                } =>
+            {
                 last_err = e.to_string();
                 if attempt < MAX_PUSH_ATTEMPTS - 1 {
                     if let Err(re) = reconcile_with_remote(project_root, &remote) {
@@ -75,7 +85,13 @@ pub fn retry_pending_pushes(project_root: &str) {
         return;
     }
     let _ = reconcile_with_remote(project_root, &remote);
-    if git_in_timeout(project_root, &["push", "--no-verify", &remote, BRANCH], NETWORK_TIMEOUT).is_ok() {
+    if git_in_timeout(
+        project_root,
+        &["push", "--no-verify", &remote, BRANCH],
+        NETWORK_TIMEOUT,
+    )
+    .is_ok()
+    {
         let _ = fs::remove_file(&path);
     }
 }
@@ -105,10 +121,12 @@ fn rand_jitter_ms(max: u64) -> u64 {
     if max == 0 {
         return 0;
     }
-    let nanos = u64::from(std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos());
+    let nanos = u64::from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos(),
+    );
     let pid = u64::from(std::process::id());
     nanos.wrapping_mul(pid.wrapping_add(7)) % max
 }
@@ -119,7 +137,8 @@ fn rand_jitter_ms(max: u64) -> u64 {
 pub fn fetch_and_reconcile(project_root: &str) -> Result<(), CliError> {
     let remote = anchor_remote(project_root);
     validate_anchor_remote(project_root, &remote)?;
-    reconcile_with_remote(project_root, &remote).map_err(|e| CliError::Git(format!("fetch/reconcile failed: {e}")))
+    reconcile_with_remote(project_root, &remote)
+        .map_err(|e| CliError::Git(format!("fetch/reconcile failed: {e}")))
 }
 
 /// Fetch into a PID-namespaced temp ref to avoid FETCH_HEAD races and
@@ -227,7 +246,11 @@ fn reconcile_local_with(project_root: &str, remote_tip: &str) -> Result<(), CliE
 
 /// Builds a merged commit before moving the branch ref — if any step
 /// fails, the branch is untouched.
-pub(super) fn replay_local_files(project_root: &str, local_tip: &str, remote_tip: &str) -> Result<(), CliError> {
+pub(super) fn replay_local_files(
+    project_root: &str,
+    local_tip: &str,
+    remote_tip: &str,
+) -> Result<(), CliError> {
     let local_tree = git_in(project_root, &["ls-tree", "-r", "--name-only", local_tip])?;
     let remote_tree = git_in(project_root, &["ls-tree", "-r", "--name-only", remote_tip])?;
 

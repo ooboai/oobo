@@ -122,7 +122,7 @@ pub fn all_sessions() -> Result<Vec<Session>, String> {
 }
 
 pub mod transcript {
-    use super::{PathBuf, conversations_dir, threads_dir, fs, Path, Message};
+    use super::{conversations_dir, fs, threads_dir, Message, Path, PathBuf};
 
     pub fn find_transcript_path(_project_path: &str, session_id: &str) -> Option<PathBuf> {
         for dir_fn in [conversations_dir, threads_dir] {

@@ -54,10 +54,7 @@ impl TurnTap for CursorTurnTap {
     }
 }
 
-fn ingest_cursor_session(
-    session_id: &str,
-    sink: &mut dyn TurnSink,
-) -> TapSummary {
+fn ingest_cursor_session(session_id: &str, sink: &mut dyn TurnSink) -> TapSummary {
     let mut summary = TapSummary::default();
     let bubbles = read_bubbles(session_id);
 

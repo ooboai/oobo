@@ -81,12 +81,16 @@ pub fn project_root_from(cwd: &str) -> String {
         .env_remove("GIT_QUARANTINE_PATH")
         .output()
         .ok()
-        .filter(|o| o.status.success()).map_or_else(|| cwd.to_string(), |o| {
-            String::from_utf8_lossy(&o.stdout)
-                .replace('\r', "")
-                .trim()
-                .to_string()
-        })
+        .filter(|o| o.status.success())
+        .map_or_else(
+            || cwd.to_string(),
+            |o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .replace('\r', "")
+                    .trim()
+                    .to_string()
+            },
+        )
 }
 
 /// Get current branch name.

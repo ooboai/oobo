@@ -49,11 +49,15 @@ pub fn run_list(cfg: &Config, opts: &Options, mode: OutputMode) -> CmdResult {
     };
 
     let rows = if let Some(ref root) = root {
-        crate::feed::load(cfg, root, &crate::feed::LoadOptions {
-            limit: opts.limit,
-            since: since_epoch,
-            tool: opts.tool.clone(),
-        })?
+        crate::feed::load(
+            cfg,
+            root,
+            &crate::feed::LoadOptions {
+                limit: opts.limit,
+                since: since_epoch,
+                tool: opts.tool.clone(),
+            },
+        )?
     } else {
         if mode == OutputMode::Json {
             let json = serde_json::json!({ "error": "not inside a git repository" });
@@ -85,8 +89,7 @@ pub fn run_list(cfg: &Config, opts: &Options, mode: OutputMode) -> CmdResult {
 /// `oobo anchors show <sha>` — drill-down on one anchor.
 #[tracing::instrument(skip_all, fields(sha))]
 pub fn run_show(cfg: &Config, sha: &str, mode: OutputMode) -> CmdResult {
-    let root = crate::git::proxy::project_root(cfg)
-        .ok_or(CliError::NotARepo)?;
+    let root = crate::git::proxy::project_root(cfg).ok_or(CliError::NotARepo)?;
 
     let matches = resolve_sha(&root, sha);
     match matches.len() {
@@ -118,9 +121,7 @@ pub fn run_show(cfg: &Config, sha: &str, mode: OutputMode) -> CmdResult {
             emit_show_agent(&anchor, &sessions);
             Ok(0)
         }
-        OutputMode::Tui => {
-            crate::tui::app::run_show(cfg, &commit_hash)
-        }
+        OutputMode::Tui => crate::tui::app::run_show(cfg, &commit_hash),
     }
 }
 
@@ -142,19 +143,26 @@ struct SessionInfo {
 
 fn load_sessions(project_root: &str, commit_hash: &str) -> Vec<SessionInfo> {
     let links = crate::git::orphan::read_session_links(project_root, commit_hash);
-    links.iter().map(|l| {
-        let input = l.input_tokens.unwrap_or(0) as i64;
-        let output = l.output_tokens.unwrap_or(0) as i64;
-        let cache_read = l.cache_read_tokens.unwrap_or(0) as i64;
-        let cache_write = l.cache_creation_tokens.unwrap_or(0) as i64;
-        let total = input + output + cache_read + cache_write;
-        SessionInfo {
-            id: l.session_id.clone(),
-            tool: l.agent.clone(),
-            model: l.model.clone(),
-            input, output, cache_read, cache_write, total,
-        }
-    }).collect()
+    links
+        .iter()
+        .map(|l| {
+            let input = l.input_tokens.unwrap_or(0) as i64;
+            let output = l.output_tokens.unwrap_or(0) as i64;
+            let cache_read = l.cache_read_tokens.unwrap_or(0) as i64;
+            let cache_write = l.cache_creation_tokens.unwrap_or(0) as i64;
+            let total = input + output + cache_read + cache_write;
+            SessionInfo {
+                id: l.session_id.clone(),
+                tool: l.agent.clone(),
+                model: l.model.clone(),
+                input,
+                output,
+                cache_read,
+                cache_write,
+                total,
+            }
+        })
+        .collect()
 }
 
 // ------------------------------------------------------------------
@@ -163,7 +171,8 @@ fn load_sessions(project_root: &str, commit_hash: &str) -> Vec<SessionInfo> {
 
 fn resolve_sha(project_root: &str, prefix: &str) -> Vec<(String, String)> {
     let hashes = crate::git::orphan::list_anchor_hashes(project_root);
-    hashes.into_iter()
+    hashes
+        .into_iter()
         .filter(|h| h.starts_with(prefix))
         .filter_map(|h| {
             let anchor = crate::git::orphan::read_anchor(project_root, &h)?;
@@ -399,7 +408,6 @@ fn emit_show_agent(anchor: &Anchor, sessions: &[SessionInfo]) {
     }
     println!("  oobo goto <turn-or-commit>   # travel to this point");
 }
-
 
 fn emit_show_json(cfg: &Config, anchor: &Anchor, sessions: &[SessionInfo]) {
     let ts = chrono::DateTime::from_timestamp(anchor.committed_at, 0)

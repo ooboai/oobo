@@ -252,7 +252,11 @@ pub fn extract_all_sessions_global() -> Vec<Session> {
 
 // ── Shared helpers ───────────────────────────────────────────────────
 
-fn parse_composer_value(c: &serde_json::Value, project_path: &str, ws_dir: &str) -> Option<Session> {
+fn parse_composer_value(
+    c: &serde_json::Value,
+    project_path: &str,
+    ws_dir: &str,
+) -> Option<Session> {
     let cid = c.get("composerId").and_then(|v| v.as_str())?;
     if cid.is_empty() {
         return None;
@@ -297,7 +301,6 @@ fn parse_composer_value(c: &serde_json::Value, project_path: &str, ws_dir: &str)
         subagent_type: subagent_tp,
     })
 }
-
 
 #[cfg(test)]
 mod tests {

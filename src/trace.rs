@@ -73,8 +73,7 @@ pub fn init() {
     let default_filter = "anchor=info,oobo=info,warn";
     let filter = std::env::var("OOBO_LOG").unwrap_or_else(|_| default_filter.to_string());
 
-    let env_filter = tracing_subscriber::EnvFilter::builder()
-        .parse_lossy(&filter);
+    let env_filter = tracing_subscriber::EnvFilter::builder().parse_lossy(&filter);
 
     let log_dir = log_directory();
     let _ = std::fs::create_dir_all(&log_dir);

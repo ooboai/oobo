@@ -149,8 +149,7 @@ impl App {
         let anchors = load_anchors(&cfg, &root, 500, TimeWindow::All)?;
         tracing::debug!(anchor_count = anchors.len(), "TUI anchors loaded");
         let branch = current_branch(&root);
-        let anchor_remote =
-            crate::commands::sync::resolve(&cfg, Some(&root)).anchor_remote;
+        let anchor_remote = crate::commands::sync::resolve(&cfg, Some(&root)).anchor_remote;
         let dirty = worktree_dirty(&root);
 
         let mut feed = FeedState {
@@ -352,10 +351,7 @@ pub fn run_search(cfg: &Config, query: &str) -> CmdResult {
         return Ok(0);
     };
 
-    if !query.is_empty() {
-        let ss = app.start_search(query.to_string());
-        app.stack.push(View::Search(ss));
-    } else {
+    if query.is_empty() {
         app.stack.push(View::Search(SearchState {
             input: String::new(),
             query: String::new(),
@@ -365,6 +361,9 @@ pub fn run_search(cfg: &Config, query: &str) -> CmdResult {
             status: SearchStatus::Input,
             rx: None,
         }));
+    } else {
+        let ss = app.start_search(query.to_string());
+        app.stack.push(View::Search(ss));
     }
 
     run_tui(&mut terminal, &mut app)
@@ -393,10 +392,7 @@ pub fn run_show(cfg: &Config, commit_sha: &str) -> CmdResult {
 
 // ── Event loop ────────────────────────────────────────────────────────
 
-pub(super) fn event_loop(
-    terminal: &mut ratatui::DefaultTerminal,
-    app: &mut App,
-) -> CmdResult {
+pub(super) fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> CmdResult {
     loop {
         poll_search_results(app);
         app.tick = app.tick.wrapping_add(1);
@@ -405,8 +401,8 @@ pub(super) fn event_loop(
             .draw(|frame| draw(frame, app))
             .map_err(|e| CliError::User(format!("tui draw: {e}")))?;
 
-        let Some(key) = super::next_key(Duration::from_millis(100))
-            .map_err(|e: io::Error| CliError::Io {
+        let Some(key) =
+            super::next_key(Duration::from_millis(100)).map_err(|e: io::Error| CliError::Io {
                 context: "key read".into(),
                 source: e,
             })?
@@ -456,8 +452,8 @@ fn poll_search_results(app: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::MemoryKind;
+    use super::*;
 
     fn anchor(subject: &str, intent: Option<&str>, tool: Option<&str>) -> AnchorRow {
         AnchorRow {

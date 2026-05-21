@@ -67,17 +67,12 @@ pub fn load(cfg: &Config, project_root: &str, opts: &LoadOptions) -> Result<Vec<
     let git_count = n * 4;
     let log = crate::git::proxy::run_git_capture_in(
         cfg,
-        &[
-            "log",
-            &format!("-{git_count}"),
-            "--format=%H|||%s|||%ct",
-        ],
+        &["log", &format!("-{git_count}"), "--format=%H|||%s|||%ct"],
         Some(project_root),
     )
     .unwrap_or_default();
 
-    let (all_anchors, all_links) =
-        crate::git::anchor_cache::load_anchors_cached(project_root);
+    let (all_anchors, all_links) = crate::git::anchor_cache::load_anchors_cached(project_root);
     let anchor_map: HashMap<String, &Anchor> = all_anchors
         .iter()
         .map(|a| (a.commit_hash.clone(), a))
@@ -108,10 +103,7 @@ pub fn load(cfg: &Config, project_root: &str, opts: &LoadOptions) -> Result<Vec<
 
         if let Some(t) = opts.tool.as_deref() {
             let want = t.to_lowercase();
-            let has = tool
-                .as_deref()
-                .map(str::to_lowercase)
-                .unwrap_or_default();
+            let has = tool.as_deref().map(str::to_lowercase).unwrap_or_default();
             if has != want {
                 continue;
             }
@@ -122,9 +114,7 @@ pub fn load(cfg: &Config, project_root: &str, opts: &LoadOptions) -> Result<Vec<
             .and_then(|a| a.ai_percentage)
             .map(|p| p.round() as i64);
 
-        let intent = anchor_map
-            .get(&sha)
-            .and_then(|a| a.intent.clone());
+        let intent = anchor_map.get(&sha).and_then(|a| a.intent.clone());
 
         out.push(FeedRow {
             kind: RowKind::Anchor,
@@ -154,9 +144,7 @@ pub fn load(cfg: &Config, project_root: &str, opts: &LoadOptions) -> Result<Vec<
     Ok(out)
 }
 
-fn summarize_links(
-    links: &[crate::core::anchor::SessionLink],
-) -> (Option<String>, i64, usize) {
+fn summarize_links(links: &[crate::core::anchor::SessionLink]) -> (Option<String>, i64, usize) {
     if links.is_empty() {
         return (None, 0, 0);
     }
@@ -210,7 +198,9 @@ fn shadow_to_row(
     let worktree_hint = if turn.worktree_id == current_wt {
         None
     } else {
-        turn.branch.clone().or_else(|| Some(turn.worktree_id[..8.min(turn.worktree_id.len())].to_string()))
+        turn.branch
+            .clone()
+            .or_else(|| Some(turn.worktree_id[..8.min(turn.worktree_id.len())].to_string()))
     };
 
     Some(FeedRow {
@@ -270,10 +260,7 @@ fn turn_file_count(turn: &TurnSnapshot) -> usize {
     }
 }
 
-fn collect_file_paths_from_value(
-    value: &serde_json::Value,
-    files: &mut HashSet<String>,
-) {
+fn collect_file_paths_from_value(value: &serde_json::Value, files: &mut HashSet<String>) {
     for key in ["file_path", "path"] {
         if let Some(path) = value.get(key).and_then(|v| v.as_str()) {
             push_counted_file(path, files);
@@ -329,4 +316,3 @@ fn sort_rows(rows: &mut [FeedRow]) {
         b.timestamp.cmp(&a.timestamp).then_with(|| b.id.cmp(&a.id))
     });
 }
-

@@ -120,7 +120,9 @@ fn ingest_file(
     let mut prev_cum = CumulativeTokens::zero();
 
     for (lineno, line_res) in reader.lines().enumerate() {
-        let line = if let Ok(l) = line_res { l } else {
+        let line = if let Ok(l) = line_res {
+            l
+        } else {
             summary.turns_skipped += 1;
             continue;
         };

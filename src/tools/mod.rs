@@ -97,7 +97,10 @@ mod tests {
     #[test]
     fn test_registry_names_unique() {
         let reg = registry_with(true);
-        let names: Vec<&str> = reg.all().map(super::super::core::tool::Tool::name).collect();
+        let names: Vec<&str> = reg
+            .all()
+            .map(super::super::core::tool::Tool::name)
+            .collect();
         let mut deduped = names.clone();
         deduped.sort_unstable();
         deduped.dedup();

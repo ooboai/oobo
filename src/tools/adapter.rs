@@ -225,16 +225,20 @@ impl Tool for AiderTool {
             .env_remove("GIT_QUARANTINE_PATH")
             .output()
             .ok()
-            .filter(|o| o.status.success()).map_or_else(|| {
-                std::env::current_dir()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default()
-            }, |o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .replace('\r', "")
-                    .trim()
-                    .to_string()
-            });
+            .filter(|o| o.status.success())
+            .map_or_else(
+                || {
+                    std::env::current_dir()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                },
+                |o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .replace('\r', "")
+                        .trim()
+                        .to_string()
+                },
+            );
         crate::tools::aider::sessions_for_project(&project_root)
     }
 

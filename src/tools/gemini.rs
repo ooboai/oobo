@@ -124,9 +124,10 @@ fn session_from_file(path: &Path, project_path: &str) -> Option<Session> {
         return None;
     }
 
-    let name = v
-        .get("summary")
-        .and_then(|s| s.as_str()).map_or_else(|| extract_first_user_message(messages), |s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN));
+    let name = v.get("summary").and_then(|s| s.as_str()).map_or_else(
+        || extract_first_user_message(messages),
+        |s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN),
+    );
 
     let created_at = crate::utils::parse_iso_timestamp(start_time);
     let updated_at = crate::utils::parse_iso_timestamp(last_updated);
@@ -224,7 +225,7 @@ pub fn all_sessions() -> Result<Vec<Session>, String> {
 }
 
 pub mod transcript {
-    use super::{PathBuf, tmp_dir, fs, Path, Message, content_to_string};
+    use super::{content_to_string, fs, tmp_dir, Message, Path, PathBuf};
 
     pub fn find_transcript_path(_project_path: &str, session_id: &str) -> Option<PathBuf> {
         let tmp = tmp_dir()?;
@@ -364,10 +365,22 @@ pub mod transcript {
             }
 
             if let Some(tokens) = msg.get("tokens") {
-                total_input += tokens.get("input").and_then(serde_json::Value::as_u64).unwrap_or(0);
-                total_output += tokens.get("output").and_then(serde_json::Value::as_u64).unwrap_or(0);
-                total_cached += tokens.get("cached").and_then(serde_json::Value::as_u64).unwrap_or(0);
-                total_thoughts += tokens.get("thoughts").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                total_input += tokens
+                    .get("input")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                total_output += tokens
+                    .get("output")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                total_cached += tokens
+                    .get("cached")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                total_thoughts += tokens
+                    .get("thoughts")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
             }
 
             if let Some(tool_calls) = msg.get("toolCalls").and_then(|tc| tc.as_array()) {

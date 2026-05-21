@@ -212,11 +212,23 @@ pub(crate) fn stats_from_modern_db(
         }
 
         if let Some(tokens) = v.get("tokens") {
-            input_tokens += tokens.get("input").and_then(serde_json::Value::as_u64).unwrap_or(0);
-            output_tokens += tokens.get("output").and_then(serde_json::Value::as_u64).unwrap_or(0);
+            input_tokens += tokens
+                .get("input")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            output_tokens += tokens
+                .get("output")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
             if let Some(cache) = tokens.get("cache") {
-                cache_read += cache.get("read").and_then(serde_json::Value::as_u64).unwrap_or(0);
-                cache_write += cache.get("write").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                cache_read += cache
+                    .get("read")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                cache_write += cache
+                    .get("write")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
             }
         }
 

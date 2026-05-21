@@ -40,7 +40,10 @@ fn replay_jsonl(content: &str) -> Option<serde_json::Value> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let kind = entry.get("kind").and_then(serde_json::Value::as_u64).unwrap_or(99);
+        let kind = entry
+            .get("kind")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(99);
 
         match kind {
             0 => {
@@ -141,7 +144,11 @@ fn parse_session_file(path: &Path, project_path: &str, ws_dir: &str) -> Option<S
         .first()
         .and_then(|r| r.get("message"))
         .and_then(|m| m.get("text"))
-        .and_then(|t| t.as_str()).map_or_else(|| "Copilot chat".to_string(), |s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN));
+        .and_then(|t| t.as_str())
+        .map_or_else(
+            || "Copilot chat".to_string(),
+            |s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN),
+        );
 
     let model = requests
         .first()
@@ -198,7 +205,7 @@ pub fn all_sessions() -> Result<Vec<Session>, String> {
 }
 
 pub mod transcript {
-    use super::{PathBuf, vscode_fork, VSCODE_APP, Path, Message, fs, replay_jsonl};
+    use super::{fs, replay_jsonl, vscode_fork, Message, Path, PathBuf, VSCODE_APP};
 
     pub fn find_transcript_path(project_path: &str, session_id: &str) -> Option<PathBuf> {
         let ws_dirs =

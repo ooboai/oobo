@@ -15,7 +15,9 @@ pub fn run(cfg: &Config, mode: OutputMode) -> CmdResult {
 }
 
 fn in_repo(cfg: &Config, mode: OutputMode) -> CmdResult {
-    if mode == OutputMode::Tui { crate::tui::app::run(cfg) } else {
+    if mode == OutputMode::Tui {
+        crate::tui::app::run(cfg)
+    } else {
         crate::commands::anchors::run(cfg, 50, mode)?;
         Ok(0)
     }
@@ -30,4 +32,27 @@ fn outside_repo(mode: OutputMode) -> CmdResult {
         eprintln!("oobo: not inside a git repository.");
     }
     Ok(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outside_repo_returns_exit_code_1() {
+        let code = outside_repo(OutputMode::Agent).unwrap();
+        assert_eq!(code, 1);
+    }
+
+    #[test]
+    fn outside_repo_json_returns_exit_code_1() {
+        let code = outside_repo(OutputMode::Json).unwrap();
+        assert_eq!(code, 1);
+    }
+
+    #[test]
+    fn outside_repo_tui_returns_exit_code_1() {
+        let code = outside_repo(OutputMode::Tui).unwrap();
+        assert_eq!(code, 1);
+    }
 }

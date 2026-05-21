@@ -40,6 +40,7 @@ Three mutually exclusive modes:
 | Per-line AI blame | `oobo blame src/main.rs` |
 | Plain git blame (no AI column) | `oobo blame --no-ai src/main.rs` |
 | Search sessions + anchors | `oobo search "query"` |
+| Compare two anchors | `oobo delta` |
 | Travel to a turn or commit | `oobo goto <id>` |
 | Return to where you were | `oobo back` |
 | Enable tracking in this repo | `oobo enable` |

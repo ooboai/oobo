@@ -181,7 +181,7 @@ fn days_from_epoch(y: i32, m: u32, d: u32) -> i64 {
 }
 
 pub mod transcript {
-    use super::{PathBuf, history_path, Path, Message, fs};
+    use super::{fs, history_path, Message, Path, PathBuf};
 
     pub fn find_transcript_path(project_path: &str, _session_id: &str) -> Option<PathBuf> {
         let p = history_path(project_path);
@@ -310,7 +310,10 @@ pub mod analytics {
                 continue;
             }
 
-            let time = entry.get("time").and_then(serde_json::Value::as_i64).unwrap_or(0);
+            let time = entry
+                .get("time")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
             if time < start_secs || time >= end_secs {
                 continue;
             }
@@ -350,8 +353,7 @@ pub mod analytics {
         }
         let start_ms = session_start_ms?;
         let start_secs = start_ms / 1000;
-        let end_secs = session_end_ms
-            .map_or(start_secs + 86400, |ms| ms / 1000);
+        let end_secs = session_end_ms.map_or(start_secs + 86400, |ms| ms / 1000);
 
         let events = load_events_in_window(start_secs, end_secs);
         if events.is_empty() {

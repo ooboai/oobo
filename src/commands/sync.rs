@@ -19,11 +19,8 @@ impl ResolvedConfig {
 /// Precedence for each setting:
 ///   env var > `.oobo/config` (project) > `~/.oobo/config` (global) > compiled default
 pub fn resolve(cfg: &Config, project_root: Option<&str>) -> ResolvedConfig {
-    let project = project_root.and_then(|r| {
-        crate::project_config::ProjectConfig::load(r)
-            .ok()
-            .flatten()
-    });
+    let project =
+        project_root.and_then(|r| crate::project_config::ProjectConfig::load(r).ok().flatten());
 
     let api_key = resolve_api_key_inner(cfg, project.as_ref());
     let api_url = resolve_api_url_inner(cfg, project.as_ref());
@@ -113,7 +110,11 @@ mod tests {
             let saved_url = std::env::var("OOBO_API_URL").ok();
             std::env::remove_var("OOBO_SECRET_KEY");
             std::env::remove_var("OOBO_API_URL");
-            Self { saved_key, saved_url, _lock: lock }
+            Self {
+                saved_key,
+                saved_url,
+                _lock: lock,
+            }
         }
     }
 
