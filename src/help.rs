@@ -139,7 +139,6 @@ Usage:
   oobo blame src/main.rs abc123       At a specific commit
   oobo blame src/main.rs --agent      Compact text columns
   oobo blame src/main.rs --json       Rich per-line JSON (for plugins)
-  oobo blame src/main.rs --no-ai      Pure git blame (no AI column)
 
 Color coding (pretty mode):
   magenta  = AI-generated (tool name shown, e.g. cursor, claude)
@@ -180,8 +179,9 @@ oobo settings are layered: defaults apply globally, project overrides
 take precedence when inside a repo with .oobo/config.
 
 Settings:
-  key              API key for oobo.ai cloud sync
-  remote           API endpoint URL (default: https://api.oobo.ai)
+  key              API key for oobo.ai cloud features
+  api_url          API endpoint URL (default: https://api.oobo.ai)
+  remote           Git remote name for anchor branch sync (default: origin)
   transparency     Sync transcripts to anchors branch (on/off, default: on)
   tools.experimental  Enable experimental tool adapters (on/off)
 
@@ -189,7 +189,7 @@ Commands:
   oobo settings                       Show all effective settings
   oobo settings set key <value>       Set a default
   oobo settings unset key             Remove a setting
-  oobo settings project set remote X  Per-project override
+  oobo settings project set api_url X Per-project override
 
 Files:
   ~/.oobo/config.toml    Global defaults

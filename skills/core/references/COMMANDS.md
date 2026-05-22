@@ -25,7 +25,6 @@ oobo anchor show <sha> --json                      # Full anchor detail
 ```bash
 oobo blame src/main.rs                             # Git blame with AI attribution
 oobo blame src/main.rs abc123                       # Blame at a specific commit
-oobo blame src/main.rs --no-ai                      # Pure git blame
 oobo blame src/main.rs --json                       # Structured per-line output
 ```
 

@@ -38,7 +38,6 @@ Three mutually exclusive modes:
 | Anchors in the last 24h | `oobo --since 24h` |
 | Filter by tool | `oobo --tool cursor` |
 | Per-line AI blame | `oobo blame src/main.rs` |
-| Plain git blame (no AI column) | `oobo blame --no-ai src/main.rs` |
 | Search sessions + anchors | `oobo search "query"` |
 | Compare two anchors | `oobo delta` |
 | Travel to a turn or commit | `oobo goto <id>` |

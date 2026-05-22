@@ -157,9 +157,6 @@ pub enum Command {
                        oobo blame src/main.rs --json   JSON output"
     )]
     Blame {
-        /// Pure `git blame` output (no AI column).
-        #[arg(long = "no-ai")]
-        no_ai: bool,
         /// Arguments forwarded to `git blame` (plus AI overlay).
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -309,9 +306,6 @@ pub enum AnchorAction {
                        oobo blame src/main.rs abc123   At a specific commit\n  \
                        oobo blame src/main.rs --json   JSON output")]
     Blame {
-        /// Pure `git blame` output (no AI column).
-        #[arg(long = "no-ai")]
-        no_ai: bool,
         /// Arguments forwarded to `git blame` (plus AI overlay).
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -498,7 +492,7 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                 let code = crate::commands::anchors::run_show(cfg, &sha, mode)?;
                 Ok(code)
             }
-            AnchorAction::Blame { no_ai, args } => dispatch_blame(cfg, no_ai, args, mode),
+            AnchorAction::Blame { args } => dispatch_blame(cfg, args, mode),
         },
         Some(Command::Delta {
             anchor_sha,
@@ -523,7 +517,7 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
             let code = crate::commands::goto::run_back(cfg, mode)?;
             Ok(code)
         }
-        Some(Command::Blame { no_ai, args }) => dispatch_blame(cfg, no_ai, args, mode),
+        Some(Command::Blame { args }) => dispatch_blame(cfg, args, mode),
         Some(Command::Search {
             query,
             global,
@@ -713,7 +707,7 @@ fn run_anchors_feed(cfg: &Config, cli: &Cli, mode: OutputMode) -> CmdResult {
     }
 }
 
-fn dispatch_blame(cfg: &Config, no_ai: bool, mut args: Vec<String>, mode: OutputMode) -> CmdResult {
+fn dispatch_blame(cfg: &Config, mut args: Vec<String>, mode: OutputMode) -> CmdResult {
     let mut mode = mode;
     let mut local_json = false;
     let mut local_agent = false;
@@ -738,6 +732,6 @@ fn dispatch_blame(cfg: &Config, no_ai: bool, mut args: Vec<String>, mode: Output
     } else if local_agent {
         mode = OutputMode::Agent;
     }
-    let code = crate::commands::blame::run(cfg, no_ai, &args, mode)?;
+    let code = crate::commands::blame::run(cfg, &args, mode)?;
     Ok(code)
 }

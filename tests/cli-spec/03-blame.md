@@ -8,10 +8,7 @@ Positional args:
 - `<file>` — required path to a tracked file, relative to repo root or absolute.
 - `[commit]` — optional commit-ish (SHA, branch, tag); defaults to `HEAD`.
 
-Passthrough flags from `git blame` (not exhaustive): `-L <range>`, `-w`, `--abbrev=N`, `-M`, `-C`, `--root`, `--incremental`, `--line-porcelain`, `--porcelain`, `-s`, `-e`, `--date=<fmt>`, `--since=<date>`, `--until=<date>`, `-b`. These are forwarded verbatim to the underlying git invocation.
-
-oobo-specific flags:
-- `--no-ai` — strip the AI attribution column; emit pure `git blame` output.
+Forwarded flags from `git blame` (not exhaustive): `-L <range>`, `-w`, `--abbrev=N`, `-M`, `-C`, `--root`, `--incremental`, `--line-porcelain`, `--porcelain`, `-s`, `-e`, `--date=<fmt>`, `--since=<date>`, `--until=<date>`, `-b`. These are forwarded verbatim to the underlying git invocation. Machine-output formats (`--porcelain`, `--line-porcelain`, `--incremental`) bypass the AI overlay automatically.
 
 ---
 
@@ -88,7 +85,7 @@ a1b2c3d claude Teddy     5  }
 
 ---
 
-## Git-blame flag passthrough
+## Git-blame flag forwarding
 
 ### `-L <start>,<end>`
 `oobo blame -L 10,20 src/main.rs`
@@ -104,20 +101,6 @@ a1b2c3d claude Teddy     5  }
 `oobo blame --porcelain src/main.rs`
 
 **Behavior:** Emit git's porcelain format UNCHANGED — no extra AI column, because porcelain is intended for machine parsing and must round-trip. This mode is for scripts that already parse `git blame --porcelain`. To get machine-readable AI attribution, use `--json` instead.
-
-**Exit code:** `0`.
-
-### `--no-ai`
-`oobo blame --no-ai src/main.rs`
-
-**Behavior:** Emit output byte-for-byte identical to `git blame src/main.rs`. No AI column, no extra processing. This is the "I'm scripting against git blame and don't want oobo noise" escape hatch.
-
-**Example output:**
-```
-a1b2c3d (Teddy 2m)   1) fn main() {
-a1b2c3d (Teddy 2m)   2)     let args = parse_args();
-d4e5f6g (Teddy 18m)  3)     let config = load_config();
-```
 
 **Exit code:** `0`.
 
@@ -188,7 +171,6 @@ a1b2c3d - Teddy     2      let args = parse_args();
 
 ## Invariants
 
-- `oobo blame --no-ai $file` output is byte-for-byte identical to `git blame $file`.
 - `oobo blame --porcelain $file` output is byte-for-byte identical to `git blame --porcelain $file`.
-- For any file with zero AI sessions linked to any of its commits, `oobo blame $file` differs from `git blame $file` only by added `-` columns on each line (or no difference with `--no-ai`).
+- For any file with zero AI sessions linked to any of its commits, `oobo blame $file` differs from `git blame $file` only by added `-` columns on each line.
 - `oobo blame $file --agent` never contains ANSI escape codes.

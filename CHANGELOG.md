@@ -14,7 +14,7 @@ output modes, and a flagship `anchors` experience.
 
 - **`oobo anchor show <sha>`** drill-down (pretty / agent / json). Accepts unambiguous SHA prefixes.
 - **`oobo anchors` filters**: `--since <24h|7d|ISO>`, `--tool`, `--project` (outside-repo only).
-- **`oobo blame`** (also available as `oobo anchor blame`) is now a strict superset of `git blame`. Every `git blame` flag is forwarded; an AI-attribution column is overlaid for pretty/agent mode. `--no-ai`, `--porcelain`, `--line-porcelain`, `--incremental` bypass the overlay.
+- **`oobo blame`** (also available as `oobo anchor blame`) is now a strict superset of `git blame`. Every `git blame` flag is forwarded; an AI-attribution column is overlaid for pretty/agent mode. Machine formats (`--porcelain`, `--line-porcelain`, `--incremental`) bypass the overlay automatically.
 - **`oobo search`** promoted to a top-level verb. Local search (orphan branch) with `--since`, `--project`, `--tool`, `--limit`.
 - **`oobo settings`** declarative KV config with positional grammar: `oobo settings [scope] [verb] <key> [value]`. Scope defaults to `default`, verb defaults to `get`. Keys: `key`, `api_url`, `remote`, `transparency`, `tools.experimental`, `setup.scan_roots`.
 - **`oobo enable` / `oobo disable`** per-project tracking toggles (idempotent).
@@ -40,7 +40,7 @@ output modes, and a flagship `anchors` experience.
 - **Output modes** are three mutually exclusive modes: pretty (TTY), agent (`--agent`, token-efficient plain text for LLMs), json (`--json`).
 - **`oobo anchors --json`** now emits a flat JSON array (no envelope).
 - **Default anchors limit** raised from 10 → 50.
-- Help output regrouped into Views / Actions / Wizard + Config / Lifecycle / Git Passthrough sections.
+- Help output regrouped into Views / Actions / Wizard + Config / Lifecycle sections.
 
 ### Removed
 

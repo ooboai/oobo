@@ -195,7 +195,6 @@ oobo back                               # return to where you were
 ```bash
 oobo blame src/main.rs                       # git blame with an extra AI column
 oobo blame src/main.rs abc123                # at a specific commit
-oobo blame --no-ai src/main.rs               # byte-identical to `git blame`
 oobo blame src/main.rs --json                # per-line AI attribution as JSON
 ```
 

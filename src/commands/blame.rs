@@ -5,8 +5,8 @@
 //! branch, and look up per-line AI/human attribution. This gives historically
 //! accurate blame across the full file history — not just the latest commit.
 //!
-//! Passthrough modes: `--no-ai`, `--porcelain`, `--line-porcelain`,
-//! `--incremental` forward to `git blame` byte-for-byte.
+//! Machine-output modes (`--porcelain`, `--line-porcelain`,
+//! `--incremental`) forward to `git blame` byte-for-byte.
 
 use std::collections::HashMap;
 
@@ -39,19 +39,19 @@ struct LineBlame {
 }
 
 /// Entry point.
-pub fn run(cfg: &Config, no_ai: bool, args: &[String], mode: OutputMode) -> CmdResult {
+pub fn run(cfg: &Config, args: &[String], mode: OutputMode) -> CmdResult {
     if proxy::project_root(cfg).is_none() {
         eprintln!("oobo: not inside a git repository.");
         return Ok(1);
     }
 
-    if no_ai || is_machine_output(args) {
-        return passthrough(cfg, args);
+    if is_machine_output(args) {
+        return raw_git_blame(cfg, args);
     }
 
     let (file, commit) = detect_file_and_commit(args);
     if file.is_empty() {
-        return passthrough(cfg, args);
+        return raw_git_blame(cfg, args);
     }
 
     match mode {
@@ -244,10 +244,10 @@ fn build_full_blame(
 }
 
 // ------------------------------------------------------------------
-// passthrough
+// raw git blame (machine-output bypass)
 // ------------------------------------------------------------------
 
-fn passthrough(cfg: &Config, args: &[String]) -> CmdResult {
+fn raw_git_blame(cfg: &Config, args: &[String]) -> CmdResult {
     let mut argv: Vec<String> = vec!["blame".to_string()];
     argv.extend_from_slice(args);
     let borrowed: Vec<&str> = argv.iter().map(String::as_str).collect();
@@ -298,7 +298,7 @@ fn detect_file_and_commit(args: &[String]) -> (String, Option<String>) {
 fn emit_json(cfg: &Config, file: &str, commit: Option<&str>, args: &[String]) -> CmdResult {
     let (normalized, blame_lines) = match build_full_blame(cfg, file, commit, true) {
         Ok(v) => v,
-        Err(_) => return passthrough(cfg, args),
+        Err(_) => return raw_git_blame(cfg, args),
     };
 
     let line_entries: Vec<serde_json::Value> = blame_lines
@@ -356,7 +356,7 @@ fn emit_json(cfg: &Config, file: &str, commit: Option<&str>, args: &[String]) ->
 fn emit_agent(cfg: &Config, file: &str, commit: Option<&str>, args: &[String]) -> CmdResult {
     let (_, blame_lines) = match build_full_blame(cfg, file, commit, false) {
         Ok(v) => v,
-        Err(_) => return passthrough(cfg, args),
+        Err(_) => return raw_git_blame(cfg, args),
     };
 
     for lb in &blame_lines {
@@ -379,7 +379,7 @@ fn emit_agent(cfg: &Config, file: &str, commit: Option<&str>, args: &[String]) -
 fn emit_overlay(cfg: &Config, file: &str, commit: Option<&str>, args: &[String]) -> CmdResult {
     let (_, blame_lines) = match build_full_blame(cfg, file, commit, false) {
         Ok(v) => v,
-        Err(_) => return passthrough(cfg, args),
+        Err(_) => return raw_git_blame(cfg, args),
     };
 
     // Run normal git blame for the formatted output
@@ -388,7 +388,7 @@ fn emit_overlay(cfg: &Config, file: &str, commit: Option<&str>, args: &[String])
     let borrowed: Vec<&str> = blame_argv.iter().map(String::as_str).collect();
     let raw = match proxy::run_git_capture(cfg, &borrowed) {
         Ok(s) => s,
-        Err(_) => return passthrough(cfg, args),
+        Err(_) => return raw_git_blame(cfg, args),
     };
 
     // Index blame_lines by final_lineno for O(1) lookup

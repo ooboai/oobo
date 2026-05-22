@@ -32,6 +32,8 @@ It serves two purposes:
 | `12-hooks.md` | Hidden `oobo hooks …` — agent/post-commit/pre-push/post-merge/post-rewrite |
 | `13-env-vars.md` | Environment variables (`OOBO_HOME`, `NO_COLOR`, agent env, internal markers) |
 | `14-turns-from.md` | `oobo goto` / `oobo back` — time travel between turns and commits |
+| `15-delta.md` | `oobo delta` — textual diff between two anchors (requires API key) |
+| `16-help.md` | `oobo help [topic]` — built-in documentation system |
 
 ## Conventions
 
@@ -73,13 +75,13 @@ Every invocation follows this block shape:
 - **Pretty mode.** TTY output with colors/borders/TUI. Default when none of `--agent` / `--json` is set.
 - **JSON mode.** `--json` flag is active. Full structured data.
 - **Enabled project.** Project has `.oobo/config` and `[project].enabled` is not `false`.
-- **Reserved verbs.** `anchor`, `anchors`, `search`, `enable`, `disable`, `setup`, `settings`, `update`, `hooks` (hidden). Anything else at position 1 is a clap error (or a legacy hint if it matches the hint table).
+- **Reserved verbs.** `anchor`, `anchors`, `blame`, `delta`, `goto`, `back`, `search`, `enable`, `disable`, `setup`, `settings`, `help`, `update`, `hooks` (hidden). Anything else at position 1 is a clap error (or a legacy hint if it matches the hint table).
 
 ### Completeness check
 
 Every user-visible and internal command in the 1.0 surface is specced in this folder:
 
-- User-visible: `anchors`, `anchor` (show, blame, from), `search`, `enable`, `disable`, `setup`, `settings`, `update`.
+- User-visible: `anchors`, `anchor` (show, blame), `blame`, `delta`, `goto`, `back`, `search`, `enable`, `disable`, `setup`, `settings`, `help`, `update`.
 - Hidden: `hooks` (agent / post-commit / pre-push / post-merge / post-rewrite), `update --post-update`.
 - Bare `oobo` (the primary feed), legacy hints, global flags, environment variables.
 
