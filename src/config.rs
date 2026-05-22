@@ -315,6 +315,7 @@ impl Config {
         Ok(())
     }
 
+    #[cfg(unix)]
     fn has_any_key(&self) -> bool {
         !self.server.api_key.is_empty()
             || !self.claude.api_key.is_empty()
@@ -614,6 +615,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_has_any_key_includes_opencode() {
         let mut cfg = Config::default();
         assert!(!cfg.has_any_key());
@@ -622,6 +624,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_has_any_key_includes_aider_and_trae() {
         let mut cfg = Config::default();
         assert!(!cfg.has_any_key());
@@ -634,6 +637,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_has_any_key_includes_new_agents() {
         for setter in [
             |c: &mut Config| c.kiro.api_key = "k".into(),

@@ -1,6 +1,6 @@
 # Commands
 
-Current command reference for `oobo` 1.0.0-rc.1. Commands support global `--agent`, `--json`, and `--interactive` output-mode flags. Filter flags (`-n`, `--since`, `--tool`) are also global.
+Current command reference for `oobo` 1.0.0. Commands support global `--agent`, `--json`, and `--interactive` output-mode flags. Filter flags (`-n`, `--since`, `--tool`) are also global.
 
 ## Memory Feed (bare command)
 

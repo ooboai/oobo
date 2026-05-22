@@ -5,57 +5,91 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0-rc.1] - 2026-04-22
+## [1.0.0] - 2026-05-22
 
-Major sharpening release. Significantly narrower command surface, unified
-output modes, and a flagship `anchors` experience.
+Complete rewrite. oobo is no longer a git wrapper — it is a standalone
+developer memory tool that sits beside git and gives every commit context
+about which AI wrote what, how many tokens it took, and what the agent was
+thinking.
 
-### Added
+The 0.1.x series was an overbloated git decorator with 30+ commands
+(`oobo commit`, `oobo card`, `oobo dash`, `oobo sessions`, `oobo stats`,
+etc.). This release strips it down to a focused, narrow surface:
+**anchors are the product.**
 
-- **`oobo anchor show <sha>`** drill-down (pretty / agent / json). Accepts unambiguous SHA prefixes.
-- **`oobo anchors` filters**: `--since <24h|7d|ISO>`, `--tool`, `--project` (outside-repo only).
-- **`oobo blame`** (also available as `oobo anchor blame`) is now a strict superset of `git blame`. Every `git blame` flag is forwarded; an AI-attribution column is overlaid for pretty/agent mode. Machine formats (`--porcelain`, `--line-porcelain`, `--incremental`) bypass the overlay automatically.
-- **`oobo search`** promoted to a top-level verb. Local search (orphan branch) with `--since`, `--project`, `--tool`, `--limit`.
-- **`oobo settings`** declarative KV config with positional grammar: `oobo settings [scope] [verb] <key> [value]`. Scope defaults to `default`, verb defaults to `get`. Keys: `key`, `api_url`, `remote`, `transparency`, `tools.experimental`, `setup.scan_roots`.
-- **`oobo enable` / `oobo disable`** per-project tracking toggles (idempotent).
-- **`oobo setup`** rebuilt as a composable entry point: `--non-interactive`, `--reindex`, `--repair`.
-- **Zero-config tool detection**: AI tools are auto-detected at commit time — no indexing, no scanning, no database.
-- **Legacy command hint system**: removed 0.1.x verbs now print a hint and, in a TTY, offer to run the replacement. Scheduled for removal in 1.1.
-- **Agent auto-detection**: `--agent` auto-activates when stdout is not a TTY or any of `CURSOR_AGENT`, `CLAUDECODE`, `AIDER`, `CONTINUE_SESSION`, `CONTINUE_IDE`, `AICOMMITS` is set.
-- **`oobo goto <turn-or-sha>`** — time-travel to any turn snapshot or commit. Auto-stashes dirty changes, loads the target tree, records a return point. Multiple `goto` calls stack.
-- **`oobo back`** — return to where you were before `goto`. Pops the navigation stack, restores stash if one was created.
-- **`oobo delta`** — compare two anchors to see what changed: category shifts, complexity, new areas, new techniques, and a narrative summary. Requires an API key.
-- **`oobo help <topic>`** — built-in offline documentation. Topics: `anchors`, `search`, `blame`, `hooks`, `config`, `keyboard`.
-- **Search answer synthesis** — when remote memory hits are available, search results include a synthesized 1–3 sentence answer displayed above individual hits.
-- **Turn capture system** — TurnTap pipeline captures per-turn workspace state (tree hashes) for Claude, Cursor, Codex, and OpenCode. Enables `goto` to restore exact workspace snapshots mid-session.
-- **Unified TUI** — full-screen interactive memory timeline with anchor feed, live search (local filter + remote semantic), transcript viewer, session/file pickers, and keybinding help overlay.
-- **Heuristic subagent detection** — infers parent-child session relationships from file access patterns and timing when explicit signals are unavailable.
-- **Four-quadrant bare `oobo`** behavior (in-repo/outside × pretty/structured).
-- **Stable project-identity helpers** (`src/project.rs`): canonicalizes git remote URLs so SSH and HTTPS forms collapse to the same key.
-- **`tests/cli-spec/`** — behavioral contract for every 1.0 command.
+### What oobo 1.0 is
 
-### Changed
+- A **standalone binary** — never wraps or aliases git. You run `git`
+  for git things, `oobo` for memory things.
+- A **git-native metadata store** — anchors live on an orphan branch
+  (`oobo/anchors/v1`) that travels with your repo.
+- A **15-tool observer** — captures sessions from Cursor, Claude Code,
+  Gemini CLI, OpenCode, Codex, Aider, Copilot, Windsurf, Zed, Trae,
+  Amp, Continue, Factory Droid, Junie, and Kiro.
+- **Zero-config** — tool detection is automatic. No scanning, no indexing,
+  no database management commands.
 
-- **Cloud ingest pipeline removed**: there is no `POST /anchors/ingest` or outbox/sync system. Team sync is Git-first (orphan branch `oobo/anchors/v1`). `oobo settings set key` / `OOBO_SECRET_KEY` are used exclusively for remote search.
-- **Output modes** are three mutually exclusive modes: pretty (TTY), agent (`--agent`, token-efficient plain text for LLMs), json (`--json`).
-- **`oobo anchors --json`** now emits a flat JSON array (no envelope).
-- **Default anchors limit** raised from 10 → 50.
-- Help output regrouped into Views / Actions / Wizard + Config / Lifecycle sections.
+### Commands
 
-### Removed
+| Command | Purpose |
+|---------|---------|
+| `oobo` | Memory feed — scrollable TUI timeline of anchors |
+| `oobo anchor show <sha>` | Drill into a commit's AI context |
+| `oobo blame <file>` | `git blame` with AI attribution overlay |
+| `oobo search <query>` | Find past sessions (local + remote) |
+| `oobo delta` | Compare two anchors (requires API key) |
+| `oobo goto <id>` / `oobo back` | Time-travel between turns/commits |
+| `oobo enable` / `oobo disable` | Per-project tracking toggle |
+| `oobo setup` | Onboarding wizard |
+| `oobo settings` | Declarative KV config |
+| `oobo help <topic>` | Built-in offline docs |
+| `oobo update` | Self-update |
 
-- `scan`, `sessions`, `projects`, `ignore`, `unignore`, `sync`, `auth`, `transparency`, `card`, `dash`, `sources`, `inspect`, `stats`, `share`, `export`, `version`, `doctor`, `agent`, `index`. Each has a legacy hint mapping to its replacement.
-- Vendor billing pipeline (internal API routes + usage tracking).
+Every command supports three output modes: pretty TUI (default), `--agent`
+(token-efficient plain text), and `--json` (structured). Agent mode
+auto-activates inside AI tools.
 
-### Migration notes (0.1.x → 1.0.0)
+### Removed from 0.1.x
 
-- `anchor scan` → removed. Tool detection is automatic on every commit.
-- `anchor ignore` / `anchor unignore` → `oobo disable` / `oobo enable`.
-- `anchor sync` / `anchor auth` → removed. For remote search, set an API key: `oobo settings set key <...>`.
-- `anchor share`, `anchor export` → `oobo anchor show <sha> --json`.
-- `anchor sessions` → inside `oobo anchor show <sha>` or `oobo search`.
+Everything that made oobo a git wrapper or a dashboard tool:
 
-Historical entries below describe 0.1.x behavior and may mention commands removed from the current 1.0 CLI.
+- Git passthrough (`oobo commit`, `oobo log`, `oobo push`, etc.)
+- `alias` / `--uninstall-alias`
+- `card`, `dash`, `stats`, `sessions`, `projects`, `sources`
+- `scan`, `index`, `ignore`, `unignore`
+- `sync`, `auth`, `share`, `export`, `report`
+- `transparency`, `doctor`, `inspect`, `check`
+- Vendor billing pipeline and API usage tracking
+- Custom notification system
+
+Removed commands print a one-time hint pointing to their replacement
+(scheduled for removal in 1.1).
+
+### Architecture highlights
+
+- **Turn capture pipeline** — per-turn workspace snapshots (tree hashes)
+  for Cursor, Claude, Codex, and OpenCode. Enables `oobo goto` to restore
+  exact workspace state mid-session.
+- **Line-level attribution** — three-point diff (pre-agent → agent snapshot
+  → committed) computes which lines in committed files were AI-generated.
+- **Heuristic subagent detection** — infers parent-child session relationships
+  from file access patterns when tools don't expose explicit signals.
+- **Full behavioral spec** — `tests/cli-spec/` documents every command,
+  flag, output shape, and error case. 626 tests.
+
+### Migration from 0.1.x
+
+| Old command | Replacement |
+|-------------|-------------|
+| `oobo commit` / `oobo log` | Just use `git` directly |
+| `oobo scan` | Automatic — happens on every commit |
+| `oobo ignore` / `oobo unignore` | `oobo disable` / `oobo enable` |
+| `oobo sync` / `oobo auth` | `oobo settings set key <API_KEY>` |
+| `oobo sessions` | `oobo search` or `oobo anchor show <sha>` |
+| `oobo share` / `oobo export` | `oobo anchor show <sha> --json` |
+| `oobo card` / `oobo dash` / `oobo stats` | Removed entirely |
+
+Historical entries below describe 0.1.x behavior.
 
 ## [0.1.15] - 2026-04-08
 
@@ -354,7 +388,7 @@ Historical entries below describe 0.1.x behavior and may mention commands remove
 - **CI/CD pipeline**: multi-platform testing (Ubuntu, macOS, Debian, Alpine) and 6-target release builds
 - **Dual license**: Apache 2.0 and MIT
 
-[1.0.0-rc.1]: https://github.com/ooboai/oobo/compare/v0.1.15...v1.0.0-rc.1
+[1.0.0]: https://github.com/ooboai/oobo/compare/v0.1.15...v1.0.0
 [0.1.15]: https://github.com/ooboai/oobo/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/ooboai/oobo/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/ooboai/oobo/compare/v0.1.12...v0.1.13
