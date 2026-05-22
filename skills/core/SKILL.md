@@ -60,7 +60,7 @@ oobo setup                      # interactive (asks before modifying git)
 oobo setup --non-interactive    # for agents / scripts
 ```
 
-Data is **local-first**. There is no cloud upload pipeline. Team sync happens through the Git orphan branch (`oobo/anchors/v1`). A key (`oobo settings set key` / `OOBO_SECRET_KEY`) is only for remote search against the hosted API.
+Data is **local-first**. Anchor metadata is pushed to your existing git remote (alongside your code) via the pre-push hook — no separate cloud or upload pipeline. A key (`oobo settings set key` / `OOBO_SECRET_KEY`) is only needed for the optional remote search/delta API.
 
 Indexing is automatic: view commands kick a background rescan when `last_scanned_at` is older than 5 minutes. Opt out with `OOBO_NO_AUTO_INDEX=1`.
 

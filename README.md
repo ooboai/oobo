@@ -39,7 +39,7 @@ Or grab a binary from [Releases](https://github.com/ooboai/oobo/releases).
 - **15 Tools Supported** — Cursor, Claude Code, Gemini CLI, OpenCode, Codex, Aider, GitHub Copilot, Windsurf, Zed, Trae, Amp, Continue, Factory Droid, Junie, and Kiro.
 - **Code Attribution** — Know exactly which lines were AI-generated vs human-written, per commit.
 - **Agent-Native** — Three output modes (pretty / `--agent` token-efficient plain text / `--json` structured). `--agent` auto-activates when stdout isn't a TTY or inside a coding agent.
-- **Local-First, Private by Default** — Anchors live in your git repo (orphan branch), with a lightweight local cache in `~/.oobo/`. Nothing leaves your machine unless you opt in. No telemetry. Secrets are redacted before sharing.
+- **Local-First, Private by Default** — Anchors live in your git repo (orphan branch), with a lightweight local cache in `~/.oobo/`. Anchor metadata travels only where your code already goes (your git remote, via `git push`). No telemetry. Secrets are redacted before sharing.
 - **Anchor System** — Extends git commits with structured AI metadata that travels with the repo via a git orphan branch. No external dependencies.
 
 ---
@@ -344,7 +344,7 @@ cargo build --release
 ## Privacy
 
 - **Read-only** — never writes to AI tool directories
-- **Local by default** — anchors live on a git orphan branch in your repo, config in `~/.oobo/`. Nothing leaves your machine unless you configure a remote
+- **Local by default** — anchors live on a git orphan branch in your repo, config in `~/.oobo/`. Metadata is pushed alongside your code to your existing git remote; the optional search/delta API requires a separate key
 - **Secret redaction** — sessions are scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before sharing
 - **No telemetry** — oobo does not phone home
 - **Config protection** — API keys in config get `chmod 0600`

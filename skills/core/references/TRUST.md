@@ -8,7 +8,7 @@ Oobo is open-source software published by [NoCode Inc](https://nocode.inc).
 | Security policy | [SECURITY.md](https://github.com/ooboai/oobo/blob/main/SECURITY.md) — responsible disclosure, safe harbor |
 | Privacy policy | [oobo.ai/privacy](https://oobo.ai/privacy) |
 | Read-only | Never writes to AI tool directories — only reads session metadata (timestamps, model names, token counts) |
-| Local-first | All data stays in `~/.oobo/`. Nothing leaves the machine unless the user configures a remote API key |
+| Local-first | All data stays in `~/.oobo/` and the local orphan branch. Anchor metadata is pushed only to your existing git remote (alongside your code) via the pre-push hook. The optional remote API (search, delta) requires a separate API key. |
 | No telemetry | Does not phone home or collect usage data |
 | No credentials | Never accesses API keys, browsing history, or file contents outside of AI tool storage |
 | Secret redaction | Sessions scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before any sharing |
