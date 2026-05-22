@@ -40,7 +40,10 @@ fn replay_jsonl(content: &str) -> Option<serde_json::Value> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let kind = entry.get("kind").and_then(|k| k.as_u64()).unwrap_or(99);
+        let kind = entry
+            .get("kind")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(99);
 
         match kind {
             0 => {
@@ -133,7 +136,7 @@ fn parse_session_file(path: &Path, project_path: &str, ws_dir: &str) -> Option<S
     };
 
     let session_id = data.get("sessionId")?.as_str()?.to_string();
-    let created_at = data.get("creationDate").and_then(|v| v.as_i64());
+    let created_at = data.get("creationDate").and_then(serde_json::Value::as_i64);
 
     let requests = data.get("requests").and_then(|v| v.as_array())?;
 
@@ -142,8 +145,10 @@ fn parse_session_file(path: &Path, project_path: &str, ws_dir: &str) -> Option<S
         .and_then(|r| r.get("message"))
         .and_then(|m| m.get("text"))
         .and_then(|t| t.as_str())
-        .map(|s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN))
-        .unwrap_or_else(|| "Copilot chat".to_string());
+        .map_or_else(
+            || "Copilot chat".to_string(),
+            |s| crate::utils::truncate_name(s, crate::utils::MAX_SESSION_NAME_LEN),
+        );
 
     let model = requests
         .first()
@@ -155,7 +160,7 @@ fn parse_session_file(path: &Path, project_path: &str, ws_dir: &str) -> Option<S
     let updated_at = requests
         .last()
         .and_then(|r| r.get("timestamp"))
-        .and_then(|v| v.as_i64());
+        .and_then(serde_json::Value::as_i64);
 
     Some(Session {
         session_id,
@@ -200,7 +205,7 @@ pub fn all_sessions() -> Result<Vec<Session>, String> {
 }
 
 pub mod transcript {
-    use super::*;
+    use super::{fs, replay_jsonl, vscode_fork, Message, Path, PathBuf, VSCODE_APP};
 
     pub fn find_transcript_path(project_path: &str, session_id: &str) -> Option<PathBuf> {
         let ws_dirs =
@@ -227,25 +232,6 @@ pub mod transcript {
             }
         }
         None
-    }
-
-    pub fn count_messages(project_path: &str, session_id: &str) -> u32 {
-        match find_transcript_path(project_path, session_id) {
-            Some(p) => {
-                let content = fs::read_to_string(&p).unwrap_or_default();
-                let data: serde_json::Value =
-                    if p.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                        replay_jsonl(&content).unwrap_or_default()
-                    } else {
-                        serde_json::from_str(&content).unwrap_or_default()
-                    };
-                data.get("requests")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a.len() as u32 * 2)
-                    .unwrap_or(0)
-            }
-            None => 0,
-        }
     }
 
     pub fn parse_messages(path: &Path) -> Vec<Message> {
@@ -337,11 +323,11 @@ pub mod transcript {
             .and_then(|v| v.as_str())
             .map(String::from);
 
-        let first_ts = data.get("creationDate").and_then(|v| v.as_i64());
+        let first_ts = data.get("creationDate").and_then(serde_json::Value::as_i64);
         let last_ts = requests
             .last()
             .and_then(|r| r.get("timestamp"))
-            .and_then(|v| v.as_i64());
+            .and_then(serde_json::Value::as_i64);
 
         let duration_secs = match (first_ts, last_ts) {
             (Some(f), Some(l)) if l > f => Some(((l - f) / 1000) as u64),
@@ -368,11 +354,6 @@ pub mod transcript {
     ) -> Option<crate::remote::payload::SessionStats> {
         let path = find_transcript_path(project_path, session_id)?;
         extract_stats(&path)
-    }
-
-    pub fn read_transcript(path: &Path, max_messages: u32) -> String {
-        let messages = parse_messages(path);
-        crate::utils::format_transcript(&messages, max_messages, "Assistant")
     }
 }
 

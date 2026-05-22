@@ -1,244 +1,200 @@
 use crate::config::Config;
 
-const HYDRATION_INTERVAL_SECS: i64 = 3600;
+/// All project-aware settings resolved in a single pass.
+/// Avoids repeated disk reads of `.oobo/config`.
+pub struct ResolvedConfig {
+    pub api_key: String,
+    pub api_url: String,
+    pub anchor_remote: String,
+}
 
-/// `oobo sync [on|off|key <key>]` — toggle backend sync or set per-project key.
-pub fn run(cfg: &mut Config, mode: Option<&str>, extra: Option<&str>) -> Result<(), String> {
-    match mode {
-        Some("on") => enable_sync(cfg),
-        Some("off") => disable_sync(cfg),
-        Some("key") => set_project_key(cfg, extra),
-        Some(other) => Err(format!("unknown mode: {other} (use on, off, or key <key>)")),
-        None => {
-            show_status(cfg);
-            Ok(())
+impl ResolvedConfig {
+    pub fn has_api_key(&self) -> bool {
+        !self.api_key.is_empty()
+    }
+}
+
+/// Resolve all project-aware settings in one disk read.
+///
+/// Precedence for each setting:
+///   env var > `.oobo/config` (project) > `~/.oobo/config` (global) > compiled default
+pub fn resolve(cfg: &Config, project_root: Option<&str>) -> ResolvedConfig {
+    let project =
+        project_root.and_then(|r| crate::project_config::ProjectConfig::load(r).ok().flatten());
+
+    let api_key = resolve_api_key_inner(cfg, project.as_ref());
+    let api_url = resolve_api_url_inner(cfg, project.as_ref());
+    let anchor_remote = resolve_anchor_remote_inner(cfg, project.as_ref());
+
+    ResolvedConfig {
+        api_key,
+        api_url,
+        anchor_remote,
+    }
+}
+
+fn resolve_api_key_inner(
+    cfg: &Config,
+    project: Option<&crate::project_config::ProjectConfig>,
+) -> String {
+    if let Ok(key) = std::env::var("OOBO_SECRET_KEY") {
+        if !key.is_empty() {
+            return key;
         }
     }
-}
-
-fn disable_sync(cfg: &mut Config) -> Result<(), String> {
-    if let Some(project_root) = crate::git::proxy::project_root(cfg) {
-        let db = crate::db::Db::open()?;
-        let slug = crate::paths::slug_from_path(&project_root);
-        let _ = db.ensure_project(&slug, &project_root);
-        let mut settings = db.get_project_settings(&slug).unwrap_or_default();
-        settings.sync = Some(false);
-        db.set_project_settings(&slug, &settings)?;
-        eprintln!("oobo: sync disabled for this project");
-    } else {
-        cfg.server.sync = false;
-        cfg.save()?;
-        eprintln!("oobo: sync disabled globally");
-    }
-    eprintln!("      anchor metadata is still written locally.");
-    Ok(())
-}
-
-fn enable_sync(cfg: &mut Config) -> Result<(), String> {
-    if cfg.server.api_key.is_empty() {
-        eprintln!("oobo: no secret key found.");
-        eprintln!();
-        eprintln!("set via environment variable:");
-        eprintln!("  export OOBO_SECRET_KEY=your_key_here");
-        eprintln!();
-        eprintln!("or enter it now (saved to ~/.oobo/config.toml):");
-        eprint!("secret key: ");
-
-        let mut line = String::new();
-        std::io::stdin()
-            .read_line(&mut line)
-            .map_err(|e| format!("read stdin: {e}"))?;
-        let key = line.trim().to_string();
-        if key.is_empty() {
-            return Err("no key provided — sync not enabled".into());
-        }
-        cfg.server.api_key = key;
-    }
-
-    eprintln!();
-    eprintln!("server: {}", cfg.server.url);
-    eprint!("change server URL? [N/url]: ");
-
-    let mut url_line = String::new();
-    std::io::stdin()
-        .read_line(&mut url_line)
-        .map_err(|e| format!("read stdin: {e}"))?;
-    let url_input = url_line.trim();
-    if !url_input.is_empty() && url_input.to_lowercase() != "n" {
-        cfg.server.url = url_input.to_string();
-    }
-
-    cfg.save()?;
-
-    if let Some(project_root) = crate::git::proxy::project_root(cfg) {
-        let db = crate::db::Db::open()?;
-        let slug = crate::paths::slug_from_path(&project_root);
-        let _ = db.ensure_project(&slug, &project_root);
-        let mut settings = db.get_project_settings(&slug).unwrap_or_default();
-        settings.sync = Some(true);
-        db.set_project_settings(&slug, &settings)?;
-
-        eprintln!();
-        eprintln!("oobo: sync enabled for this project");
-    } else {
-        cfg.server.sync = true;
-        cfg.save()?;
-
-        eprintln!();
-        eprintln!("oobo: sync enabled globally");
-    }
-
-    eprintln!(
-        "      anchors will be pushed to {} on every commit.",
-        cfg.server.url
-    );
-    eprintln!("      run `oobo sync off` to disable.");
-
-    Ok(())
-}
-
-fn show_status(cfg: &Config) {
-    let project_sync = resolve_project_sync(cfg);
-    let effective_key = resolve_api_key(cfg);
-    let effective = project_sync.unwrap_or(cfg.server.sync) && !effective_key.is_empty();
-
-    if effective {
-        eprintln!("oobo: sync is on{}", scope_label(project_sync));
-        eprintln!("      server: {}", cfg.server.url);
-        eprintln!("      key:    {}", mask_key(&effective_key));
-    } else if effective_key.is_empty() && (project_sync.unwrap_or(cfg.server.sync)) {
-        eprintln!("oobo: sync is on but no secret key is configured");
-        eprintln!("      set OOBO_SECRET_KEY or run `oobo sync on` to provide one");
-    } else {
-        eprintln!("oobo: sync is off{}", scope_label(project_sync));
-        eprintln!("      run `oobo sync on` to enable backend sync");
-    }
-}
-
-fn scope_label(project_sync: Option<bool>) -> &'static str {
-    match project_sync {
-        Some(_) => " (this project)",
-        None => "",
-    }
-}
-
-/// Check the per-project sync override. Returns `None` if no override exists
-/// (fall back to global config).
-pub fn resolve_project_sync(cfg: &Config) -> Option<bool> {
-    let project_root = crate::git::proxy::project_root(cfg)?;
-    let db = crate::db::Db::open().ok()?;
-    let slug = crate::paths::slug_from_path(&project_root);
-    let settings = db.get_project_settings(&slug).ok()?;
-    settings.sync
-}
-
-/// Resolve per-project API key, falling back to global config.
-pub fn resolve_api_key(cfg: &Config) -> String {
-    if let Some(project_root) = crate::git::proxy::project_root(cfg) {
-        if let Ok(db) = crate::db::Db::open() {
-            let slug = crate::paths::slug_from_path(&project_root);
-            if let Ok(settings) = db.get_project_settings(&slug) {
-                if let Some(ref key) = settings.api_key {
-                    if !key.is_empty() {
-                        return key.clone();
-                    }
-                }
-            }
+    if let Some(pcfg) = project {
+        if !pcfg.server.api_key.is_empty() {
+            return pcfg.server.api_key.clone();
         }
     }
     cfg.server.api_key.clone()
 }
 
-fn set_project_key(cfg: &Config, key_arg: Option<&str>) -> Result<(), String> {
-    let project_root = crate::git::proxy::project_root(cfg)
-        .ok_or("not inside a git repository — run this from a project directory")?;
-
-    let key = if let Some(k) = key_arg {
-        k.to_string()
-    } else {
-        eprint!("API key for this project: ");
-        let mut line = String::new();
-        std::io::stdin()
-            .read_line(&mut line)
-            .map_err(|e| format!("read stdin: {e}"))?;
-        line.trim().to_string()
-    };
-
-    if key.is_empty() {
-        return Err("no key provided".into());
+fn resolve_api_url_inner(
+    cfg: &Config,
+    project: Option<&crate::project_config::ProjectConfig>,
+) -> String {
+    if let Ok(url) = std::env::var("OOBO_API_URL") {
+        if !url.is_empty() {
+            return url;
+        }
     }
-
-    let db = crate::db::Db::open()?;
-    let slug = crate::paths::slug_from_path(&project_root);
-    let _ = db.ensure_project(&slug, &project_root);
-    let mut settings = db.get_project_settings(&slug).unwrap_or_default();
-    settings.api_key = Some(key.clone());
-    db.set_project_settings(&slug, &settings)?;
-
-    eprintln!("oobo: API key set for this project");
-    eprintln!("      key: {}", mask_key(&key));
-
-    Ok(())
+    if let Some(pcfg) = project {
+        if !pcfg.server.url.is_empty() {
+            return pcfg.server.url.clone();
+        }
+    }
+    cfg.server.url.clone()
 }
 
-fn mask_key(key: &str) -> String {
-    if key.len() <= 8 {
-        "••••••••".to_string()
-    } else {
-        format!("{}••••{}", &key[..4], &key[key.len() - 4..])
+fn resolve_anchor_remote_inner(
+    cfg: &Config,
+    project: Option<&crate::project_config::ProjectConfig>,
+) -> String {
+    if let Some(pcfg) = project {
+        if !pcfg.anchors.remote.is_empty() {
+            return pcfg.anchors.remote.clone();
+        }
     }
+    if !cfg.anchors.remote.is_empty() {
+        return cfg.anchors.remote.clone();
+    }
+    crate::config::DEFAULT_ANCHOR_REMOTE.to_string()
 }
 
-/// `oobo sync --import` — pull anchors from the orphan branch into the local DB.
-pub fn run_import(cfg: &Config) -> Result<(), String> {
-    let root = crate::git::proxy::project_root(cfg).ok_or("not inside a git repository")?;
-    let db = crate::db::Db::open()?;
-
-    eprintln!("syncing anchors from orphan branch…");
-
-    if let Err(e) = crate::git::orphan::fetch_and_reconcile(&root) {
-        eprintln!("warning: could not fetch from remote: {e}");
-    }
-
-    let imported = crate::git::orphan::hydrate_from_branch(&root, &db)?;
-    db.mark_hydrated(&root, imported)?;
-
-    if imported > 0 {
-        eprintln!("imported {imported} anchor(s) into local database");
-    } else {
-        eprintln!("local database is up to date");
-    }
-
-    Ok(())
-}
-
-/// Auto-sync: called from the interceptor or any project-aware command.
-/// Non-blocking — only runs if overdue. Returns quietly on any error.
 pub fn auto_hydrate(project_root: &str) {
-    let db = match crate::db::Db::open() {
-        Ok(db) => db,
-        Err(_) => return,
-    };
-
-    if !db.needs_hydration(project_root, HYDRATION_INTERVAL_SECS) {
-        return;
-    }
-
     if !crate::git::orphan::branch_exists(project_root) {
         let _ = crate::git::orphan::fetch_and_reconcile(project_root);
-        if !crate::git::orphan::branch_exists(project_root) {
-            let _ = db.mark_hydrated(project_root, 0);
-            return;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Env vars are process-global; tests run in parallel. Guard all
+    /// reads/writes behind a single mutex to prevent races.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        saved_key: Option<String>,
+        saved_url: Option<String>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvGuard {
+        fn clean() -> Self {
+            let lock = ENV_LOCK.lock().unwrap();
+            let saved_key = std::env::var("OOBO_SECRET_KEY").ok();
+            let saved_url = std::env::var("OOBO_API_URL").ok();
+            std::env::remove_var("OOBO_SECRET_KEY");
+            std::env::remove_var("OOBO_API_URL");
+            Self {
+                saved_key,
+                saved_url,
+                _lock: lock,
+            }
         }
     }
 
-    match crate::git::orphan::hydrate_from_branch(project_root, &db) {
-        Ok(n) => {
-            let _ = db.mark_hydrated(project_root, n);
-            if n > 0 {
-                eprintln!("oobo: synced {n} anchor(s) from orphan branch");
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.saved_key {
+                Some(v) => std::env::set_var("OOBO_SECRET_KEY", v),
+                None => std::env::remove_var("OOBO_SECRET_KEY"),
+            }
+            match &self.saved_url {
+                Some(v) => std::env::set_var("OOBO_API_URL", v),
+                None => std::env::remove_var("OOBO_API_URL"),
             }
         }
-        Err(e) => eprintln!("oobo: warning: hydration failed: {e}"),
+    }
+
+    #[test]
+    fn resolve_loads_project_config_once() {
+        let _env = EnvGuard::clean();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_string_lossy().to_string();
+        let mut pcfg = crate::project_config::ProjectConfig::for_project("test");
+        pcfg.server.api_key = "project_key".to_string();
+        pcfg.server.url = "https://staging.example.com".to_string();
+        pcfg.anchors.remote = "oobo-remote".to_string();
+        pcfg.save(&root).unwrap();
+
+        let mut cfg = Config::default();
+        cfg.server.api_key = "global_key".to_string();
+        cfg.anchors.remote = "global-remote".to_string();
+
+        let resolved = resolve(&cfg, Some(&root));
+        assert_eq!(resolved.api_key, "project_key");
+        assert_eq!(resolved.api_url, "https://staging.example.com");
+        assert_eq!(resolved.anchor_remote, "oobo-remote");
+    }
+
+    #[test]
+    fn resolve_falls_back_to_global() {
+        let _env = EnvGuard::clean();
+
+        let mut cfg = Config::default();
+        cfg.server.api_key = "global_key".to_string();
+        cfg.anchors.remote = "global-remote".to_string();
+
+        let resolved = resolve(&cfg, None);
+        assert_eq!(resolved.api_key, "global_key");
+        assert_eq!(resolved.api_url, crate::config::DEFAULT_SERVER_URL);
+        assert_eq!(resolved.anchor_remote, "global-remote");
+    }
+
+    #[test]
+    fn resolve_defaults_when_nothing_set() {
+        let _env = EnvGuard::clean();
+
+        let cfg = Config::default();
+        let resolved = resolve(&cfg, None);
+        assert!(resolved.api_key.is_empty());
+        assert_eq!(resolved.api_url, crate::config::DEFAULT_SERVER_URL);
+        assert_eq!(resolved.anchor_remote, crate::config::DEFAULT_ANCHOR_REMOTE);
+    }
+
+    #[test]
+    fn env_overrides_everything() {
+        let _env = EnvGuard::clean();
+        std::env::set_var("OOBO_SECRET_KEY", "env_key");
+        std::env::set_var("OOBO_API_URL", "https://env.example.com");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_string_lossy().to_string();
+        let mut pcfg = crate::project_config::ProjectConfig::for_project("test");
+        pcfg.server.api_key = "project_key".to_string();
+        pcfg.server.url = "https://project.example.com".to_string();
+        pcfg.save(&root).unwrap();
+
+        let cfg = Config::default();
+        let resolved = resolve(&cfg, Some(&root));
+
+        assert_eq!(resolved.api_key, "env_key");
+        assert_eq!(resolved.api_url, "https://env.example.com");
     }
 }

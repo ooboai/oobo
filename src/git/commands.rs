@@ -18,9 +18,7 @@ const FLAGS_WITH_VALUE: &[&str] = &["-C", "-c", "--git-dir", "--work-tree", "--n
 
 /// Returns true if the first positional arg is a write operation.
 pub fn is_write_op(args: &[&str]) -> bool {
-    subcommand_name(args)
-        .map(|cmd| WRITE_OPS.contains(&cmd))
-        .unwrap_or(false)
+    subcommand_name(args).is_some_and(|cmd| WRITE_OPS.contains(&cmd))
 }
 
 /// Extract the git subcommand name (first positional argument, skipping flags).

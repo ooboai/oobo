@@ -200,17 +200,20 @@ fn parse_claude_jsonl(
         // Claude subagent JSONL entries carry isSidechain+sessionId (parent's
         // UUID) + agentId (subagent hash) on every user/assistant entry.
         if !checked_sidechain {
-            if let Some(is_side) = entry.get("isSidechain").and_then(|v| v.as_bool()) {
+            if let Some(is_side) = entry
+                .get("isSidechain")
+                .and_then(serde_json::Value::as_bool)
+            {
                 checked_sidechain = true;
                 if is_side {
                     parent_session_id = entry
                         .get("sessionId")
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
+                        .map(std::string::ToString::to_string);
                     subagent_type = entry
                         .get("agentId")
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
+                        .map(std::string::ToString::to_string);
                 }
             }
         }
@@ -271,7 +274,7 @@ fn parse_timestamp(entry: &serde_json::Value) -> Option<i64> {
             return Some(dt.timestamp_millis());
         }
     }
-    entry.get("timestamp").and_then(|v| v.as_i64())
+    entry.get("timestamp").and_then(serde_json::Value::as_i64)
 }
 
 fn format_model_name(model: &str) -> String {

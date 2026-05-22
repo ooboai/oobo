@@ -1,11 +1,12 @@
 use std::process::{Command, Stdio};
 
 use crate::config::Config;
+use crate::error::{CliError, CmdResult};
 use crate::git::{commands, interceptor};
 
 /// Run the real git binary with the given arguments, inheriting stdio.
 /// Returns the exit code.
-pub fn run_git(cfg: &Config, args: &[&str]) -> Result<i32, String> {
+pub fn run_git(cfg: &Config, args: &[&str]) -> CmdResult {
     let git_path = cfg.git_path();
 
     let status = Command::new(git_path)
@@ -14,25 +15,37 @@ pub fn run_git(cfg: &Config, args: &[&str]) -> Result<i32, String> {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
-        .map_err(|e| format!("failed to run {git_path}: {e}"))?;
+        .map_err(|e| CliError::Git(format!("failed to run {git_path}: {e}")))?;
 
     Ok(status.code().unwrap_or(1))
 }
 
 /// Run a git command and capture its stdout (for internal use, not user-facing).
-pub fn run_git_capture(cfg: &Config, args: &[&str]) -> Result<String, String> {
+pub fn run_git_capture(cfg: &Config, args: &[&str]) -> Result<String, CliError> {
+    run_git_capture_in(cfg, args, None)
+}
+
+pub fn run_git_capture_in(
+    cfg: &Config,
+    args: &[&str],
+    dir: Option<&str>,
+) -> Result<String, CliError> {
     let git_path = cfg.git_path();
 
-    let output = Command::new(git_path)
-        .args(args)
+    let mut cmd = Command::new(git_path);
+    cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
+        .env_remove("GIT_QUARANTINE_PATH");
+    if let Some(d) = dir {
+        cmd.current_dir(d);
+    }
+    let output = cmd
         .output()
-        .map_err(|e| format!("failed to run {git_path}: {e}"))?;
+        .map_err(|e| CliError::Git(format!("failed to run {git_path}: {e}")))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout)
@@ -41,11 +54,11 @@ pub fn run_git_capture(cfg: &Config, args: &[&str]) -> Result<String, String> {
             .to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!(
+        Err(CliError::Git(format!(
             "git {}: {}",
             args.first().unwrap_or(&""),
             stderr.trim()
-        ))
+        )))
     }
 }
 
@@ -69,13 +82,15 @@ pub fn project_root_from(cwd: &str) -> String {
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .replace('\r', "")
-                .trim()
-                .to_string()
-        })
-        .unwrap_or_else(|| cwd.to_string())
+        .map_or_else(
+            || cwd.to_string(),
+            |o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .replace('\r', "")
+                    .trim()
+                    .to_string()
+            },
+        )
 }
 
 /// Get current branch name.
@@ -84,7 +99,7 @@ pub fn current_branch(cfg: &Config) -> Option<String> {
 }
 
 /// Run git, then intercept write ops to collect and send context.
-pub fn run_and_intercept(cfg: &Config, args: &[&str]) -> Result<i32, String> {
+pub fn run_and_intercept(cfg: &Config, args: &[&str]) -> CmdResult {
     if commands::is_write_op(args) && cfg.telemetry.enabled {
         std::env::set_var("OOBO_INTERCEPTED", "1");
     }
@@ -104,7 +119,7 @@ pub fn run_and_intercept(cfg: &Config, args: &[&str]) -> Result<i32, String> {
     if !pre_rewrite_map.is_empty() {
         if let Some(root) = project_root(cfg) {
             if let Err(e) = super::orphan::rekey_anchors(&root, &pre_rewrite_map) {
-                log_error(&format!("anchor rekey error: {e}"));
+                log_error(&format!("oobo rekey error: {e}"));
             }
         }
     }
@@ -126,7 +141,7 @@ pub fn run_and_intercept(cfg: &Config, args: &[&str]) -> Result<i32, String> {
     };
 
     if let Some(ref root) = root_for_ignore {
-        if cfg.is_ignored(root) || is_project_ignored(root) {
+        if cfg.is_ignored(root) || !crate::project_config::is_enabled(root) {
             return Ok(exit_code);
         }
     }
@@ -145,10 +160,6 @@ pub fn run_and_intercept(cfg: &Config, args: &[&str]) -> Result<i32, String> {
         if let Some(root) = project_root(cfg) {
             crate::commands::sync::auto_hydrate(&root);
         }
-    }
-
-    if !crate::git::detect::is_interactive() {
-        maybe_print_agent_hint(args);
     }
 
     Ok(exit_code)
@@ -245,31 +256,6 @@ fn resolve_clone_dir(args: &[&str]) -> Option<String> {
         }
         _ => Some(positional.last().unwrap().to_string()),
     }
-}
-
-/// Print a one-line stderr hint when an agent runs a read-only git command
-/// through oobo, so it discovers enriched alternatives.
-fn maybe_print_agent_hint(args: &[&str]) {
-    let cmd = commands::subcommand_name(args).unwrap_or("");
-    let hint = match cmd {
-        "log" => Some("oobo anchors --agent"),
-        "shortlog" => Some("oobo anchors --agent"),
-        _ => None,
-    };
-    if let Some(enriched_cmd) = hint {
-        eprintln!(
-            "\x1b[90m[oobo] enriched data available: run `{enriched_cmd}` for sessions, tokens, attribution\x1b[0m"
-        );
-    }
-}
-
-/// Check if a project is ignored via per-project DB settings.
-fn is_project_ignored(project_root: &str) -> bool {
-    crate::db::Db::open()
-        .ok()
-        .and_then(|db| db.get_project_settings_by_path(project_root).ok())
-        .map(|s| s.ignored)
-        .unwrap_or(false)
 }
 
 fn log_error(msg: &str) {

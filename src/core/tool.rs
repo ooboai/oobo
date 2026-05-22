@@ -48,26 +48,6 @@ pub trait Tool: Send + Sync {
         }
     }
 
-    /// Count messages without full parsing.
-    fn count_messages(&self, project_path: &str, session_id: &str) -> u32;
-
-    /// Read transcript as human-readable formatted text.
-    fn read_transcript(&self, path: &Path, max_messages: u32) -> String;
-
-    /// Read transcript by session ID directly (for tools that use a shared DB).
-    fn read_transcript_by_id(
-        &self,
-        project_path: &str,
-        session_id: &str,
-        max_messages: u32,
-    ) -> String {
-        if let Some(path) = self.find_transcript(project_path, session_id) {
-            self.read_transcript(&path, max_messages)
-        } else {
-            String::new()
-        }
-    }
-
     /// Extract native telemetry (tokens, model, cost) if the tool provides it.
     fn extract_native_stats(&self, session: &Session) -> Option<NativeStats> {
         let _ = session;
@@ -106,7 +86,7 @@ impl ToolRegistry {
 
     /// Iterate over all registered tools.
     pub fn all(&self) -> impl Iterator<Item = &dyn Tool> {
-        self.tools.iter().map(|t| t.as_ref())
+        self.tools.iter().map(std::convert::AsRef::as_ref)
     }
 
     /// Iterate over tools that are enabled in config.
@@ -114,7 +94,7 @@ impl ToolRegistry {
         self.tools
             .iter()
             .filter(move |t| t.enabled(cfg))
-            .map(|t| t.as_ref())
+            .map(std::convert::AsRef::as_ref)
     }
 
     /// Look up a tool by its source name or config key.
@@ -123,7 +103,7 @@ impl ToolRegistry {
         self.tools
             .iter()
             .find(|t| t.name() == name || t.config_key() == name)
-            .map(|t| t.as_ref())
+            .map(std::convert::AsRef::as_ref)
     }
 
     /// All (name, display_name) pairs — single source of truth for tool lists.

@@ -101,56 +101,6 @@ fn collect_subagent_files(dir: &Path, result: &mut Vec<(String, PathBuf)>) {
     }
 }
 
-/// Count messages in a transcript file.
-pub fn count_messages(project_path: &str, session_id: &str) -> u32 {
-    let path = match find_transcript_path(project_path, session_id) {
-        Some(p) => p,
-        None => return 0,
-    };
-
-    count_messages_in_file(&path)
-}
-
-pub fn count_messages_in_file(path: &Path) -> u32 {
-    let file = match fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return 0,
-    };
-
-    let reader = std::io::BufReader::new(file);
-    let mut count = 0u32;
-
-    if is_jsonl(path) {
-        for line in reader.lines().map_while(Result::ok) {
-            let line = line.trim().to_string();
-            if line.is_empty() {
-                continue;
-            }
-            if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
-                if let Some(role) = entry.get("role").and_then(|v| v.as_str()) {
-                    if role == "user" || role == "assistant" {
-                        count += 1;
-                    }
-                }
-            }
-        }
-    } else {
-        for line in reader.lines().map_while(Result::ok) {
-            if line.starts_with("user:") || line.starts_with("assistant:") {
-                count += 1;
-            }
-        }
-    }
-
-    count
-}
-
-/// Read a transcript as formatted text.
-pub fn read_transcript(path: &Path, max_messages: u32) -> String {
-    let messages = parse_messages(path);
-    crate::utils::format_transcript(&messages, max_messages, "Assistant")
-}
-
 /// Parse transcript into structured messages.
 pub fn parse_messages(path: &Path) -> Vec<Message> {
     if is_jsonl(path) {
@@ -319,6 +269,38 @@ fn extract_text_from_message(entry: &serde_json::Value) -> String {
     }
 
     String::new()
+}
+
+#[cfg(test)]
+fn count_messages_in_file(path: &Path) -> u32 {
+    let file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return 0,
+    };
+    let reader = std::io::BufReader::new(file);
+    let mut count = 0u32;
+    if is_jsonl(path) {
+        for line in reader.lines().map_while(Result::ok) {
+            let line = line.trim().to_string();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
+                if let Some(role) = entry.get("role").and_then(|v| v.as_str()) {
+                    if role == "user" || role == "assistant" {
+                        count += 1;
+                    }
+                }
+            }
+        }
+    } else {
+        for line in reader.lines().map_while(Result::ok) {
+            if line.starts_with("user:") || line.starts_with("assistant:") {
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 #[cfg(test)]

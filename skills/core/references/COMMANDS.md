@@ -1,119 +1,123 @@
 # Commands
 
-Full command reference for `oobo`. All commands support `--agent` and `--json` output modes.
+Current command reference for `oobo` 1.0.0-rc.1. Commands support global `--agent`, `--json`, and `--interactive` output-mode flags. Filter flags (`-n`, `--since`, `--tool`) are also global.
 
-## Enriched Commit History
+## Memory Feed (bare command)
 
 ```bash
-oobo anchors --agent                               # Compact commit log
-oobo anchors --json                                # Full JSON with file attribution
-oobo anchors --agent -n 20                         # Limit to N commits
-oobo a --agent -n 5                                # Short alias
+oobo --agent                                       # Compact enriched commit log
+oobo --json                                        # Structured anchor summaries
+oobo -n 20 --since 7d --tool cursor                # Filter anchors
+oobo --agent -n 5                                  # Short and sweet
+```
+
+Equivalent to `oobo anchors`. Shows a scrollable TUI in interactive mode, or a flat list in agent/JSON mode.
+
+## Anchor Show — drill into a commit
+
+```bash
+oobo anchor show <sha> --agent                     # Compact anchor detail
+oobo anchor show <sha> --json                      # Full anchor detail
 ```
 
 ## Blame / Attribution
 
 ```bash
-oobo blame src/main.rs                             # Per-line AI attribution for file at HEAD
-oobo blame src/main.rs abc123                      # Attribution at a specific commit
-oobo blame src/main.rs --json                      # JSON output (FileChange object)
-oobo blame src/main.rs --agent                     # Compact output
+oobo blame src/main.rs                             # Git blame with AI attribution
+oobo blame src/main.rs abc123                       # Blame at a specific commit
+oobo blame src/main.rs --json                       # Structured per-line output
 ```
 
-## Sessions
+## Time Travel — Goto / Back
 
 ```bash
-oobo sessions --agent                              # Current project sessions (compact)
-oobo sessions list --agent --all                   # All projects
-oobo sessions list --agent --all --tool cursor -n 10 # Filter by tool, limit
-oobo sessions show <session_id> --agent            # Session summary (no messages)
-oobo sessions show <session_id> --json             # Full conversation + messages + stats
-oobo sessions search "keyword" --all --agent       # Search by name/content
-oobo sessions export <session_id> --format md      # Export as markdown
+oobo goto <turn-id-or-commit-sha>                  # Travel to a turn or commit
+oobo goto <id> --no-stash                          # Fail if worktree is dirty
+oobo back                                          # Return to where you were
 ```
 
-## Projects
+`goto` auto-stashes dirty changes, loads the target tree, and records a return
+point. `back` restores the original HEAD and pops the stash.
+
+## Search
 
 ```bash
-oobo projects --agent                              # All tracked projects (compact)
-oobo projects --json                               # Full JSON with stats
-oobo projects show <name_or_path> --agent          # Project summary
+oobo search "auth bug" --agent                     # Search current project
+oobo search "auth bug" --global --agent            # Search all projects
+oobo search "auth" --since 7d --tool claude        # Filter by time/tool
+oobo search "auth" --project oobo-cli --json       # Explicit project scope
 ```
 
-## Stats & Analytics
+Search is local-first. With an API key, default search merges local and remote results; use `--local`, `--remote`, or `--both` to force a source.
+
+## Delta — compare two anchors
 
 ```bash
-oobo stats --agent                                 # Global stats (compact)
-oobo stats --json                                  # Full JSON with breakdowns
-oobo stats --project <name> --agent                # Per-project
-oobo stats --tool cursor --agent                   # Per-tool
-oobo stats --since 7d --agent                      # Time-scoped
+oobo delta                                         # Compare HEAD to its previous anchor
+oobo delta abc123                                  # Compare a specific anchor to its previous
+oobo delta abc123 def789                           # Explicit pair
+oobo delta --full                                  # Include sessions, decisions, techniques
+oobo delta abc123 --full --json                    # Full structured output
 ```
 
-## AI Development Infographic
+Shows what changed between two anchors: category shifts, complexity changes, new areas, new techniques, and a narrative summary. Requires an API key.
+
+## Project Tracking
 
 ```bash
-oobo card --agent                                  # Stats summary (compact)
-oobo card --json                                   # Full JSON card data
-oobo card --out card.svg                           # Save SVG infographic to custom path
-oobo card --format md --out card.md                # Save markdown card
+oobo enable                                        # Enable oobo in the current repo
+oobo disable                                       # Disable oobo in the current repo
+oobo                                               # Anchors TUI (must be inside an enabled repo)
 ```
 
-## Data Sources
+Disabled projects are recorded in `.oobo/config` with `[project].enabled = false`; git hooks and capture stay quiet.
+
+## Setup / Maintenance
 
 ```bash
-oobo sources --agent                               # Data source coverage (compact)
-oobo sources --json                                # Full JSON
-oobo dash --agent                                  # Configuration overview (compact)
-oobo dash --json                                   # Full JSON
+oobo setup                                         # Onboard, select projects, install hooks
+oobo setup --non-interactive                       # CI-safe defaults
+oobo setup --reindex                               # Force reindex of enabled projects
+oobo setup --repair                                # Reinstall hooks + repair local metadata
+oobo update                                        # Self-update
+oobo update --check                                # Check only
 ```
 
-## Diagnostics
+Interactive setup discovers git repos and lets users choose which to enable.
+
+## Settings / Remote
 
 ```bash
-oobo inspect --agent                               # Diagnostics (compact)
-oobo inspect --json                                # Full JSON
-oobo inspect --fix                                 # Auto-fix common issues
-oobo version --agent                               # Just the version string
-oobo version --json                                # Version info as JSON
+oobo settings                                      # Show effective settings
+oobo settings set key <api_key>                    # Store remote API key
+oobo settings unset key                            # Remove persisted API key
+oobo settings set api_url https://oobo.example.com # Point to self-hosted server
+oobo settings set transparency on                  # Enable transcript sync (default: on)
+oobo settings set tools.experimental on            # Enable experimental tool detection
+oobo settings set setup.scan_roots ~/dev,~/work    # Directories to scan for repos
+oobo settings project set remote oobo              # Push anchor branch to specific remote
 ```
 
-## Share Sessions
+Valid keys: `key`, `api_url`, `remote` (project-only), `transparency`, `tools.experimental`, `setup.scan_roots`.
+
+A non-empty default API key is used for remote search and delta. `oobo settings unset key` removes the persisted key. `OOBO_SECRET_KEY` overrides the persisted key for the current process only. There is no cloud upload pipeline; team sync is Git-first via the orphan branch.
+
+## Help
 
 ```bash
-oobo share <session_id> --agent                    # Share + compact response
-oobo share <session_id> --out chat.md              # Save redacted session as markdown
+oobo help                                          # List all help topics
+oobo help anchors                                  # What anchors are and how they work
+oobo help search                                   # Search syntax and cloud configuration
+oobo help blame                                    # Reading the AI attribution overlay
+oobo help hooks                                    # Git and agent hooks explained
+oobo help config                                   # All settings explained
+oobo help keyboard                                 # TUI keybindings reference
 ```
 
-## Backend Sync
+Built-in documentation, always available offline. Works in all output modes.
+
+## Version
 
 ```bash
-oobo sync                                          # Show current sync status
-oobo sync on                                       # Enable auto-sync (prompts for key if needed)
-oobo sync off                                      # Disable auto-sync
-oobo sync --import                                 # Import anchors from orphan branch into local DB
-```
-
-Sync is **off by default**. No data is sent to any remote server unless the user explicitly runs `oobo sync on` and configures an API key (`OOBO_SECRET_KEY` env var or `api_key` via `oobo auth login`).
-
-## Auth & Remote
-
-These commands only apply if the user has opted into remote sync. The default remote is `api.oobo.ai` (free). Self-hosted servers are also supported.
-
-```bash
-oobo auth login --key <api_key>                    # Authenticate (free account at oobo.ai)
-oobo auth logout                                   # Remove credentials
-oobo auth status                                   # Show auth state + tool keys
-oobo auth set-remote https://oobo.example.com      # Point to self-hosted server
-```
-
-The `OOBO_SECRET_KEY` environment variable overrides the persisted `api_key` when set.
-
-## Maintenance
-
-```bash
-oobo scan                                          # Discover projects/sessions
-oobo index                                         # Compute token counts & analytics
-oobo setup                                         # Install agent hooks + git hooks
-oobo update                                        # Self-update + run migrations
+oobo --version                                     # Print version
 ```

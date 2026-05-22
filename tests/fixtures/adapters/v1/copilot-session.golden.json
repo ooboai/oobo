@@ -1,0 +1,18 @@
+[
+  {
+    "role": "user",
+    "text": "Explain the failing sync retry"
+  },
+  {
+    "role": "assistant",
+    "text": "The retry remains queued because next_attempt_at is still in the future."
+  },
+  {
+    "role": "user",
+    "text": "Show the simplest fix"
+  },
+  {
+    "role": "assistant",
+    "text": "Reset next_attempt_at to zero when recovering stale in-flight jobs."
+  }
+]

@@ -1,0 +1,10 @@
+[
+  {
+    "role": "user",
+    "text": "Add CLI spec coverage"
+  },
+  {
+    "role": "assistant",
+    "text": "I'll add a harness that parses invocation blocks and smoke-runs safe commands."
+  }
+]

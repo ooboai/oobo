@@ -7,13 +7,35 @@ on:
 
 permissions:
   contents: write
+  checks: write
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  quality:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-targets
+        env:
+          RUSTFLAGS: -D warnings
+      - run: cargo test --all-targets
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo fmt --all -- --check
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
   build:
     name: Build ${{ matrix.target }}
+    needs: quality
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -101,7 +123,6 @@ jobs:
   release:
     name: Create Release
     needs: build
-    if: always() && !cancelled()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

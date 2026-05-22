@@ -1,0 +1,21 @@
+{
+  "sessionId": "copilot-golden",
+  "creationDate": 1700000000000,
+  "version": 3,
+  "requests": [
+    {
+      "requestId": "r1",
+      "timestamp": 1700000001000,
+      "modelId": "copilot/gpt-4",
+      "message": { "text": "Explain the failing sync retry" },
+      "response": { "value": "The retry remains queued because next_attempt_at is still in the future." }
+    },
+    {
+      "requestId": "r2",
+      "timestamp": 1700000002000,
+      "modelId": "copilot/gpt-4",
+      "message": { "text": "Show the simplest fix" },
+      "response": { "result": { "message": "Reset next_attempt_at to zero when recovering stale in-flight jobs." } }
+    }
+  ]
+}

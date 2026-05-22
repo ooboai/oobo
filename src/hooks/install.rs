@@ -53,6 +53,9 @@ fn install_cursor_hooks() -> Option<String> {
             "beforeSubmitPrompt": [
                 { "command": "oobo hooks agent before-submit-prompt --tool cursor" }
             ],
+            "preToolUse": [
+                { "command": "oobo hooks agent pre-tool-use --tool cursor" }
+            ],
             "postToolUse": [
                 { "command": "oobo hooks agent after-tool-use --tool cursor" }
             ],
@@ -98,6 +101,9 @@ fn install_claude_hooks() -> Option<String> {
             }],
             "UserPromptSubmit": [{
                 "hooks": [{"type": "command", "command": "oobo hooks agent before-submit-prompt --tool claude"}]
+            }],
+            "PreToolUse": [{
+                "hooks": [{"type": "command", "command": "oobo hooks agent pre-tool-use --tool claude"}]
             }],
             "PostToolUse": [{
                 "hooks": [{"type": "command", "command": "oobo hooks agent after-tool-use --tool claude"}]
@@ -180,12 +186,12 @@ fn install_opencode_hooks() -> Option<String> {
 
     if let Some(parent) = path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
-            eprintln!("oobo: warning: could not create {}: {e}", parent.display());
+            tracing::warn!(path = %parent.display(), %e, "could not create directory");
             return None;
         }
     }
     if let Err(e) = fs::write(&path, content) {
-        eprintln!("oobo: warning: could not write {}: {e}", path.display());
+        tracing::warn!(path = %path.display(), %e, "could not write file");
         return None;
     }
     Some(format!("OpenCode plugin → {}", path.display()))
@@ -206,6 +212,9 @@ fn install_kiro_hooks() -> Option<String> {
             ],
             "userPromptSubmit": [
                 { "command": "oobo hooks agent before-submit-prompt --tool kiro" }
+            ],
+            "preToolUse": [
+                { "command": "oobo hooks agent pre-tool-use --tool kiro" }
             ],
             "postToolUse": [
                 { "command": "oobo hooks agent after-tool-use --tool kiro" }
@@ -454,15 +463,27 @@ pub fn install_git_hook(project_root: &str, hook_name: &str, script: &str) -> Re
 
     if hook_path.exists() {
         let existing = fs::read_to_string(&hook_path).unwrap_or_default();
-        if existing.contains("oobo") {
+        let is_oobo_hook = existing.contains("oobo hooks") || existing.contains("anchor hooks");
+        if is_oobo_hook {
+            // Overwrite in-place; no backup needed since this is our own hook.
+            // Also clean up any stale .pre-anchor backup that may reference itself.
+            let stale_backup = hooks_dir.join(format!("{hook_name}.pre-anchor"));
+            if stale_backup.exists() {
+                let backup_content = fs::read_to_string(&stale_backup).unwrap_or_default();
+                if backup_content.contains("oobo hooks") || backup_content.contains("anchor hooks")
+                {
+                    let _ = fs::remove_file(&stale_backup);
+                }
+            }
+            fs::write(&hook_path, script).map_err(|e| format!("cannot write hook: {e}"))?;
             return Ok(());
         }
 
-        let backup = hooks_dir.join(format!("{hook_name}.pre-oobo"));
+        let backup = hooks_dir.join(format!("{hook_name}.pre-anchor"));
         fs::copy(&hook_path, &backup).map_err(|e| format!("cannot backup hook: {e}"))?;
 
         let chained = format!(
-            "{script}\n\n# Chain with original hook\nif [ -x \"$(dirname \"$0\")/{hook_name}.pre-oobo\" ]; then\n  \"$(dirname \"$0\")/{hook_name}.pre-oobo\" \"$@\"\nfi\n"
+            "{script}\n\n# Chain with original hook\nif [ -x \"$(dirname \"$0\")/{hook_name}.pre-anchor\" ]; then\n  \"$(dirname \"$0\")/{hook_name}.pre-anchor\" \"$@\"\nfi\n"
         );
         fs::write(&hook_path, chained).map_err(|e| format!("cannot write hook: {e}"))?;
     } else {
@@ -479,7 +500,7 @@ pub fn install_git_hook(project_root: &str, hook_name: &str, script: &str) -> Re
     Ok(())
 }
 
-/// Install post-commit and pre-push hooks for a project.
+/// Install git hooks for a project.
 pub fn install_project_hooks(project_root: &str) -> Result<Vec<String>, String> {
     let mut installed = Vec::new();
 
@@ -497,78 +518,19 @@ pub fn install_project_hooks(project_root: &str) -> Result<Vec<String>, String> 
     install_git_hook(project_root, "pre-push", &pre_push)?;
     installed.push(format!("pre-push → {}/", hooks_display.display()));
 
+    let post_merge = format!(
+        "#!/bin/sh\nmkdir -p {log_dir}\noobo hooks post-merge \"$@\" 2>>{log_dir}/hooks.log || true\n"
+    );
+    install_git_hook(project_root, "post-merge", &post_merge)?;
+    installed.push(format!("post-merge → {}/", hooks_display.display()));
+
+    let post_rewrite = format!(
+        "#!/bin/sh\nmkdir -p {log_dir}\noobo hooks post-rewrite \"$@\" 2>>{log_dir}/hooks.log || true\n"
+    );
+    install_git_hook(project_root, "post-rewrite", &post_rewrite)?;
+    installed.push(format!("post-rewrite → {}/", hooks_display.display()));
+
     Ok(installed)
-}
-
-pub fn check_installed_hooks() -> Vec<String> {
-    let mut found = Vec::new();
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => return found,
-    };
-
-    let cursor_hooks = home.join(".cursor/hooks.json");
-    if cursor_hooks.exists() {
-        if let Ok(c) = fs::read_to_string(&cursor_hooks) {
-            if c.contains("oobo") {
-                found.push("cursor".into());
-            }
-        }
-    }
-
-    let claude_settings = home.join(".claude/settings.json");
-    if claude_settings.exists() {
-        if let Ok(c) = fs::read_to_string(&claude_settings) {
-            if c.contains("oobo") {
-                found.push("claude".into());
-            }
-        }
-    }
-
-    let gemini_settings = home.join(".gemini/settings.json");
-    if gemini_settings.exists() {
-        if let Ok(c) = fs::read_to_string(&gemini_settings) {
-            if c.contains("oobo") {
-                found.push("gemini".into());
-            }
-        }
-    }
-
-    if let Some(config_dir) = dirs::config_dir() {
-        let opencode_plugin = config_dir.join("opencode/plugins/oobo.ts");
-        if opencode_plugin.exists() {
-            found.push("opencode".into());
-        }
-    }
-
-    let kiro_hooks = home.join(".kiro/agents/oobo.json");
-    if kiro_hooks.exists() {
-        if let Ok(c) = fs::read_to_string(&kiro_hooks) {
-            if c.contains("oobo") {
-                found.push("kiro".into());
-            }
-        }
-    }
-
-    let continue_settings = home.join(".continue/settings.json");
-    if continue_settings.exists() {
-        if let Ok(c) = fs::read_to_string(&continue_settings) {
-            if c.contains("oobo") {
-                found.push("continue".into());
-            }
-        }
-    }
-
-    let droid_settings = home.join(".factory/settings.json");
-    if droid_settings.exists() {
-        if let Ok(c) = fs::read_to_string(&droid_settings) {
-            if c.contains("oobo") {
-                found.push("droid".into());
-            }
-        }
-    }
-
-    found
 }
 
 #[cfg(test)]
@@ -625,10 +587,65 @@ mod tests {
 
         let hook = fs::read_to_string(hooks_dir.join("post-commit")).unwrap();
         assert!(hook.contains("oobo test"));
-        assert!(hook.contains("pre-oobo"));
+        assert!(hook.contains("pre-anchor"));
 
-        let backup = fs::read_to_string(hooks_dir.join("post-commit.pre-oobo")).unwrap();
+        let backup = fs::read_to_string(hooks_dir.join("post-commit.pre-anchor")).unwrap();
         assert!(backup.contains("original"));
+    }
+
+    #[test]
+    fn test_install_git_hook_overwrites_old_anchor_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        let hooks_dir = dir.path().join(".git/hooks");
+        fs::create_dir_all(&hooks_dir).unwrap();
+
+        // Old hook using legacy `anchor` binary name
+        fs::write(
+            hooks_dir.join("post-commit"),
+            "#!/bin/sh\nanchor hooks post-commit\n",
+        )
+        .unwrap();
+
+        install_git_hook(root, "post-commit", "#!/bin/sh\noobo hooks post-commit\n").unwrap();
+
+        let hook = fs::read_to_string(hooks_dir.join("post-commit")).unwrap();
+        assert!(hook.contains("oobo hooks"));
+        assert!(!hook.contains("pre-anchor"), "must not chain to itself");
+        assert!(
+            !hooks_dir.join("post-commit.pre-anchor").exists(),
+            "must not create a self-referencing backup"
+        );
+    }
+
+    #[test]
+    fn test_install_git_hook_cleans_stale_pre_anchor() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        let hooks_dir = dir.path().join(".git/hooks");
+        fs::create_dir_all(&hooks_dir).unwrap();
+
+        // Simulate the broken state: hook with oobo AND a self-referencing backup
+        fs::write(
+            hooks_dir.join("post-commit"),
+            "#!/bin/sh\noobo hooks post-commit\nif [ -x post-commit.pre-anchor ]; then post-commit.pre-anchor; fi\n",
+        )
+        .unwrap();
+        fs::write(
+            hooks_dir.join("post-commit.pre-anchor"),
+            "#!/bin/sh\nanchor hooks post-commit\nif [ -x post-commit.pre-anchor ]; then post-commit.pre-anchor; fi\n",
+        )
+        .unwrap();
+
+        install_git_hook(root, "post-commit", "#!/bin/sh\noobo hooks post-commit\n").unwrap();
+
+        let hook = fs::read_to_string(hooks_dir.join("post-commit")).unwrap();
+        assert!(hook.contains("oobo hooks"));
+        assert!(!hook.contains("pre-anchor"), "cleaned hook must not chain");
+        assert!(
+            !hooks_dir.join("post-commit.pre-anchor").exists(),
+            "stale self-referencing backup must be removed"
+        );
     }
 
     #[test]

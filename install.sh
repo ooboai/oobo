@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # oobo installer
 #
-# This script installs oobo, an open-source git decorator by NoCode Inc.
+# This script installs oobo, an open-source developer memory tool by Oobo Inc.
 # It downloads a pre-built binary from GitHub Releases and places it in
 # ~/.oobo/bin — no sudo, no daemons, no telemetry. The only network
 # requests go to api.github.com (to resolve the latest version) and
@@ -302,9 +302,9 @@ EOF
     fi
 
     echo "  Quick reference:"
-    echo "    oobo sessions list    — view AI chat sessions"
-    echo "    oobo dash             — check configuration"
-    echo "    oobo alias install    — make 'git' use oobo transparently"
+    echo "    oobo                    — open the memory feed"
+    echo "    oobo anchor show <sha>  — drill into a commit"
+    echo "    oobo search \"query\"    — search local anchor memory"
     echo ""
 
     # Clean up tmpdir before exec (exec replaces the process so the

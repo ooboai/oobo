@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-const DEFAULT_SERVER_URL: &str = "https://api.oobo.ai";
+pub const DEFAULT_SERVER_URL: &str = "https://api.oobo.ai";
+pub const DEFAULT_ANCHOR_REMOTE: &str = "origin";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -41,15 +42,61 @@ pub struct Config {
     #[serde(default)]
     pub amp: ToolConfig,
     #[serde(default)]
+    pub anchors: AnchorsConfig,
+    #[serde(default)]
     pub telemetry: TelemetryConfig,
     #[serde(default)]
     pub scan: ScanConfig,
     #[serde(default)]
     pub update: UpdateConfig,
+    #[serde(default, alias = "transparency")]
+    pub privacy: TransparencyConfig,
     #[serde(default)]
-    pub transparency: TransparencyConfig,
+    pub tools: ToolsConfig,
+    #[serde(default)]
+    pub setup: SetupConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ignored_repos: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolsConfig {
+    /// Enable contrib/experimental tool adapters (Windsurf, Trae, Kiro,
+    /// Junie, Amp). These adapters have partial or discovery-only coverage
+    /// and may produce lower-quality session / token data than first-class
+    /// integrations. Disabled by default in 1.0.
+    #[serde(default)]
+    pub experimental: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AnchorsConfig {
+    /// Default Git remote for the anchor metadata branch.
+    /// Empty means [`DEFAULT_ANCHOR_REMOTE`]. Can be overridden per-project in `.oobo/config`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub remote: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetupConfig {
+    /// Root paths `oobo setup` should scan for projects. Defaults to the
+    /// user's home directory. Stored as a list of comma-separated strings
+    /// in TOML but exposed as a single comma-joined string via
+    /// `oobo settings setup.scan_roots`.
+    #[serde(default = "default_scan_roots")]
+    pub scan_roots: Vec<String>,
+}
+
+impl Default for SetupConfig {
+    fn default() -> Self {
+        Self {
+            scan_roots: default_scan_roots(),
+        }
+    }
+}
+
+fn default_scan_roots() -> Vec<String> {
+    vec!["~".to_string()]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,8 +105,6 @@ pub struct ServerConfig {
     pub url: String,
     #[serde(default)]
     pub api_key: String,
-    #[serde(default)]
-    pub sync: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,20 +152,20 @@ pub struct UpdateConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransparencyConfig {
-    #[serde(default = "default_transparency_mode")]
-    pub mode: String,
+    #[serde(default = "default_transparency_mode", alias = "mode")]
+    pub transparency: String,
 }
 
 impl Default for TransparencyConfig {
     fn default() -> Self {
         Self {
-            mode: default_transparency_mode(),
+            transparency: default_transparency_mode(),
         }
     }
 }
 
 fn default_transparency_mode() -> String {
-    "off".to_string()
+    "on".to_string()
 }
 
 fn default_scan_interval() -> u64 {
@@ -144,7 +189,6 @@ impl Default for ServerConfig {
         Self {
             url: default_server_url(),
             api_key: String::new(),
-            sync: false,
         }
     }
 }
@@ -197,7 +241,7 @@ impl Default for UpdateConfig {
 
 impl Config {
     pub fn config_path() -> PathBuf {
-        crate::paths::oobo_home().join("config.toml")
+        crate::paths::oobo_home().join("config")
     }
 
     pub fn log_dir() -> PathBuf {
@@ -208,20 +252,28 @@ impl Config {
     /// `OOBO_SECRET_KEY` env var overrides the persisted `api_key` when set.
     pub fn load_or_default() -> Self {
         let path = Self::config_path();
-        let mut cfg = if path.exists() {
-            match fs::read(&path) {
+        let legacy_path = crate::paths::oobo_home().join("config.toml");
+        let effective_path = if path.exists() {
+            path
+        } else if legacy_path.exists() {
+            legacy_path
+        } else {
+            path
+        };
+        let mut cfg = if effective_path.exists() {
+            match fs::read(&effective_path) {
                 Ok(bytes) => {
                     let contents = strip_utf8_bom(&bytes);
                     match toml::from_str(contents) {
                         Ok(cfg) => cfg,
                         Err(e) => {
-                            eprintln!("oobo: warning: invalid config at {}: {e}", path.display());
+                            tracing::warn!(path = %effective_path.display(), %e, "invalid config");
                             Self::default()
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("oobo: warning: cannot read {}: {e}", path.display());
+                    tracing::warn!(path = %effective_path.display(), %e, "cannot read config");
                     Self::default()
                 }
             }
@@ -256,7 +308,7 @@ impl Config {
         if self.has_any_key() {
             use std::os::unix::fs::PermissionsExt;
             if let Err(e) = fs::set_permissions(&path, fs::Permissions::from_mode(0o600)) {
-                eprintln!("oobo: warning: could not set config permissions: {e}");
+                tracing::warn!(%e, "could not set config permissions");
             }
         }
 
@@ -281,12 +333,6 @@ impl Config {
             || !self.amp.api_key.is_empty()
     }
 
-    /// True when sync is enabled and an API key is available.
-    #[allow(dead_code)]
-    pub fn should_sync(&self) -> bool {
-        self.server.sync && !self.server.api_key.is_empty()
-    }
-
     /// True if the server is configured with a non-default API key.
     #[cfg(test)]
     pub fn is_configured(&self) -> bool {
@@ -297,9 +343,9 @@ impl Config {
     /// Transparency only controls whether redacted transcripts are included on the
     /// orphan branch. Anchor metadata is always written regardless of this setting.
     pub fn transparency_mode(&self) -> crate::core::anchor::TransparencyMode {
-        match self.transparency.mode.as_str() {
-            "on" | "full" | "full_transparency" => crate::core::anchor::TransparencyMode::On,
-            _ => crate::core::anchor::TransparencyMode::Off,
+        match self.privacy.transparency.as_str() {
+            "off" | "none" | "disabled" => crate::core::anchor::TransparencyMode::Off,
+            _ => crate::core::anchor::TransparencyMode::On,
         }
     }
 
@@ -336,13 +382,13 @@ impl Config {
 
     /// Check if a repo path is in the ignored list.
     pub fn is_ignored(&self, project_root: &str) -> bool {
-        let canonical = std::fs::canonicalize(project_root)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| project_root.to_string());
+        let canonical = std::fs::canonicalize(project_root).map_or_else(
+            |_| project_root.to_string(),
+            |p| p.to_string_lossy().to_string(),
+        );
         self.ignored_repos.iter().any(|p| {
             let c = std::fs::canonicalize(p)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| p.clone());
+                .map_or_else(|_| p.clone(), |p| p.to_string_lossy().to_string());
             c == canonical
         })
     }
@@ -409,8 +455,6 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.server.url, "https://api.oobo.ai");
         assert!(cfg.server.api_key.is_empty());
-        assert!(!cfg.server.sync);
-        assert!(!cfg.should_sync());
         assert!(!cfg.git.alias_enabled);
         assert!(cfg.cursor.enabled);
         assert!(cfg.claude.enabled);
@@ -431,7 +475,6 @@ mod tests {
             server: ServerConfig {
                 url: "https://my.server.com".into(),
                 api_key: "test_key_123".into(),
-                sync: true,
             },
             git: GitConfig {
                 real_git_path: "/usr/bin/git".into(),
@@ -482,6 +525,7 @@ mod tests {
             droid: ToolConfig::default(),
             junie: ToolConfig::default(),
             amp: ToolConfig::default(),
+            anchors: AnchorsConfig::default(),
             telemetry: TelemetryConfig {
                 enabled: true,
                 send_diffs: true,
@@ -489,15 +533,15 @@ mod tests {
             },
             scan: ScanConfig::default(),
             update: UpdateConfig::default(),
-            transparency: TransparencyConfig::default(),
+            privacy: TransparencyConfig::default(),
+            tools: ToolsConfig::default(),
+            setup: SetupConfig::default(),
             ignored_repos: Vec::new(),
         };
         let serialized = toml::to_string_pretty(&cfg).unwrap();
         let deserialized: Config = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.server.url, "https://my.server.com");
         assert_eq!(deserialized.server.api_key, "test_key_123");
-        assert!(deserialized.server.sync);
-        assert!(deserialized.should_sync());
         assert!(deserialized.git.alias_enabled);
         assert!(!deserialized.cursor.enabled);
         assert!(deserialized.claude.enabled);
@@ -563,8 +607,7 @@ mod tests {
         assert!(cfg.is_ignored(&path));
         cfg.ignored_repos.retain(|p| {
             let c = std::fs::canonicalize(p)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| p.clone());
+                .map_or_else(|_| p.clone(), |p| p.to_string_lossy().to_string());
             c != canonical
         });
         assert!(!cfg.is_ignored(&path));
@@ -658,10 +701,10 @@ mod tests {
 
     #[test]
     fn test_config_partial_toml_with_only_continue() {
-        let toml_str = r#"
+        let toml_str = r"
 [continue]
 enabled = false
-"#;
+";
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert!(!cfg.continue_dev.enabled);
         assert!(cfg.kiro.enabled);

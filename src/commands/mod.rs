@@ -1,19 +1,12 @@
 pub mod agent;
 pub mod anchors;
-pub mod auth;
+pub mod bare;
 pub mod blame;
-pub mod card;
-pub mod check;
-pub mod dash;
-pub mod ignore;
-pub mod index;
-pub mod projects;
-pub mod scan;
-pub mod sessions;
-pub mod share;
-
-pub mod sources;
-pub mod stats;
+pub mod delta;
+pub mod goto;
+pub mod legacy;
+pub mod search;
+pub mod settings;
 pub mod sync;
-pub mod transparency;
+pub mod toggle;
 pub mod update;

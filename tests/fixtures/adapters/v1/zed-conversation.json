@@ -1,0 +1,14 @@
+{
+  "title": "Release hardening",
+  "model": "claude-sonnet-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Find a minimal invariant for anchors"
+    },
+    {
+      "role": "assistant",
+      "content": "The attribution totals should match the file change totals before persistence."
+    }
+  ]
+}

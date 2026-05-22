@@ -1,0 +1,23 @@
+{
+  "sessionId": "gemini-golden",
+  "projectHash": "oobo-cli",
+  "startTime": "2026-04-22T10:00:00.000Z",
+  "lastUpdated": "2026-04-22T10:05:00.000Z",
+  "messages": [
+    {
+      "id": "msg-1",
+      "type": "user",
+      "content": "Patch the CLI spec harness"
+    },
+    {
+      "id": "msg-2",
+      "type": "gemini",
+      "content": [
+        { "text": "I will add deterministic exit-code assertions." },
+        { "text": "Then I will verify JSON output shape." }
+      ],
+      "displayContent": "I will add deterministic exit-code assertions.\nThen I will verify JSON output shape.",
+      "model": "gemini-2.5-pro"
+    }
+  ]
+}

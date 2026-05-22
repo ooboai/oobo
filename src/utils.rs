@@ -5,10 +5,7 @@ use crate::tools::cursor::transcript::Message;
 pub const MAX_SESSION_NAME_LEN: usize = 60;
 
 /// Normalize any epoch timestamp (seconds, milliseconds, or microseconds) to seconds.
-/// Thresholds use strict `>=` to correctly classify boundary values:
-/// - >= 1e15 → microseconds
-/// - >= 1e12 → milliseconds (year ~2001 in seconds, but all real ms timestamps are >= ~1e12)
-/// - otherwise → seconds
+#[cfg(test)]
 pub fn to_epoch_secs(ts: i64) -> i64 {
     if ts >= 1_000_000_000_000_000 {
         ts / 1_000_000
@@ -64,7 +61,7 @@ pub fn parse_iso_timestamp(s: &str) -> Option<i64> {
     let yoe = y_adj - era * 400;
     let doy = (153 * m_adj + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe - 719468;
+    let days = era * 146_097 + doe - 719_468;
     let secs = days * 86400 + h * 3600 + mi * 60 + sec;
     Some(secs * 1000)
 }
@@ -80,18 +77,10 @@ pub fn format_transcript(messages: &[Message], max_messages: u32, assistant_labe
         } else {
             assistant_label
         };
-        out.push_str(&format!("── {label} ──\n{}\n\n", msg.text));
+        use std::fmt::Write;
+        let _ = write!(out, "── {label} ──\n{}\n\n", msg.text);
     }
     out
-}
-
-/// Sanitize a value for pipe-delimited agent output.
-/// Replaces `|` with `/` and collapses whitespace to single spaces.
-pub fn sanitize_pipe(s: &str) -> String {
-    s.replace('|', "/")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 pub fn print_json<T: serde::Serialize>(value: &T) {
@@ -112,28 +101,19 @@ pub fn open_db_readonly(path: &Path) -> Result<rusqlite::Connection, rusqlite::E
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
-    #[test]
-    fn test_sanitize_pipe_no_pipes() {
-        assert_eq!(sanitize_pipe("hello world"), "hello world");
-    }
-
-    #[test]
-    fn test_sanitize_pipe_with_pipes() {
-        assert_eq!(
-            sanitize_pipe("fix: handle X | Y case"),
-            "fix: handle X / Y case"
-        );
-    }
-
-    #[test]
-    fn test_sanitize_pipe_collapses_whitespace() {
-        assert_eq!(sanitize_pipe("hello\n  world"), "hello world");
-    }
-
-    #[test]
-    fn test_sanitize_pipe_combined() {
-        assert_eq!(sanitize_pipe("a | b\nc"), "a / b c");
+    fn duration_multiplier(suffix: &str) -> i64 {
+        match suffix {
+            "s" => 1,
+            "m" => 60,
+            "h" => 3_600,
+            "d" => 86_400,
+            "w" => 7 * 86_400,
+            "mo" => 30 * 86_400,
+            "y" => 365 * 86_400,
+            _ => unreachable!("test suffix set is fixed"),
+        }
     }
 
     #[test]
@@ -328,6 +308,110 @@ mod tests {
     fn test_to_epoch_secs_boundary_microseconds() {
         assert_eq!(to_epoch_secs(1_000_000_000_000_000), 1_000_000_000);
     }
+
+    #[test]
+    fn test_parse_since_accepts_all_duration_suffixes() {
+        for raw in ["0s", "1m", "2h", "3d", "4w", "5mo", "6y"] {
+            assert!(parse_since(raw).is_ok(), "{raw} should parse");
+        }
+    }
+
+    #[test]
+    fn test_parse_since_rejects_bad_or_overflowing_duration() {
+        assert!(parse_since("").is_err());
+        assert!(parse_since("-1d").is_err());
+        assert!(parse_since("10fortnights").is_err());
+        assert!(parse_since("999999999999999999999999999999999999y").is_err());
+    }
+
+    proptest! {
+        #[test]
+        fn parse_since_duration_suffixes_match_expected_seconds(
+            n in 0_i64..1_000_000,
+            suffix in prop::sample::select(vec!["s", "m", "h", "d", "w", "mo", "y"]),
+        ) {
+            let raw = format!("{n}{suffix}");
+            let before = chrono::Utc::now().timestamp();
+            let cutoff = parse_since(&raw).expect("generated duration should parse");
+            let after = chrono::Utc::now().timestamp();
+            let expected = duration_multiplier(suffix) * n;
+
+            prop_assert!(before - cutoff >= expected);
+            prop_assert!(after - cutoff <= expected + 1);
+        }
+
+        #[test]
+        fn parse_since_rejects_non_duration_garbage(raw in "[A-Za-z_./:-]{1,64}") {
+            prop_assume!(chrono::DateTime::parse_from_rfc3339(&raw).is_err());
+            prop_assert!(parse_since(&raw).is_err());
+        }
+    }
+}
+
+/// Format epoch-seconds as a relative time string (e.g. "5m", "3h", "2d", "1w", "3mo", "1y").
+pub fn relative_time(ts: i64) -> String {
+    if ts <= 0 {
+        return "-".to_string();
+    }
+    let now = chrono::Utc::now().timestamp();
+    let d = (now - ts).max(0);
+    if d < 60 {
+        format!("{d}s")
+    } else if d < 3600 {
+        format!("{}m", d / 60)
+    } else if d < 86400 {
+        format!("{}h", d / 3600)
+    } else if d < 7 * 86400 {
+        format!("{}d", d / 86400)
+    } else if d < 30 * 86400 {
+        format!("{}w", d / (7 * 86400))
+    } else if d < 365 * 86400 {
+        format!("{}mo", d / (30 * 86400))
+    } else {
+        format!("{}y", d / (365 * 86400))
+    }
+}
+
+/// Format a token count for human display (e.g. "1.2M", "45k", "800").
+pub fn human_tokens(n: i64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{}k", n / 1000)
+    } else {
+        n.to_string()
+    }
+}
+
+/// Parse a duration string (`24h`, `7d`, `30m`, `1mo`, `1y`) or ISO-8601
+/// timestamp into an epoch-seconds cutoff.
+pub fn parse_since(raw: &str) -> Result<i64, String> {
+    if let Ok(dt) = raw.parse::<chrono::DateTime<chrono::Utc>>() {
+        return Ok(dt.timestamp());
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(raw) {
+        return Ok(dt.timestamp());
+    }
+    let digits: String = raw.chars().take_while(char::is_ascii_digit).collect();
+    if digits.is_empty() {
+        return Err("expected number + suffix (s/m/h/d/w/mo/y) or ISO-8601".into());
+    }
+    let n: i64 = digits
+        .parse()
+        .map_err(|e: std::num::ParseIntError| e.to_string())?;
+    let suffix = &raw[digits.len()..];
+    let seconds: i64 = match suffix {
+        "s" => Some(n),
+        "m" => n.checked_mul(60),
+        "h" => n.checked_mul(3600),
+        "d" => n.checked_mul(86400),
+        "w" => n.checked_mul(7).and_then(|v| v.checked_mul(86400)),
+        "mo" => n.checked_mul(30).and_then(|v| v.checked_mul(86400)),
+        "y" => n.checked_mul(365).and_then(|v| v.checked_mul(86400)),
+        other => return Err(format!("unknown suffix '{other}'")),
+    }
+    .ok_or_else(|| "duration is too large".to_string())?;
+    Ok(chrono::Utc::now().timestamp() - seconds)
 }
 
 /// Truncate a string to `max` characters at a safe UTF-8 boundary.

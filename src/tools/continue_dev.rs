@@ -58,7 +58,7 @@ fn session_from_jsonl(path: &Path) -> Option<Session> {
         }
 
         // Track timestamps
-        if let Some(ts) = entry.get("timestamp").and_then(|v| v.as_i64()) {
+        if let Some(ts) = entry.get("timestamp").and_then(serde_json::Value::as_i64) {
             if created_at.is_none() {
                 created_at = Some(ts);
             }
@@ -190,23 +190,11 @@ pub mod transcript {
                 messages.push(Message {
                     role: role.to_string(),
                     text,
-                    timestamp_ms: entry.get("timestamp").and_then(|v| v.as_i64()),
+                    timestamp_ms: entry.get("timestamp").and_then(serde_json::Value::as_i64),
                 });
             }
         }
         messages
-    }
-
-    pub fn count_messages(_project_path: &str, session_id: &str) -> u32 {
-        match find_transcript_path("", session_id) {
-            Some(p) => parse_messages(&p).len() as u32,
-            None => 0,
-        }
-    }
-
-    pub fn read_transcript(path: &Path, max_messages: u32) -> String {
-        let messages = parse_messages(path);
-        crate::utils::format_transcript(&messages, max_messages, "Assistant")
     }
 }
 

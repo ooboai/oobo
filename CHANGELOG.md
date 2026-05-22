@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-rc.1] - 2026-04-22
+
+Major sharpening release. Significantly narrower command surface, unified
+output modes, and a flagship `anchors` experience.
+
+### Added
+
+- **`oobo anchor show <sha>`** drill-down (pretty / agent / json). Accepts unambiguous SHA prefixes.
+- **`oobo anchors` filters**: `--since <24h|7d|ISO>`, `--tool`, `--project` (outside-repo only).
+- **`oobo blame`** (also available as `oobo anchor blame`) is now a strict superset of `git blame`. Every `git blame` flag is forwarded; an AI-attribution column is overlaid for pretty/agent mode. Machine formats (`--porcelain`, `--line-porcelain`, `--incremental`) bypass the overlay automatically.
+- **`oobo search`** promoted to a top-level verb. Local search (orphan branch) with `--since`, `--project`, `--tool`, `--limit`.
+- **`oobo settings`** declarative KV config with positional grammar: `oobo settings [scope] [verb] <key> [value]`. Scope defaults to `default`, verb defaults to `get`. Keys: `key`, `api_url`, `remote`, `transparency`, `tools.experimental`, `setup.scan_roots`.
+- **`oobo enable` / `oobo disable`** per-project tracking toggles (idempotent).
+- **`oobo setup`** rebuilt as a composable entry point: `--non-interactive`, `--reindex`, `--repair`.
+- **Zero-config tool detection**: AI tools are auto-detected at commit time — no indexing, no scanning, no database.
+- **Legacy command hint system**: removed 0.1.x verbs now print a hint and, in a TTY, offer to run the replacement. Scheduled for removal in 1.1.
+- **Agent auto-detection**: `--agent` auto-activates when stdout is not a TTY or any of `CURSOR_AGENT`, `CLAUDECODE`, `AIDER`, `CONTINUE_SESSION`, `CONTINUE_IDE`, `AICOMMITS` is set.
+- **`oobo goto <turn-or-sha>`** — time-travel to any turn snapshot or commit. Auto-stashes dirty changes, loads the target tree, records a return point. Multiple `goto` calls stack.
+- **`oobo back`** — return to where you were before `goto`. Pops the navigation stack, restores stash if one was created.
+- **`oobo delta`** — compare two anchors to see what changed: category shifts, complexity, new areas, new techniques, and a narrative summary. Requires an API key.
+- **`oobo help <topic>`** — built-in offline documentation. Topics: `anchors`, `search`, `blame`, `hooks`, `config`, `keyboard`.
+- **Search answer synthesis** — when remote memory hits are available, search results include a synthesized 1–3 sentence answer displayed above individual hits.
+- **Turn capture system** — TurnTap pipeline captures per-turn workspace state (tree hashes) for Claude, Cursor, Codex, and OpenCode. Enables `goto` to restore exact workspace snapshots mid-session.
+- **Unified TUI** — full-screen interactive memory timeline with anchor feed, live search (local filter + remote semantic), transcript viewer, session/file pickers, and keybinding help overlay.
+- **Heuristic subagent detection** — infers parent-child session relationships from file access patterns and timing when explicit signals are unavailable.
+- **Four-quadrant bare `oobo`** behavior (in-repo/outside × pretty/structured).
+- **Stable project-identity helpers** (`src/project.rs`): canonicalizes git remote URLs so SSH and HTTPS forms collapse to the same key.
+- **`tests/cli-spec/`** — behavioral contract for every 1.0 command.
+
+### Changed
+
+- **Cloud ingest pipeline removed**: there is no `POST /anchors/ingest` or outbox/sync system. Team sync is Git-first (orphan branch `oobo/anchors/v1`). `oobo settings set key` / `OOBO_SECRET_KEY` are used exclusively for remote search.
+- **Output modes** are three mutually exclusive modes: pretty (TTY), agent (`--agent`, token-efficient plain text for LLMs), json (`--json`).
+- **`oobo anchors --json`** now emits a flat JSON array (no envelope).
+- **Default anchors limit** raised from 10 → 50.
+- Help output regrouped into Views / Actions / Wizard + Config / Lifecycle sections.
+
+### Removed
+
+- `scan`, `sessions`, `projects`, `ignore`, `unignore`, `sync`, `auth`, `transparency`, `card`, `dash`, `sources`, `inspect`, `stats`, `share`, `export`, `version`, `doctor`, `agent`, `index`. Each has a legacy hint mapping to its replacement.
+- Vendor billing pipeline (internal API routes + usage tracking).
+
+### Migration notes (0.1.x → 1.0.0)
+
+- `anchor scan` → removed. Tool detection is automatic on every commit.
+- `anchor ignore` / `anchor unignore` → `oobo disable` / `oobo enable`.
+- `anchor sync` / `anchor auth` → removed. For remote search, set an API key: `oobo settings set key <...>`.
+- `anchor share`, `anchor export` → `oobo anchor show <sha> --json`.
+- `anchor sessions` → inside `oobo anchor show <sha>` or `oobo search`.
+
+Historical entries below describe 0.1.x behavior and may mention commands removed from the current 1.0 CLI.
+
 ## [0.1.15] - 2026-04-08
 
 ### Added
@@ -25,7 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Per-line AI/human code attribution** — every commit anchor now records which specific line ranges were written by AI vs. human. Uses a three-point diff (pre-agent → agent snapshot → committed) to compute precise line-level attribution in committed-file coordinates. Data is stored in `line_attributions` on each `FileChange` entry in the anchor JSON.
-- **`oobo blame` command** — new command that displays per-line AI attribution for any file at any commit. Shows colorized output with line numbers, author labels (ai/human), and agent names. Supports `--json` and `--agent` output modes. File path input is normalized (handles `./`, absolute paths) for reliable matching.
+- **`oobo anchor blame` command** — new command that displays per-line AI attribution for any file at any commit. Shows colorized output with line numbers, author labels (ai/human), and agent names. Supports `--json` and `--agent` output modes. File path input is normalized (handles `./`, absolute paths) for reliable matching.
 - **Post-rewrite anchor re-keying** — when `git rebase` or `git cherry-pick` rewrites commit history, oobo now automatically copies all anchor data (metadata, session links, transcripts, timeline) from old SHAs to new SHAs by matching tree hashes. Preserves attribution through simple rebases where file content doesn't change.
 - **Modular skill file** — `SKILL.md` restructured into a concise quick-reference with detailed reference docs split into `references/COMMANDS.md`, `references/API_SURFACE.md`, `references/JSON_SCHEMA.md`, and `references/TRUST.md`. Reduces token cost for agents that only need the command table.
 
@@ -56,7 +108,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Privacy: absolute path leakage in public metadata** — `bash_commands` on the orphan branch and remote payload contained raw absolute paths (e.g. `/Users/teddy/dev/projects/...`), leaking usernames and directory structures on public repos. All publicly-visible fields now run through `sanitize_for_public()` which strips project root paths, replaces home directory with `~/`, and redacts secrets via gitleaks.
+- **Privacy: absolute path leakage in public metadata** — `bash_commands` on the orphan branch and remote payload contained raw absolute paths (e.g. `/Users/<user>/dev/projects/...`), leaking usernames and directory structures on public repos. All publicly-visible fields now run through `sanitize_for_public()` which strips project root paths, replaces home directory with `~/`, and redacts secrets via gitleaks.
 - **`files_touched` absolute path leakage** — `file_snapshots` keys from subagent `modified_files` could carry absolute paths into `SessionLink.files_touched`. Now sanitized with `sanitize_path()` before serialization.
 - **`file_interactions` absolute path leakage** — multi-agent file interaction paths are now sanitized before writing to the orphan branch or remote payload.
 - **Subagent `modified_files` not relativized** — `subagent-stop` hook events pushed file paths directly into `snapshot_session_files` without `make_relative()`, unlike `after-tool-use` which already did. Now consistent.
@@ -178,7 +230,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Remote API endpoints** — added `/anchors/share` for session sharing (auth optional, anonymous shares supported). Renamed from `/api/v1/shares`.
 - **Share output** — `oobo share --out` now produces markdown by default; use `.json` extension for JSON output
 - **Default remote** — `api.oobo.ai` is now the documented default server (free accounts)
-- **Self-hosting docs** — only `/anchors/ingest` is required; verify, health, and share are optional
+- **Self-hosting docs** — only `/anchors/ingest` is required for commit sync; `/anchors/search` and `/anchors/health` are optional capabilities
 
 ### Added
 
@@ -302,6 +354,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI/CD pipeline**: multi-platform testing (Ubuntu, macOS, Debian, Alpine) and 6-target release builds
 - **Dual license**: Apache 2.0 and MIT
 
+[1.0.0-rc.1]: https://github.com/ooboai/oobo/compare/v0.1.15...v1.0.0-rc.1
 [0.1.15]: https://github.com/ooboai/oobo/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/ooboai/oobo/compare/v0.1.13...v0.1.14
 [0.1.13]: https://github.com/ooboai/oobo/compare/v0.1.12...v0.1.13

@@ -72,7 +72,7 @@ pub fn detect(project_root: &str) -> CommitAuthor {
 /// and filters sessions to the current worktree.
 fn check_active_sessions(project_root: &str) -> Option<CommitAuthor> {
     let sessions = crate::hooks::state::active_sessions_for_worktree(project_root);
-    let first = sessions.into_iter().next()?;
+    let first = sessions.into_iter().find(|s| s.ended_at.is_none())?;
     Some(CommitAuthor::Agent {
         tool: first.agent,
         session_id: Some(first.session_id),
@@ -384,7 +384,7 @@ mod tests {
         init_git_repo(root);
         let sessions_dir = root.join(".git/oobo-sessions");
         fs::create_dir_all(&sessions_dir).unwrap();
-        fs::write(sessions_dir.join("bad.json"), r#"not valid json"#).unwrap();
+        fs::write(sessions_dir.join("bad.json"), r"not valid json").unwrap();
 
         let result = check_active_sessions(root.to_str().unwrap());
         assert_eq!(result, None);
@@ -418,5 +418,89 @@ mod tests {
         }
 
         assert_eq!(result, Some(CommitAuthor::Automated));
+    }
+
+    #[test]
+    fn test_check_active_sessions_skips_ended() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        init_git_repo(root);
+
+        let sessions_dir = root.join(".git/oobo-sessions");
+        fs::create_dir_all(&sessions_dir).unwrap();
+
+        let now = chrono::Utc::now().timestamp();
+        let ended_session = serde_json::json!({
+            "session_id": "ended-sess",
+            "agent": "claude",
+            "worktree": root.to_str().unwrap(),
+            "started_at": now - 60,
+            "updated_at": now,
+            "ended_at": now,
+        });
+        fs::write(
+            sessions_dir.join("ended.json"),
+            serde_json::to_string(&ended_session).unwrap(),
+        )
+        .unwrap();
+
+        let result = check_active_sessions(root.to_str().unwrap());
+        assert_eq!(
+            result, None,
+            "ended session should not be detected as active"
+        );
+    }
+
+    #[test]
+    fn test_check_active_sessions_finds_active_ignores_ended() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        init_git_repo(root);
+
+        let sessions_dir = root.join(".git/oobo-sessions");
+        fs::create_dir_all(&sessions_dir).unwrap();
+
+        let now = chrono::Utc::now().timestamp();
+
+        let ended_session = serde_json::json!({
+            "session_id": "ended-sess",
+            "agent": "claude",
+            "worktree": root.to_str().unwrap(),
+            "started_at": now - 120,
+            "updated_at": now - 60,
+            "ended_at": now - 60,
+        });
+        fs::write(
+            sessions_dir.join("ended.json"),
+            serde_json::to_string(&ended_session).unwrap(),
+        )
+        .unwrap();
+
+        let active_session = serde_json::json!({
+            "session_id": "active-sess",
+            "agent": "cursor",
+            "worktree": root.to_str().unwrap(),
+            "started_at": now,
+            "updated_at": now,
+        });
+        fs::write(
+            sessions_dir.join("active.json"),
+            serde_json::to_string(&active_session).unwrap(),
+        )
+        .unwrap();
+
+        let result = check_active_sessions(root.to_str().unwrap());
+        assert!(result.is_some(), "should find the active session");
+        match result.unwrap() {
+            CommitAuthor::Agent { tool, session_id } => {
+                assert_eq!(tool, "cursor");
+                assert_eq!(session_id.as_deref(), Some("active-sess"));
+            }
+            other => panic!("expected Agent, got {other:?}"),
+        }
     }
 }

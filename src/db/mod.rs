@@ -1,11 +1,11 @@
 pub mod ai_commits;
-pub mod api_usage;
 pub mod events;
 pub mod migrations;
 pub mod otel;
 pub mod projects;
 pub mod sessions;
 pub mod stats;
+pub mod turns;
 
 use rusqlite::Connection;
 
@@ -37,27 +37,69 @@ impl Db {
             .map_err(|e| format!("cannot open database {}: {e}", db_path.display()))?;
 
         let db = Self { conn };
-        db.init()?;
+        db.init_with_path(Some(&db_path))?;
         Ok(db)
     }
 
-    #[cfg(test)]
+    /// Open an in-memory DB. Useful for tests (including
+    /// integration tests outside the crate) and for ephemeral
+    /// one-shot tools that don't want to touch the user's DB file.
     pub fn open_in_memory() -> Result<Self, String> {
         let conn =
             Connection::open_in_memory().map_err(|e| format!("cannot open in-memory db: {e}"))?;
         let db = Self { conn };
-        db.init()?;
+        db.init_with_path(None)?;
         Ok(db)
     }
 
-    fn init(&self) -> Result<(), String> {
+    fn init_with_path(&self, db_path: Option<&std::path::Path>) -> Result<(), String> {
         self.conn
             .execute_batch(
                 "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
             )
             .map_err(|e| format!("cannot set pragmas: {e}"))?;
-        migrations::run(&self.conn)?;
+        migrations::run_with_path(&self.conn, db_path)?;
+        // Migration v9 may have temporarily disabled FKs — restore them.
+        self.conn
+            .execute_batch("PRAGMA foreign_keys=ON;")
+            .map_err(|e| format!("cannot restore fk pragma: {e}"))?;
         Ok(())
+    }
+
+    /// Read a value from `oobo_state`. Returns `None` when the key
+    /// is absent or the table doesn't exist yet (pre-v12 DBs).
+    pub fn state_get(&self, key: &str) -> Option<String> {
+        self.conn
+            .query_row(
+                "SELECT value FROM oobo_state WHERE key = ?1",
+                rusqlite::params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+    }
+
+    /// Set a value in `oobo_state`. Silent no-op if the table is
+    /// missing (shouldn't happen once migrations run, but keeps
+    /// callers from panicking on partially-initialised DBs).
+    pub fn state_set(&self, key: &str, value: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO oobo_state (key, value) VALUES (?1, ?2)",
+                rusqlite::params![key, value],
+            )
+            .map(|_| ())
+            .map_err(|e| format!("state_set {key}: {e}"))
+    }
+
+    /// Remove a key from `oobo_state`.
+    pub fn state_clear(&self, key: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "DELETE FROM oobo_state WHERE key = ?1",
+                rusqlite::params![key],
+            )
+            .map(|_| ())
+            .map_err(|e| format!("state_clear {key}: {e}"))
     }
 
     /// Check if this project has been hydrated recently (within `max_age_secs`).
@@ -165,6 +207,71 @@ impl Db {
             )
             .map_err(|e| format!("insert anchor_session: {e}"))?;
         Ok(())
+    }
+
+    /// Cross-project summary stats for the bare `oobo` view.
+    ///
+    /// Returns aggregate anchor count, token total, AI percentage, and the
+    /// last-activity timestamp for a project. All queries degrade gracefully
+    /// to zero on error (this is a best-effort summary, not a critical path).
+    pub fn anchor_stats_for_project(
+        &self,
+        project_id: &str,
+    ) -> Result<crate::db::projects::AnchorStats, String> {
+        use rusqlite::params;
+        let mut stats = crate::db::projects::AnchorStats::default();
+
+        // Anchor count via ai_commits → anchors join.
+        let anchors: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM ai_commits WHERE project_id = ?1",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        stats.anchors = anchors;
+
+        // Tokens via anchor_sessions joined to ai_commits.
+        let tokens: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)+\
+                         COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_tokens,0)), 0)
+                 FROM anchor_sessions s
+                 JOIN ai_commits c ON c.commit_hash = s.commit_hash
+                 WHERE c.project_id = ?1",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        stats.tokens = tokens;
+
+        // AI% average from ai_commits.
+        let ai_pct: f64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(AVG(ai_percentage), 0.0)
+                 FROM ai_commits
+                 WHERE project_id = ?1 AND ai_percentage IS NOT NULL",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0.0);
+        stats.ai_pct = ai_pct.round() as i64;
+
+        // Most recent activity.
+        let last: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(updated_at), 0) FROM sessions WHERE project_id = ?1",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        stats.last_activity = last;
+
+        Ok(stats)
     }
 
     /// Update a session's first_message field.

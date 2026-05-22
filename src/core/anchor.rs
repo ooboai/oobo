@@ -1,5 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+pub const ANCHOR_SCHEMA_VERSION: u32 = 1;
+
+fn default_anchor_schema_version() -> u32 {
+    ANCHOR_SCHEMA_VERSION
+}
+
 /// Whether redacted session transcripts are included alongside anchor metadata
 /// on the orphan branch. Anchor metadata is **always** written to the branch
 /// (unless the project is ignored); this flag only controls transcripts.
@@ -118,9 +124,12 @@ pub struct FileChange {
 }
 
 /// Anchor metadata — the enriched commit primitive.
-/// One per commit, stored on the orphan branch and in local SQLite.
+/// One per commit, stored on the orphan branch (`oobo/anchors/v1`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Anchor {
+    /// Version of the portable anchor metadata schema.
+    #[serde(default = "default_anchor_schema_version")]
+    pub anchor_schema_version: u32,
     pub oobo_version: String,
     pub commit_hash: String,
     pub branch: String,
@@ -170,6 +179,22 @@ pub struct Anchor {
     /// Cross-session file interactions detected at commit time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_interactions: Option<Vec<FileInteraction>>,
+
+    /// Turn snapshots that led into this anchor. Anchors carry only this
+    /// lightweight lineage; full turn memory remains local in
+    /// `refs/oobo/turns/v1/...` unless a later sync policy explicitly exports it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<AnchorTurnRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnchorTurnRef {
+    pub id: String,
+    pub session_id: String,
+    pub source: String,
+    pub turn_index: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -230,8 +255,8 @@ pub fn detect_interactions(
     let mut file_map: HashMap<&str, Vec<(&str, bool, bool)>> = HashMap::new();
 
     for s in sessions {
-        let edited_set: HashSet<&str> = s.edited.iter().map(|f| f.as_str()).collect();
-        let read_set: HashSet<&str> = s.read.iter().map(|f| f.as_str()).collect();
+        let edited_set: HashSet<&str> = s.edited.iter().map(std::string::String::as_str).collect();
+        let read_set: HashSet<&str> = s.read.iter().map(std::string::String::as_str).collect();
 
         for f in &s.edited {
             let is_read = read_set.contains(f.as_str());
@@ -349,6 +374,12 @@ pub struct SessionLink {
     /// Number of context compaction events during this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_count: Option<u32>,
+    /// Total context tokens used by the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u64>,
+    /// Context window size configured for the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window_size: Option<u64>,
 
     #[serde(default)]
     pub is_subagent: bool,
@@ -369,6 +400,148 @@ impl Anchor {
     pub fn oobo_version() -> &'static str {
         env!("CARGO_PKG_VERSION")
     }
+
+    pub fn schema_version() -> u32 {
+        ANCHOR_SCHEMA_VERSION
+    }
+
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.anchor_schema_version == 0 {
+            errors.push("anchor_schema_version must be non-zero".to_string());
+        }
+        if self.commit_hash.trim().is_empty() {
+            errors.push("commit_hash must not be empty".to_string());
+        }
+        if let Some(pct) = self.ai_percentage {
+            if !pct.is_finite() || !(0.0..=100.0).contains(&pct) {
+                errors.push("ai_percentage must be between 0.0 and 100.0".to_string());
+            }
+        }
+
+        ensure_unique_non_empty("session_ids", &self.session_ids, &mut errors);
+
+        let mut contributor_names = std::collections::HashSet::new();
+        for contributor in &self.contributors {
+            if contributor.name.trim().is_empty() {
+                errors.push("contributors must not contain empty names".to_string());
+            } else if !contributor_names.insert(contributor.name.as_str()) {
+                errors.push(format!("duplicate contributor name: {}", contributor.name));
+            }
+        }
+
+        if !self.file_changes.is_empty() {
+            let added: u32 = self.file_changes.iter().map(|f| f.added).sum();
+            let deleted: u32 = self.file_changes.iter().map(|f| f.deleted).sum();
+            if added != self.added {
+                errors.push(format!(
+                    "file_changes added sum {added} does not match anchor added {}",
+                    self.added
+                ));
+            }
+            if deleted != self.deleted {
+                errors.push(format!(
+                    "file_changes deleted sum {deleted} does not match anchor deleted {}",
+                    self.deleted
+                ));
+            }
+        }
+
+        if self.ai_added + self.human_added != self.added {
+            errors.push("ai_added + human_added must equal added".to_string());
+        }
+        if self.ai_deleted + self.human_deleted != self.deleted {
+            errors.push("ai_deleted + human_deleted must equal deleted".to_string());
+        }
+
+        let mut changed_paths = std::collections::HashSet::new();
+        for path in &self.files_changed {
+            if path.trim().is_empty() {
+                errors.push("files_changed must not contain empty paths".to_string());
+            } else {
+                changed_paths.insert(path.as_str());
+            }
+        }
+
+        let mut file_change_paths = std::collections::HashSet::new();
+        for file in &self.file_changes {
+            if file.path.trim().is_empty() {
+                errors.push("file_changes must not contain empty paths".to_string());
+            } else if !file_change_paths.insert(file.path.as_str()) {
+                errors.push(format!("duplicate file_change path: {}", file.path));
+            }
+
+            for attribution in &file.line_attributions {
+                if attribution.ranges.is_empty() {
+                    errors.push(format!(
+                        "line attribution for {} must contain at least one range",
+                        file.path
+                    ));
+                }
+                for range in &attribution.ranges {
+                    if range.start == 0 {
+                        errors.push(format!("line range for {} must be 1-indexed", file.path));
+                    }
+                    if range.start > range.end {
+                        errors.push(format!(
+                            "line range for {} has start {} after end {}",
+                            file.path, range.start, range.end
+                        ));
+                    }
+                }
+            }
+        }
+
+        if !file_change_paths.is_empty() && changed_paths != file_change_paths {
+            errors.push("files_changed must match file_changes paths".to_string());
+        }
+
+        if let Some(interactions) = &self.file_interactions {
+            for interaction in interactions {
+                if interaction.path.trim().is_empty() {
+                    errors.push("file_interactions must not contain empty paths".to_string());
+                }
+                if interaction.sessions.len() < 2 {
+                    errors.push(format!(
+                        "file interaction for {} must include at least two sessions",
+                        interaction.path
+                    ));
+                }
+                let mut interaction_sessions = std::collections::HashSet::new();
+                for session in &interaction.sessions {
+                    if session.session_id.trim().is_empty() {
+                        errors.push(format!(
+                            "file interaction for {} contains empty session_id",
+                            interaction.path
+                        ));
+                    } else if !interaction_sessions.insert(session.session_id.as_str()) {
+                        errors.push(format!(
+                            "file interaction for {} has duplicate session_id {}",
+                            interaction.path, session.session_id
+                        ));
+                    }
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+fn ensure_unique_non_empty(label: &str, values: &[String], errors: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    for value in values {
+        if value.trim().is_empty() {
+            errors.push(format!("{label} must not contain empty values"));
+        } else if !seen.insert(value.as_str()) {
+            errors.push(format!("{label} contains duplicate value: {value}"));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -378,6 +551,7 @@ mod tests {
     #[test]
     fn test_anchor_serialize_roundtrip() {
         let anchor = Anchor {
+            anchor_schema_version: ANCHOR_SCHEMA_VERSION,
             oobo_version: "0.1.0".into(),
             commit_hash: "abc123".into(),
             branch: "main".into(),
@@ -419,6 +593,7 @@ mod tests {
             reasoning: None,
             transparency_mode: TransparencyMode::Off,
             file_interactions: None,
+            turns: Vec::new(),
         };
         let json = serde_json::to_string(&anchor).unwrap();
         let restored: Anchor = serde_json::from_str(&json).unwrap();
@@ -508,6 +683,8 @@ mod tests {
             bash_commands: None,
             thinking_duration_ms: None,
             compact_count: None,
+            context_tokens: None,
+            context_window_size: None,
             is_subagent: false,
             parent_session_id: None,
             subagent_type: None,
@@ -614,6 +791,7 @@ mod tests {
             ],
         }];
         let anchor = Anchor {
+            anchor_schema_version: ANCHOR_SCHEMA_VERSION,
             oobo_version: "0.1.0".into(),
             commit_hash: "abc".into(),
             branch: "main".into(),
@@ -637,10 +815,68 @@ mod tests {
             reasoning: None,
             transparency_mode: TransparencyMode::Off,
             file_interactions: Some(interactions.clone()),
+            turns: Vec::new(),
         };
         let json = serde_json::to_string(&anchor).unwrap();
         let restored: Anchor = serde_json::from_str(&json).unwrap();
         assert_eq!(anchor.file_interactions, restored.file_interactions);
+    }
+
+    #[test]
+    fn test_anchor_schema_version_defaults_for_legacy_json() {
+        let json = serde_json::json!({
+            "oobo_version": "0.1.0",
+            "commit_hash": "abc",
+            "branch": "main",
+            "author": "test",
+            "committed_at": 0,
+            "message": "legacy",
+            "files_changed": [],
+            "added": 0,
+            "deleted": 0,
+            "session_ids": [],
+            "transparency_mode": "off"
+        });
+
+        let restored: Anchor = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.anchor_schema_version, ANCHOR_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_anchor_validate_accepts_consistent_anchor() {
+        let anchor = sample_valid_anchor();
+        assert_eq!(anchor.validate(), Ok(()));
+    }
+
+    #[test]
+    fn test_anchor_validate_rejects_schema_and_count_drift() {
+        let mut anchor = sample_valid_anchor();
+        anchor.anchor_schema_version = 0;
+        anchor.session_ids.push("sess-1".into());
+        anchor.ai_percentage = Some(120.0);
+        anchor.ai_added = 3;
+        anchor.human_added = 3;
+        anchor.file_changes[0].line_attributions[0].ranges[0] = LineRange { start: 0, end: 0 };
+
+        let errors = anchor.validate().unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("anchor_schema_version")));
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("session_ids contains duplicate value")));
+        assert!(errors.iter().any(|e| e.contains("ai_percentage")));
+        assert!(errors.iter().any(|e| e.contains("ai_added + human_added")));
+        assert!(errors.iter().any(|e| e.contains("1-indexed")));
+    }
+
+    #[test]
+    fn test_anchor_validate_rejects_file_path_mismatch() {
+        let mut anchor = sample_valid_anchor();
+        anchor.files_changed = vec!["src/other.rs".into()];
+
+        let errors = anchor.validate().unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("files_changed must match file_changes paths")));
     }
 
     #[test]
@@ -722,5 +958,76 @@ mod tests {
             .sessions
             .iter()
             .any(|r| r.session_id == "s2" && r.role == FileRole::Reader));
+    }
+
+    fn sample_valid_anchor() -> Anchor {
+        Anchor {
+            anchor_schema_version: ANCHOR_SCHEMA_VERSION,
+            oobo_version: "1.0.0-rc.1".into(),
+            commit_hash: "abc123".into(),
+            branch: "main".into(),
+            author: "Test <test@example.com>".into(),
+            author_type: AuthorType::Assisted,
+            contributors: vec![
+                Contributor {
+                    name: "Test <test@example.com>".into(),
+                    role: ContributorRole::Human,
+                    model: None,
+                },
+                Contributor {
+                    name: "cursor".into(),
+                    role: ContributorRole::Agent,
+                    model: Some("claude-sonnet-4".into()),
+                },
+            ],
+            committed_at: 1_700_000_000,
+            message: "fix auth middleware".into(),
+            files_changed: vec!["src/auth.rs".into()],
+            added: 4,
+            deleted: 1,
+            file_changes: vec![FileChange {
+                path: "src/auth.rs".into(),
+                added: 4,
+                deleted: 1,
+                attribution: Some(FileAttribution::Mixed),
+                agent: Some("cursor".into()),
+                line_attributions: vec![
+                    LineAttribution {
+                        author: FileAttribution::Ai,
+                        ranges: vec![LineRange::new(10, 12)],
+                        agent: Some("cursor".into()),
+                    },
+                    LineAttribution {
+                        author: FileAttribution::Human,
+                        ranges: vec![LineRange::new(20, 20)],
+                        agent: None,
+                    },
+                ],
+            }],
+            ai_added: 3,
+            ai_deleted: 1,
+            human_added: 1,
+            human_deleted: 0,
+            ai_percentage: Some(80.0),
+            session_ids: vec!["sess-1".into()],
+            summary: None,
+            intent: None,
+            reasoning: None,
+            transparency_mode: TransparencyMode::Off,
+            file_interactions: Some(vec![FileInteraction {
+                path: "src/auth.rs".into(),
+                sessions: vec![
+                    FileSessionRole {
+                        session_id: "sess-1".into(),
+                        role: FileRole::Writer,
+                    },
+                    FileSessionRole {
+                        session_id: "sess-2".into(),
+                        role: FileRole::Reader,
+                    },
+                ],
+            }]),
+            turns: Vec::new(),
+        }
     }
 }

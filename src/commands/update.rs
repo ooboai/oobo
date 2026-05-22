@@ -1,14 +1,14 @@
 const REPO: &str = "ooboai/oobo";
 const USER_AGENT: &str = concat!("oobo/", env!("CARGO_PKG_VERSION"));
 
-pub fn run(check_only: bool) -> Result<(), String> {
+pub async fn run(check_only: bool) -> Result<(), String> {
     let current_version = env!("CARGO_PKG_VERSION");
     eprintln!("current version: v{current_version}");
 
-    let latest = fetch_latest_version()?;
+    let latest = fetch_latest_version().await?;
     let latest_clean = latest.trim_start_matches('v');
 
-    if latest_clean == current_version {
+    if latest_clean == current_version || !is_newer(latest_clean, current_version) {
         eprintln!("already up to date");
         return Ok(());
     }
@@ -21,7 +21,7 @@ pub fn run(check_only: bool) -> Result<(), String> {
     }
 
     eprintln!("downloading...");
-    install_latest(&latest)?;
+    install_latest(&latest).await?;
     eprintln!("updated to v{latest_clean}");
 
     let current_exe = std::env::current_exe().ok();
@@ -48,11 +48,6 @@ pub fn run_post_update() -> Result<(), String> {
         Err(e) => eprintln!("  skill file: {e}"),
     }
 
-    match crate::db::Db::open() {
-        Ok(_) => eprintln!("  database migrations applied"),
-        Err(e) => eprintln!("  database: {e}"),
-    }
-
     let hooks = crate::hooks::install::install_all_agent_hooks();
     if hooks.is_empty() {
         eprintln!("  agent hooks: none installed");
@@ -63,10 +58,10 @@ pub fn run_post_update() -> Result<(), String> {
     Ok(())
 }
 
-fn fetch_latest_version() -> Result<String, String> {
+async fn fetch_latest_version() -> Result<String, String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .build()
         .map_err(|e| format!("http client error: {e}"))?;
@@ -74,21 +69,25 @@ fn fetch_latest_version() -> Result<String, String> {
     let resp = client
         .get(&url)
         .send()
+        .await
         .map_err(|e| format!("cannot reach GitHub: {e}"))?;
 
     if !resp.status().is_success() {
         return Err(format!("GitHub API returned {}", resp.status()));
     }
 
-    let body: serde_json::Value = resp.json().map_err(|e| format!("invalid response: {e}"))?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("invalid response: {e}"))?;
 
     body.get("tag_name")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .ok_or_else(|| "no tag_name in release".to_string())
 }
 
-fn install_latest(tag: &str) -> Result<(), String> {
+async fn install_latest(tag: &str) -> Result<(), String> {
     let target = current_target();
     if target == "unknown" || target.is_empty() {
         return Err("prebuilt binaries are not available for this platform".to_string());
@@ -101,7 +100,7 @@ fn install_latest(tag: &str) -> Result<(), String> {
 
     let url = format!("https://github.com/{REPO}/releases/download/{tag}/{asset_name}");
 
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .build()
         .map_err(|e| format!("http client error: {e}"))?;
@@ -109,6 +108,7 @@ fn install_latest(tag: &str) -> Result<(), String> {
     let resp = client
         .get(&url)
         .send()
+        .await
         .map_err(|e| format!("cannot download: {e}"))?;
 
     if !resp.status().is_success() {
@@ -117,6 +117,7 @@ fn install_latest(tag: &str) -> Result<(), String> {
 
     let bytes = resp
         .bytes()
+        .await
         .map_err(|e| format!("cannot read download: {e}"))?;
 
     let current_exe =
@@ -194,7 +195,7 @@ fn extract_zip(archive: &std::path::Path, dest: &std::path::Path) -> Result<(), 
 }
 
 #[cfg(not(target_os = "windows"))]
-#[allow(dead_code)]
+#[allow(clippy::unnecessary_wraps)]
 fn extract_zip(_archive: &std::path::Path, _dest: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
@@ -251,4 +252,62 @@ fn is_musl() -> bool {
                 out.to_ascii_lowercase().contains("musl")
             })
             .unwrap_or(false)
+}
+
+/// Compare two version strings, returning true if `candidate` is newer than `current`.
+/// Strips pre-release suffixes (e.g. "-rc.1") for the numeric comparison,
+/// then treats a pre-release of the same base version as older than the release.
+fn is_newer(candidate: &str, current: &str) -> bool {
+    fn parse_parts(v: &str) -> (Vec<u64>, &str) {
+        let (base, pre) = v.split_once('-').map_or((v, ""), |(b, p)| (b, p));
+        let nums: Vec<u64> = base.split('.').filter_map(|s| s.parse().ok()).collect();
+        (nums, pre)
+    }
+
+    let (cand_nums, _cand_pre) = parse_parts(candidate);
+    let (curr_nums, _curr_pre) = parse_parts(current);
+
+    let max_len = cand_nums.len().max(curr_nums.len());
+    for i in 0..max_len {
+        let c = cand_nums.get(i).copied().unwrap_or(0);
+        let r = curr_nums.get(i).copied().unwrap_or(0);
+        if c > r {
+            return true;
+        }
+        if c < r {
+            return false;
+        }
+    }
+
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_newer;
+
+    #[test]
+    fn newer_major() {
+        assert!(is_newer("2.0.0", "1.0.0"));
+    }
+
+    #[test]
+    fn older_release() {
+        assert!(!is_newer("0.1.15", "1.0.0-rc.1"));
+    }
+
+    #[test]
+    fn same_version() {
+        assert!(!is_newer("1.0.0", "1.0.0"));
+    }
+
+    #[test]
+    fn newer_patch() {
+        assert!(is_newer("1.0.1", "1.0.0"));
+    }
+
+    #[test]
+    fn rc_not_newer_than_same_base() {
+        assert!(!is_newer("1.0.0-rc.2", "1.0.0-rc.1"));
+    }
 }

@@ -122,7 +122,7 @@ pub fn all_sessions() -> Result<Vec<Session>, String> {
 }
 
 pub mod transcript {
-    use super::*;
+    use super::{conversations_dir, fs, threads_dir, Message, Path, PathBuf};
 
     pub fn find_transcript_path(_project_path: &str, session_id: &str) -> Option<PathBuf> {
         for dir_fn in [conversations_dir, threads_dir] {
@@ -141,13 +141,6 @@ pub mod transcript {
             }
         }
         None
-    }
-
-    pub fn count_messages(_project_path: &str, session_id: &str) -> u32 {
-        match find_transcript_path("", session_id) {
-            Some(p) => parse_messages(&p).len() as u32,
-            None => 0,
-        }
     }
 
     pub fn parse_messages(path: &Path) -> Vec<Message> {
@@ -271,11 +264,6 @@ pub mod transcript {
 
         messages
     }
-
-    pub fn read_transcript(path: &Path, max_messages: u32) -> String {
-        let messages = parse_messages(path);
-        crate::utils::format_transcript(&messages, max_messages, "Assistant")
-    }
 }
 
 pub mod telemetry {
@@ -308,8 +296,7 @@ pub mod telemetry {
 
     pub fn has_telemetry_log() -> bool {
         telemetry_log_path()
-            .map(|p| p.exists() && fs::metadata(&p).map(|m| m.len() > 0).unwrap_or(false))
-            .unwrap_or(false)
+            .is_some_and(|p| p.exists() && fs::metadata(&p).map(|m| m.len() > 0).unwrap_or(false))
     }
 
     struct UsageEvent {
@@ -387,19 +374,19 @@ pub mod telemetry {
                             .map(strip_provider),
                         input_tokens: props
                             .get("input_tokens")
-                            .and_then(|v| v.as_u64())
+                            .and_then(serde_json::Value::as_u64)
                             .unwrap_or(0),
                         output_tokens: props
                             .get("output_tokens")
-                            .and_then(|v| v.as_u64())
+                            .and_then(serde_json::Value::as_u64)
                             .unwrap_or(0),
                         cache_read_tokens: props
                             .get("cache_read_input_tokens")
-                            .and_then(|v| v.as_u64())
+                            .and_then(serde_json::Value::as_u64)
                             .unwrap_or(0),
                         cache_creation_tokens: props
                             .get("cache_creation_input_tokens")
-                            .and_then(|v| v.as_u64())
+                            .and_then(serde_json::Value::as_u64)
                             .unwrap_or(0),
                     });
                 }
@@ -414,7 +401,7 @@ pub mod telemetry {
                             session_id: sid,
                             turn_time_ms: props
                                 .get("turn_time_ms")
-                                .and_then(|v| v.as_u64())
+                                .and_then(serde_json::Value::as_u64)
                                 .unwrap_or(0),
                         });
                     }
@@ -463,7 +450,7 @@ pub mod telemetry {
             cache_read += event.cache_read_tokens;
             cache_create += event.cache_creation_tokens;
             if model.is_none() {
-                model = event.model.clone();
+                model.clone_from(&event.model);
             }
         }
 
@@ -480,7 +467,6 @@ pub mod telemetry {
         };
 
         Some(NativeStats {
-            model,
             input_tokens: Some(input_tokens),
             output_tokens: Some(output_tokens),
             cache_read_tokens: if cache_read > 0 {
@@ -497,44 +483,6 @@ pub mod telemetry {
             files_touched: Vec::new(),
             tool_call_count: 0,
         })
-    }
-
-    /// Return global stats from all telemetry events.
-    pub fn global_stats() -> Option<(u64, u64, u64, u64, usize)> {
-        if !has_telemetry_log() {
-            return None;
-        }
-
-        let (usage_events, _) = load_telemetry();
-        if usage_events.is_empty() {
-            return None;
-        }
-
-        // Deduplicate: take last per (thread_id, prompt_id) pair
-        let mut last_per_prompt: HashMap<(String, String), &UsageEvent> = HashMap::new();
-        for event in &usage_events {
-            last_per_prompt.insert((event.thread_id.clone(), event.prompt_id.clone()), event);
-        }
-
-        let mut input: u64 = 0;
-        let mut output: u64 = 0;
-        let mut cache_read: u64 = 0;
-        let mut cache_create: u64 = 0;
-
-        for event in last_per_prompt.values() {
-            input += event.input_tokens;
-            output += event.output_tokens;
-            cache_read += event.cache_read_tokens;
-            cache_create += event.cache_creation_tokens;
-        }
-
-        Some((
-            input,
-            output,
-            cache_read,
-            cache_create,
-            last_per_prompt.len(),
-        ))
     }
 
     #[cfg(test)]

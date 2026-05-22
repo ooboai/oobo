@@ -69,8 +69,7 @@ fn read_workspace_folder(ws_dir: &Path) -> Option<String> {
 fn uri_to_path(uri: &str) -> String {
     if let Ok(url) = url::Url::parse(uri) {
         url.to_file_path()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| uri.to_string())
+            .map_or_else(|()| uri.to_string(), |p| p.to_string_lossy().to_string())
     } else {
         uri.to_string()
     }

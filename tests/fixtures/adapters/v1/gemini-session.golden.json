@@ -1,0 +1,10 @@
+[
+  {
+    "role": "user",
+    "text": "Patch the CLI spec harness"
+  },
+  {
+    "role": "assistant",
+    "text": "I will add deterministic exit-code assertions.\nThen I will verify JSON output shape."
+  }
+]

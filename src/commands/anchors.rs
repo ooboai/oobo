@@ -1,323 +1,566 @@
+//! `oobo anchors` — the flagship view.
+//!
+//! List anchors (in or out of a repo) and drill into a single anchor via
+//! `anchors show <sha>`. See `tests/cli-spec/02-anchors.md` for the exact
+//! output contract.
+
 use crate::cli::OutputMode;
 use crate::config::Config;
-use crate::db::Db;
+use crate::core::anchor::Anchor;
+use crate::error::{CliError, CmdResult};
+use crate::feed::{FeedRow, RowKind};
 
-/// Show enriched commit history with anchor metadata.
-///
-/// `oobo anchors` shows recent commits annotated with linked sessions,
-/// agent/human attribution, and token counts where available.
-pub fn run(cfg: &Config, limit: usize, mode: OutputMode) -> Result<(), String> {
-    let db = Db::open()?;
+/// User-facing filters for `anchors` list mode.
+#[derive(Debug, Default, Clone)]
+pub struct Options {
+    pub limit: usize,
+    pub since: Option<String>,
+    pub tool: Option<String>,
+}
 
-    let commits = recent_commits_with_anchors(cfg, &db, limit)?;
+// ------------------------------------------------------------------
+// LIST
+// ------------------------------------------------------------------
 
-    if mode == OutputMode::Agent {
-        println!("# hash | message | author | date | sessions | ai% | added | deleted");
-        for entry in &commits {
-            let hash_short = if entry.commit_hash.len() >= 7 {
-                &entry.commit_hash[..7]
-            } else {
-                &entry.commit_hash
-            };
-            let sess_count = entry.sessions.len();
-            let ai_pct = entry
-                .ai_percentage
-                .map(|p| format!("{:.0}%", p))
-                .unwrap_or_default();
-            let message = crate::utils::sanitize_pipe(&entry.message);
-            let author = crate::utils::sanitize_pipe(&entry.author);
-            let date = if entry.committed_at > 0 {
-                chrono::DateTime::from_timestamp(entry.committed_at, 0)
-                    .map(|dt| dt.format("%Y-%m-%dT%H:%M").to_string())
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
-            println!(
-                "{} | {} | {} | {} | {} | {} | {} | {}",
-                hash_short, message, author, date, sess_count, ai_pct, entry.added, entry.deleted,
-            );
-        }
-        return Ok(());
+/// `oobo anchors` — list recent anchors.
+#[tracing::instrument(skip_all)]
+pub fn run_list(cfg: &Config, opts: &Options, mode: OutputMode) -> CmdResult {
+    let root = crate::git::proxy::project_root(cfg);
+    let in_repo = root.is_some();
+
+    if in_repo
+        && mode == OutputMode::Tui
+        && opts.limit == 50
+        && opts.since.is_none()
+        && opts.tool.is_none()
+    {
+        return crate::tui::app::run(cfg);
     }
 
-    if mode == OutputMode::Json {
-        let j = serde_json::to_string_pretty(&commits).map_err(|e| format!("json: {e}"))?;
-        println!("{j}");
-        return Ok(());
-    }
-
-    if commits.is_empty() {
-        println!("No commits with anchor metadata yet.");
-        println!("Anchors are recorded automatically when you commit through oobo.");
-        return Ok(());
-    }
-
-    for entry in &commits {
-        let hash_short = if entry.commit_hash.len() >= 7 {
-            &entry.commit_hash[..7]
-        } else {
-            &entry.commit_hash
-        };
-
-        let agent_indicator = if entry.sessions.is_empty() {
-            "\x1b[90m●\x1b[0m"
-        } else {
-            "\x1b[35m◆\x1b[0m"
-        };
-
-        println!(
-            "{} \x1b[33m{}\x1b[0m {}",
-            agent_indicator, hash_short, entry.message,
-        );
-
-        if !entry.contributors.is_empty() {
-            let contribs: Vec<String> = entry
-                .contributors
-                .iter()
-                .map(|c| match c.role {
-                    crate::core::anchor::ContributorRole::Human => c.name.clone(),
-                    crate::core::anchor::ContributorRole::Agent => {
-                        if let Some(ref m) = c.model {
-                            format!("{} ({})", c.name, m)
-                        } else {
-                            c.name.clone()
-                        }
-                    }
-                })
-                .collect();
-            println!("  \x1b[90mby: {}\x1b[0m", contribs.join(" + "));
-        } else if !entry.author.is_empty() {
-            println!("  \x1b[90mauthor: {}\x1b[0m", entry.author);
-        }
-
-        if entry.added > 0 || entry.deleted > 0 {
-            let ai_pct = entry
-                .ai_percentage
-                .map(|p| format!("  \x1b[35m{:.0}% AI\x1b[0m", p))
-                .unwrap_or_default();
-            println!(
-                "  \x1b[32m+{}\x1b[0m / \x1b[31m-{}\x1b[0m  ({} files){}",
-                entry.added,
-                entry.deleted,
-                entry.files_changed.len(),
-                ai_pct,
-            );
-            if entry.ai_added > 0 || entry.human_added > 0 {
-                println!(
-                    "  \x1b[90mai: +{}/-{}  human: +{}/-{}\x1b[0m",
-                    entry.ai_added, entry.ai_deleted, entry.human_added, entry.human_deleted,
-                );
+    let since_epoch = match opts.since.as_deref() {
+        Some(raw) => match parse_since(raw) {
+            Ok(ts) => Some(ts),
+            Err(e) => {
+                eprintln!("error: invalid --since '{raw}': {e}");
+                return Ok(2);
             }
-        }
+        },
+        None => None,
+    };
 
-        for sess in &entry.sessions {
-            let model = sess.model.as_deref().unwrap_or("unknown");
-            let tokens = match (sess.input_tokens, sess.output_tokens) {
-                (Some(i), Some(o)) => format!(
-                    " {}+{} tokens",
-                    crate::tui::format_tokens(i as i64),
-                    crate::tui::format_tokens(o as i64),
-                ),
-                _ => String::new(),
-            };
-            println!(
-                "  \x1b[35m⤷ {} ({}, {}){}\x1b[0m",
-                &sess.session_id[..sess.session_id.len().min(8)],
-                sess.agent,
-                model,
-                tokens,
-            );
+    let rows = if let Some(ref root) = root {
+        crate::feed::load(
+            cfg,
+            root,
+            &crate::feed::LoadOptions {
+                limit: opts.limit,
+                since: since_epoch,
+                tool: opts.tool.clone(),
+            },
+        )?
+    } else {
+        if mode == OutputMode::Json {
+            let json = serde_json::json!({ "error": "not inside a git repository" });
+            crate::utils::print_json(&json);
+        } else {
+            eprintln!("oobo: not inside a git repository.");
         }
+        return Ok(1);
+    };
 
-        if let Some(ref summary) = entry.summary {
-            println!("  \x1b[36m{summary}\x1b[0m");
-        }
+    let project_name = root
+        .as_deref()
+        .and_then(|r| std::path::Path::new(r).file_name())
+        .and_then(|s| s.to_str())
+        .unwrap_or("all");
 
-        println!();
+    match mode {
+        OutputMode::Json => emit_list_json(cfg, &rows, project_name, in_repo),
+        OutputMode::Agent => emit_list_agent(&rows, project_name, in_repo),
+        OutputMode::Tui => emit_list_pretty(&rows, project_name, in_repo),
     }
-
-    Ok(())
+    Ok(0)
 }
 
-#[derive(Debug, serde::Serialize)]
-struct LogEntry {
-    commit_hash: String,
-    message: String,
-    author: String,
-    author_type: crate::core::anchor::AuthorType,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    contributors: Vec<crate::core::anchor::Contributor>,
-    branch: String,
-    committed_at: i64,
-    files_changed: Vec<String>,
-    added: u32,
-    deleted: u32,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    file_changes: Vec<crate::core::anchor::FileChange>,
-    #[serde(default)]
-    ai_added: u32,
-    #[serde(default)]
-    ai_deleted: u32,
-    #[serde(default)]
-    human_added: u32,
-    #[serde(default)]
-    human_deleted: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ai_percentage: Option<f64>,
-    sessions: Vec<SessionEntry>,
-    summary: Option<String>,
-    intent: Option<String>,
-}
+// ------------------------------------------------------------------
+// SHOW
+// ------------------------------------------------------------------
 
-#[derive(Debug, serde::Serialize)]
-struct SessionEntry {
-    session_id: String,
-    agent: String,
-    model: Option<String>,
-    link_type: String,
-    input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    files_touched: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    parent_session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    subagent_type: Option<String>,
-}
+/// `oobo anchors show <sha>` — drill-down on one anchor.
+#[tracing::instrument(skip_all, fields(sha))]
+pub fn run_show(cfg: &Config, sha: &str, mode: OutputMode) -> CmdResult {
+    let root = crate::git::proxy::project_root(cfg).ok_or(CliError::NotARepo)?;
 
-fn recent_commits_with_anchors(
-    cfg: &Config,
-    db: &Db,
-    limit: usize,
-) -> Result<Vec<LogEntry>, String> {
-    let git_log = crate::git::proxy::run_git_capture(
-        cfg,
-        &[
-            "log",
-            &format!("-{limit}"),
-            "--format=%H|||%s|||%an <%ae>|||%aI",
-        ],
-    )?;
-
-    let mut entries = Vec::new();
-
-    for line in git_log.lines() {
-        let parts: Vec<&str> = line.splitn(4, "|||").collect();
-        if parts.len() < 4 {
-            continue;
+    let matches = resolve_sha(&root, sha);
+    match matches.len() {
+        0 => {
+            eprintln!("error: no anchor found for '{sha}'");
+            return Ok(1);
         }
+        1 => {}
+        _ => {
+            eprintln!("error: '{sha}' matches multiple anchors:");
+            for (full, subj) in &matches {
+                eprintln!("  {}  {}", &full[..7.min(full.len())], subj);
+            }
+            return Ok(1);
+        }
+    }
+    let commit_hash = matches[0].0.clone();
+    let anchor = load_anchor(&root, &commit_hash)
+        .ok_or_else(|| format!("anchor row missing for {commit_hash}"))?;
 
-        let hash = parts[0].to_string();
-        let message = parts[1].to_string();
-        let author = parts[2].to_string();
-        let _date = parts[3];
+    let sessions = load_sessions(&root, &commit_hash);
 
-        let anchor = load_anchor_from_db(db, &hash);
+    match mode {
+        OutputMode::Json => {
+            emit_show_json(cfg, &anchor, &sessions);
+            Ok(0)
+        }
+        OutputMode::Agent => {
+            emit_show_agent(&anchor, &sessions);
+            Ok(0)
+        }
+        OutputMode::Tui => crate::tui::app::run_show(cfg, &commit_hash),
+    }
+}
 
-        let mut entry = LogEntry {
-            commit_hash: hash,
-            message,
-            author,
-            author_type: crate::core::anchor::AuthorType::Human,
-            contributors: Vec::new(),
-            branch: String::new(),
-            committed_at: 0,
-            files_changed: Vec::new(),
-            added: 0,
-            deleted: 0,
-            file_changes: Vec::new(),
-            ai_added: 0,
-            ai_deleted: 0,
-            human_added: 0,
-            human_deleted: 0,
-            ai_percentage: None,
-            sessions: Vec::new(),
-            summary: None,
-            intent: None,
+fn load_anchor(project_root: &str, commit_hash: &str) -> Option<Anchor> {
+    crate::git::orphan::read_anchor(project_root, commit_hash)
+}
+
+#[derive(Debug, serde::Serialize)]
+struct SessionInfo {
+    id: String,
+    tool: String,
+    model: Option<String>,
+    input: i64,
+    output: i64,
+    cache_read: i64,
+    cache_write: i64,
+    total: i64,
+}
+
+fn load_sessions(project_root: &str, commit_hash: &str) -> Vec<SessionInfo> {
+    let links = crate::git::orphan::read_session_links(project_root, commit_hash);
+    links
+        .iter()
+        .map(|l| {
+            let input = l.input_tokens.unwrap_or(0) as i64;
+            let output = l.output_tokens.unwrap_or(0) as i64;
+            let cache_read = l.cache_read_tokens.unwrap_or(0) as i64;
+            let cache_write = l.cache_creation_tokens.unwrap_or(0) as i64;
+            let total = input + output + cache_read + cache_write;
+            SessionInfo {
+                id: l.session_id.clone(),
+                tool: l.agent.clone(),
+                model: l.model.clone(),
+                input,
+                output,
+                cache_read,
+                cache_write,
+                total,
+            }
+        })
+        .collect()
+}
+
+// ------------------------------------------------------------------
+// SHA resolution
+// ------------------------------------------------------------------
+
+fn resolve_sha(project_root: &str, prefix: &str) -> Vec<(String, String)> {
+    let hashes = crate::git::orphan::list_anchor_hashes(project_root);
+    hashes
+        .into_iter()
+        .filter(|h| h.starts_with(prefix))
+        .filter_map(|h| {
+            let anchor = crate::git::orphan::read_anchor(project_root, &h)?;
+            Some((h, anchor.message))
+        })
+        .collect()
+}
+
+// ------------------------------------------------------------------
+// emitters — list
+// ------------------------------------------------------------------
+
+fn emit_list_agent(rows: &[FeedRow], project_name: &str, in_repo: bool) {
+    for r in rows {
+        let id = short_id(&r.id);
+        let rel = relative_time(r.timestamp);
+        let subject = truncate_fixed(&r.subject, 40);
+        let tool_base = r.tool.as_deref().unwrap_or("-");
+        let tool = match &r.worktree_hint {
+            Some(wt) => format!("{tool_base}@{}", truncate_fixed(wt, 12)),
+            None => tool_base.to_string(),
         };
+        let tokens = if r.tokens > 0 {
+            human_tokens(r.tokens)
+        } else {
+            "-".to_string()
+        };
+        let count = match r.kind {
+            RowKind::Anchor if r.ai_pct.is_some() => format!("{}%ai", r.ai_pct.unwrap()),
+            RowKind::Shadow => {
+                let tid: String = r.id.chars().take(8).collect();
+                format!("t:{tid}")
+            }
+            RowKind::Anchor => "-".to_string(),
+        };
+        let kind = r.kind.agent_label();
+        if in_repo {
+            println!("{kind:<6} {id:<10} {rel:<4} {subject:<40} {tool:<20} {tokens:<4} {count}",);
+        } else {
+            let proj = truncate_fixed(project_name, 14);
+            println!("{proj:<14} {kind:<6} {id:<10} {rel:<4} {subject:<40} {tool:<20} {tokens:<4} {count}",);
+        }
+    }
+    if !rows.is_empty() {
+        println!();
+        println!("commands:");
+        println!("  oobo anchor show <sha>   # details for any anchor above");
+        println!("  oobo blame <file> [sha]  # per-line AI/human attribution");
+        println!("  oobo search \"query\"      # search sessions");
+    }
+}
 
-        if let Some(anchor) = anchor {
-            entry.author_type = anchor.author_type;
-            entry.contributors = anchor.contributors;
-            entry.branch = anchor.branch;
-            entry.committed_at = anchor.committed_at;
-            entry.files_changed = anchor.files_changed;
-            entry.added = anchor.added;
-            entry.deleted = anchor.deleted;
-            entry.file_changes = anchor.file_changes;
-            entry.ai_added = anchor.ai_added;
-            entry.ai_deleted = anchor.ai_deleted;
-            entry.human_added = anchor.human_added;
-            entry.human_deleted = anchor.human_deleted;
-            entry.ai_percentage = anchor.ai_percentage;
-            entry.summary = anchor.summary;
-            entry.intent = anchor.intent;
+fn emit_list_pretty(rows: &[FeedRow], project_name: &str, in_repo: bool) {
+    if rows.is_empty() {
+        println!("No anchors yet. Commit through oobo to start anchoring sessions.");
+        return;
+    }
+    println!("\x1b[1moobo memory\x1b[0m");
+    println!("\x1b[2manchors are committed memory; local anchors are restorable points\x1b[0m");
+    println!();
+    for (idx, r) in rows.iter().enumerate() {
+        let id = short_id(&r.id);
+        let rel = relative_time(r.timestamp);
+        let subject = truncate_display(&r.subject, 72);
+        let tool = r.tool.as_deref().unwrap_or("-");
+        let tokens = if r.tokens > 0 {
+            human_tokens(r.tokens)
+        } else {
+            "-".to_string()
+        };
+        let (dot, kind, id_color, meta) = match r.kind {
+            RowKind::Anchor => {
+                let sessions = match r.session_count {
+                    0 => "no linked sessions".to_string(),
+                    1 => "1 session".to_string(),
+                    n => format!("{n} sessions"),
+                };
+                (
+                    "\x1b[32m●\x1b[0m",
+                    "\x1b[32manchor\x1b[0m",
+                    "\x1b[33m",
+                    format!("{tool} · {tokens} · {sessions}"),
+                )
+            }
+            RowKind::Shadow => {
+                let tid: String = r.id.chars().take(8).collect();
+                let parent = r
+                    .parent_anchor
+                    .as_deref()
+                    .map(|sha| format!(" · anchored under {}", short_sha(sha)))
+                    .unwrap_or_default();
+                let wt = r
+                    .worktree_hint
+                    .as_deref()
+                    .map(|w| format!(" · \x1b[36mwt:{w}\x1b[0m"))
+                    .unwrap_or_default();
+                (
+                    "\x1b[2m○\x1b[0m",
+                    "\x1b[2manchor\x1b[0m",
+                    "\x1b[2m",
+                    format!(
+                        "{tool} · t:{tid} · {} file{} · {} tool{}{parent}{wt}",
+                        r.files,
+                        plural(r.files),
+                        r.tool_calls,
+                        plural(r.tool_calls)
+                    ),
+                )
+            }
+        };
+        let ai_pct = r
+            .ai_pct
+            .map(|p| format!(" · \x1b[35m{p}% AI\x1b[0m"))
+            .unwrap_or_default();
+        if in_repo {
+            println!(
+                " {dot} \x1b[2m{rel:<5}\x1b[0m {kind:<20} {id_color}{id:<10}\x1b[0m  \x1b[1m{subject}\x1b[0m",
+            );
+            println!("   \x1b[2m{meta}{ai_pct}\x1b[0m");
+        } else {
+            let proj = truncate_fixed(project_name, 16);
+            println!(
+                " {dot} \x1b[34m{proj:<16}\x1b[0m \x1b[2m{rel:<5}\x1b[0m {kind:<20} {id_color}{id:<10}\x1b[0m  \x1b[1m{subject}\x1b[0m",
+            );
+            println!("   \x1b[2m{meta}{ai_pct}\x1b[0m");
+        }
+        if idx + 1 < rows.len() {
+            println!("   \x1b[2m│\x1b[0m");
+        }
+    }
+}
 
-            for sid in &anchor.session_ids {
-                if let Some(link) = load_session_link(db, &entry.commit_hash, sid) {
-                    entry.sessions.push(link);
-                } else {
-                    entry.sessions.push(SessionEntry {
-                        session_id: sid.clone(),
-                        agent: String::new(),
-                        model: None,
-                        link_type: "unknown".to_string(),
-                        input_tokens: None,
-                        output_tokens: None,
-                        files_touched: None,
-                        parent_session_id: None,
-                        subagent_type: None,
-                    });
+fn emit_list_json(_cfg: &Config, rows: &[FeedRow], project_name: &str, in_repo: bool) {
+    let arr: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let mut obj = serde_json::json!({
+                "type": r.kind.json_label(),
+                "id": r.id,
+                "timestamp": chrono::DateTime::from_timestamp(r.timestamp, 0)
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_default(),
+                "subject": r.subject,
+                "tools": r.tool.clone().map(|t| vec![t]).unwrap_or_default(),
+                "tokens": { "total": r.tokens },
+                "sessions_count": r.session_count,
+                "ai_pct": r.ai_pct,
+            });
+            if !in_repo {
+                obj["project"] = serde_json::Value::String(project_name.to_string());
+            }
+            match r.kind {
+                RowKind::Anchor => {
+                    obj["sha"] = serde_json::Value::String(r.id.clone());
+                }
+                RowKind::Shadow => {
+                    obj["turn_id"] = serde_json::Value::String(r.id.clone());
+                    obj["shadow_anchor_id"] = serde_json::Value::String(r.id.clone());
+                    obj["files"] = serde_json::Value::Number(r.files.into());
+                    obj["tool_calls"] = serde_json::Value::Number(r.tool_calls.into());
+                    if let Some(session_id) = &r.session_id {
+                        obj["session_id"] = serde_json::Value::String(session_id.clone());
+                    }
+                    if let Some(turn_index) = r.turn_index {
+                        obj["turn_index"] = serde_json::Value::Number(turn_index.into());
+                    }
+                    if let Some(parent) = &r.parent_anchor {
+                        obj["parent_anchor"] = serde_json::Value::String(parent.clone());
+                    }
+                    if let Some(restored_from) = &r.restored_from {
+                        obj["restored_from"] = serde_json::Value::String(restored_from.clone());
+                    }
+                    if let Some(wt) = &r.worktree_hint {
+                        obj["worktree"] = serde_json::Value::String(wt.clone());
+                    }
                 }
             }
-        }
+            obj
+        })
+        .collect();
+    let json = serde_json::json!({
+        "anchors": arr,
+        "actions": [
+            { "command": "oobo anchor show <sha>", "description": "show anchor details" },
+            { "command": "oobo blame <file> [sha]", "description": "line attribution" },
+            { "command": "oobo search \"query\"", "description": "search sessions" },
+        ],
+    });
+    crate::utils::print_json(&json);
+}
 
-        entries.push(entry);
+// ------------------------------------------------------------------
+// emitters — show
+// ------------------------------------------------------------------
+
+fn emit_show_agent(anchor: &Anchor, sessions: &[SessionInfo]) {
+    let ts = chrono::DateTime::from_timestamp(anchor.committed_at, 0)
+        .map(|t| t.to_rfc3339())
+        .unwrap_or_default();
+    let tool = sessions.first().map_or("-", |s| s.tool.as_str());
+    let total: i64 = sessions.iter().map(|s| s.total).sum();
+    let input: i64 = sessions.iter().map(|s| s.input).sum();
+    let output: i64 = sessions.iter().map(|s| s.output).sum();
+    let cache: i64 = sessions.iter().map(|s| s.cache_read + s.cache_write).sum();
+
+    println!("sha:        {}", anchor.commit_hash);
+    println!("subject:    {}", anchor.message);
+    if !anchor.author.is_empty() {
+        println!("author:     {}", anchor.author);
     }
-
-    Ok(entries)
+    println!("timestamp:  {ts}");
+    println!("tools:      {tool}");
+    println!("tokens:     {total} (in {input} / out {output} / cache {cache})");
+    if let Some(p) = anchor.ai_percentage {
+        println!("ai_pct:     {p:.0}");
+    }
+    if !sessions.is_empty() {
+        println!("sessions:");
+        for s in sessions {
+            println!(
+                "  {id} {tool} {total}",
+                id = s.id,
+                tool = s.tool,
+                total = s.total,
+            );
+        }
+    }
+    println!();
+    println!("commands:");
+    if !anchor.files_changed.is_empty() {
+        let short = &anchor.commit_hash[..7.min(anchor.commit_hash.len())];
+        println!("  oobo blame {} {}", anchor.files_changed[0], short);
+    }
+    println!("  oobo goto <turn-or-commit>   # travel to this point");
 }
 
-fn load_anchor_from_db(db: &Db, commit_hash: &str) -> Option<crate::core::anchor::Anchor> {
-    let raw: String = db
-        .conn
-        .query_row(
-            "SELECT raw_json FROM anchors WHERE commit_hash = ?1",
-            [commit_hash],
-            |row| row.get(0),
-        )
-        .ok()?;
-
-    serde_json::from_str(&raw).ok()
+fn emit_show_json(cfg: &Config, anchor: &Anchor, sessions: &[SessionInfo]) {
+    let ts = chrono::DateTime::from_timestamp(anchor.committed_at, 0)
+        .map(|t| t.to_rfc3339())
+        .unwrap_or_default();
+    let parents = load_parent_hashes(cfg, &anchor.commit_hash);
+    let sess_json: Vec<serde_json::Value> = sessions
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "tool": s.tool,
+                "model": s.model,
+                "tokens": {
+                    "input": s.input,
+                    "output": s.output,
+                    "cache_read": s.cache_read,
+                    "cache_write": s.cache_write,
+                    "total": s.total,
+                }
+            })
+        })
+        .collect();
+    let total: i64 = sessions.iter().map(|s| s.total).sum();
+    let input: i64 = sessions.iter().map(|s| s.input).sum();
+    let output: i64 = sessions.iter().map(|s| s.output).sum();
+    let cache_read: i64 = sessions.iter().map(|s| s.cache_read).sum();
+    let cache_write: i64 = sessions.iter().map(|s| s.cache_write).sum();
+    let first_file = anchor.files_changed.first().cloned().unwrap_or_default();
+    let short_sha = &anchor.commit_hash[..7.min(anchor.commit_hash.len())];
+    let mut actions: Vec<serde_json::Value> = Vec::new();
+    if !first_file.is_empty() {
+        actions.push(serde_json::json!({
+            "command": format!("oobo blame {} {}", first_file, short_sha),
+            "description": "line attribution",
+        }));
+    }
+    let json = serde_json::json!({
+        "sha": anchor.commit_hash,
+        "parents": parents,
+        "timestamp": ts,
+        "author": { "raw": anchor.author },
+        "subject": anchor.message,
+        "tools": sessions.iter().map(|s| s.tool.clone()).collect::<Vec<_>>(),
+        "tokens": {
+            "input": input,
+            "output": output,
+            "cache_read": cache_read,
+            "cache_write": cache_write,
+            "total": total,
+        },
+        "attribution": {
+            "ai_lines": anchor.ai_added,
+            "human_lines": anchor.human_added,
+            "ai_pct": anchor.ai_percentage,
+        },
+        "sessions": sess_json,
+        "shadow_anchors": anchor.turns,
+        "files_changed": anchor.files_changed,
+        "actions": actions,
+    });
+    crate::utils::print_json(&json);
 }
 
-fn load_session_link(db: &Db, commit_hash: &str, session_id: &str) -> Option<SessionEntry> {
-    db.conn
-        .query_row(
-            "SELECT agent, model, link_type, input_tokens, output_tokens, files_touched,
-                    parent_session_id, subagent_type
-             FROM anchor_sessions
-             WHERE commit_hash = ?1 AND session_id = ?2",
-            rusqlite::params![commit_hash, session_id],
-            |row| {
-                let ft_json: Option<String> = row.get(5)?;
-                let files_touched: Option<Vec<String>> =
-                    ft_json.and_then(|j| serde_json::from_str(&j).ok());
-                Ok(SessionEntry {
-                    session_id: session_id.to_string(),
-                    agent: row.get(0)?,
-                    model: row.get(1)?,
-                    link_type: row.get(2)?,
-                    input_tokens: row.get(3)?,
-                    output_tokens: row.get(4)?,
-                    files_touched,
-                    parent_session_id: row.get(6)?,
-                    subagent_type: row.get(7)?,
-                })
-            },
-        )
-        .ok()
+// ------------------------------------------------------------------
+// helpers
+// ------------------------------------------------------------------
+
+fn short_sha(sha: &str) -> String {
+    if sha.len() >= 7 {
+        sha[..7].to_string()
+    } else {
+        sha.to_string()
+    }
+}
+
+fn short_id(id: &str) -> String {
+    if id.starts_with('t') {
+        id.chars().take(10).collect()
+    } else {
+        short_sha(id)
+    }
+}
+
+fn truncate_fixed(s: &str, n: usize) -> String {
+    let mut t: String = s.chars().take(n).collect();
+    while t.chars().count() < n {
+        t.push(' ');
+    }
+    t
+}
+
+fn truncate_display(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        let mut t: String = s.chars().take(n.saturating_sub(3)).collect();
+        t.push_str("...");
+        t
+    }
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 {
+        ""
+    } else {
+        "s"
+    }
+}
+
+fn human_tokens(n: i64) -> String {
+    crate::utils::human_tokens(n)
+}
+
+fn relative_time(ts: i64) -> String {
+    crate::utils::relative_time(ts)
+}
+
+fn parse_since(raw: &str) -> Result<i64, String> {
+    crate::utils::parse_since(raw)
+}
+
+fn load_parent_hashes(cfg: &Config, commit_hash: &str) -> Vec<String> {
+    let root = crate::git::proxy::project_root(cfg);
+    let Some(root) = root else { return Vec::new() };
+    crate::git::proxy::run_git_capture_in(
+        cfg,
+        &["rev-list", "--parents", "-n", "1", commit_hash],
+        Some(&root),
+    )
+    .map(|line| parse_parent_hashes(&line))
+    .unwrap_or_default()
+}
+
+fn parse_parent_hashes(line: &str) -> Vec<String> {
+    line.split_whitespace()
+        .skip(1)
+        .map(std::string::ToString::to_string)
+        .collect()
+}
+
+// ------------------------------------------------------------------
+// backward-compat shim used by `commands/bare.rs`
+// ------------------------------------------------------------------
+
+/// Kept for bare `oobo` in-repo agent/json modes (byte-for-byte equivalence).
+pub fn run(cfg: &Config, limit: usize, mode: OutputMode) -> Result<(), CliError> {
+    let opts = Options {
+        limit,
+        ..Default::default()
+    };
+    run_list(cfg, &opts, mode)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -325,69 +568,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_log_entry_serialize() {
-        let entry = LogEntry {
-            commit_hash: "abc123def".into(),
-            message: "feat: add login".into(),
-            author: "dev <dev@x.com>".into(),
-            author_type: crate::core::anchor::AuthorType::Assisted,
-            contributors: vec![
-                crate::core::anchor::Contributor {
-                    name: "dev".into(),
-                    role: crate::core::anchor::ContributorRole::Human,
-                    model: None,
-                },
-                crate::core::anchor::Contributor {
-                    name: "cursor".into(),
-                    role: crate::core::anchor::ContributorRole::Agent,
-                    model: Some("claude-sonnet-4-20250514".into()),
-                },
-            ],
-            branch: "main".into(),
-            committed_at: 1700000000,
-            files_changed: vec!["auth.rs".into()],
-            added: 50,
-            deleted: 5,
-            file_changes: vec![crate::core::anchor::FileChange {
-                path: "auth.rs".into(),
-                added: 50,
-                deleted: 5,
-                attribution: Some(crate::core::anchor::FileAttribution::Ai),
-                agent: Some("cursor".into()),
-                line_attributions: Vec::new(),
-            }],
-            ai_added: 50,
-            ai_deleted: 5,
-            human_added: 0,
-            human_deleted: 0,
-            ai_percentage: Some(100.0),
-            sessions: vec![],
-            summary: Some("Added login".into()),
-            intent: None,
-        };
-        let json = serde_json::to_string(&entry).unwrap();
-        assert!(json.contains("abc123def"));
-        assert!(json.contains("feat: add login"));
-        assert!(json.contains("ai_percentage"));
-        assert!(json.contains("ai_added"));
-        assert!(json.contains("file_changes"));
+    fn test_parse_since_duration() {
+        let now = chrono::Utc::now().timestamp();
+        let t = parse_since("24h").unwrap();
+        assert!((now - t - 24 * 3600).abs() < 5);
     }
 
     #[test]
-    fn test_session_entry_serialize() {
-        let entry = SessionEntry {
-            session_id: "sess-abc".into(),
-            agent: "cursor".into(),
-            model: None,
-            link_type: "explicit".into(),
-            input_tokens: None,
-            output_tokens: None,
-            files_touched: Some(vec!["src/main.rs".into()]),
-            parent_session_id: None,
-            subagent_type: None,
-        };
-        let json = serde_json::to_string(&entry).unwrap();
-        assert!(json.contains("\"model\":null"));
-        assert!(json.contains("files_touched"));
+    fn test_parse_since_iso() {
+        let t = parse_since("2020-01-01T00:00:00Z").unwrap();
+        assert_eq!(t, 1577836800);
+    }
+
+    #[test]
+    fn test_parse_since_rejects_garbage() {
+        assert!(parse_since("banana").is_err());
+    }
+
+    #[test]
+    fn test_short_sha() {
+        assert_eq!(short_sha("a1b2c3d4e5"), "a1b2c3d");
+        assert_eq!(short_sha("abc"), "abc");
+    }
+
+    #[test]
+    fn test_parse_parent_hashes_from_rev_list_line() {
+        let parents = parse_parent_hashes("abc123 def456 789abc");
+        assert_eq!(parents, vec!["def456".to_string(), "789abc".to_string()]);
+    }
+
+    #[test]
+    fn test_human_tokens() {
+        assert_eq!(human_tokens(999), "999");
+        assert_eq!(human_tokens(1500), "1k");
+        assert_eq!(human_tokens(2_500_000), "2.5M");
     }
 }

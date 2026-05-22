@@ -15,6 +15,21 @@ pub struct ProjectSettings {
     pub sync: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Per-project override for the remote server URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+    /// First-TTY banner has been displayed for this project.
+    #[serde(default)]
+    pub banner_shown: bool,
+}
+
+/// Summary stats computed from joined tables for cross-project views.
+#[derive(Debug, Clone, Default)]
+pub struct AnchorStats {
+    pub anchors: i64,
+    pub tokens: i64,
+    pub ai_pct: i64,
+    pub last_activity: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -23,6 +38,8 @@ pub struct ProjectRow {
     pub path: String,
     pub name: String,
     pub git_remote: Option<String>,
+    pub initial_commit_sha: Option<String>,
+    pub historical_paths: Vec<String>,
     pub discovered_at: i64,
     pub last_seen_at: i64,
     pub last_scanned_at: i64,
@@ -52,20 +69,28 @@ impl Db {
 
     pub fn upsert_project(&self, project: &ProjectRow) -> Result<(), String> {
         let tools_json = serde_json::to_string(&project.tools).unwrap_or_else(|_| "[]".to_string());
+        let hist_json = serde_json::to_string(&project.historical_paths)
+            .unwrap_or_else(|_| "[]".to_string());
 
         self.conn
             .execute(
-                "INSERT INTO projects (id, path, name, git_remote, discovered_at, last_seen_at, last_scanned_at, tools)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "INSERT INTO projects (id, path, name, git_remote, initial_commit_sha,
+                     historical_paths, discovered_at, last_seen_at, last_scanned_at, tools)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(id) DO UPDATE SET
                      last_seen_at = excluded.last_seen_at,
+                     path = excluded.path,
                      git_remote = COALESCE(excluded.git_remote, projects.git_remote),
+                     initial_commit_sha = COALESCE(excluded.initial_commit_sha, projects.initial_commit_sha),
+                     historical_paths = excluded.historical_paths,
                      tools = excluded.tools",
                 params![
                     project.id,
                     project.path,
                     project.name,
                     project.git_remote,
+                    project.initial_commit_sha,
+                    hist_json,
                     project.discovered_at,
                     project.last_seen_at,
                     project.last_scanned_at,
@@ -76,48 +101,49 @@ impl Db {
         Ok(())
     }
 
-    pub fn get_project_by_id(&self, id: &str) -> Result<Option<ProjectRow>, String> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, path, name, git_remote, discovered_at, last_seen_at, last_scanned_at, tools
-                 FROM projects WHERE id = ?1",
-            )
-            .map_err(|e| format!("cannot prepare: {e}"))?;
+    pub const PROJECT_COLS: &str =
+        "id, path, name, git_remote, initial_commit_sha, historical_paths, \
+         discovered_at, last_seen_at, last_scanned_at, tools";
 
+    pub fn get_project_by_id(&self, id: &str) -> Result<Option<ProjectRow>, String> {
+        let sql = format!("SELECT {} FROM projects WHERE id = ?1", Self::PROJECT_COLS);
+        let mut stmt = self.conn.prepare(&sql).map_err(|e| format!("cannot prepare: {e}"))?;
         let result = stmt
             .query_row(params![id], |row| Ok(row_to_project(row)))
             .optional()
             .map_err(|e| format!("cannot query project: {e}"))?;
-
         Ok(result)
     }
 
     pub fn get_project_by_path(&self, path: &str) -> Result<Option<ProjectRow>, String> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, path, name, git_remote, discovered_at, last_seen_at, last_scanned_at, tools
-                 FROM projects WHERE path = ?1",
-            )
-            .map_err(|e| format!("cannot prepare: {e}"))?;
-
+        let sql = format!("SELECT {} FROM projects WHERE path = ?1", Self::PROJECT_COLS);
+        let mut stmt = self.conn.prepare(&sql).map_err(|e| format!("cannot prepare: {e}"))?;
         let result = stmt
             .query_row(params![path], |row| Ok(row_to_project(row)))
             .optional()
             .map_err(|e| format!("cannot query project: {e}"))?;
+        Ok(result)
+    }
 
+    pub fn get_project_by_initial_commit(&self, sha: &str) -> Result<Option<ProjectRow>, String> {
+        let sql = format!(
+            "SELECT {} FROM projects WHERE initial_commit_sha = ?1",
+            Self::PROJECT_COLS
+        );
+        let mut stmt = self.conn.prepare(&sql).map_err(|e| format!("cannot prepare: {e}"))?;
+        let result = stmt
+            .query_row(params![sha], |row| Ok(row_to_project(row)))
+            .optional()
+            .map_err(|e| format!("cannot query project by initial commit: {e}"))?;
         Ok(result)
     }
 
     pub fn list_projects(&self) -> Result<Vec<ProjectRow>, String> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, path, name, git_remote, discovered_at, last_seen_at, last_scanned_at, tools
-                 FROM projects ORDER BY last_seen_at DESC",
-            )
-            .map_err(|e| format!("cannot prepare: {e}"))?;
+        let sql = format!(
+            "SELECT {} FROM projects ORDER BY last_seen_at DESC",
+            Self::PROJECT_COLS
+        );
+        let mut stmt = self.conn.prepare(&sql).map_err(|e| format!("cannot prepare: {e}"))?;
 
         let rows = stmt
             .query_map([], |row| Ok(row_to_project(row)))
@@ -244,7 +270,9 @@ pub fn path_to_project_id(path: &str) -> String {
 }
 
 fn row_to_project(row: &rusqlite::Row) -> ProjectRow {
-    let tools_json: String = row.get(7).unwrap_or_default();
+    let hist_json: String = row.get(5).unwrap_or_else(|_| "[]".to_string());
+    let historical_paths: Vec<String> = serde_json::from_str(&hist_json).unwrap_or_default();
+    let tools_json: String = row.get(9).unwrap_or_default();
     let tools: Vec<String> = serde_json::from_str(&tools_json).unwrap_or_default();
 
     ProjectRow {
@@ -252,9 +280,11 @@ fn row_to_project(row: &rusqlite::Row) -> ProjectRow {
         path: row.get(1).unwrap_or_default(),
         name: row.get(2).unwrap_or_default(),
         git_remote: row.get(3).unwrap_or_default(),
-        discovered_at: row.get(4).unwrap_or(0),
-        last_seen_at: row.get(5).unwrap_or(0),
-        last_scanned_at: row.get(6).unwrap_or(0),
+        initial_commit_sha: row.get(4).unwrap_or_default(),
+        historical_paths,
+        discovered_at: row.get(6).unwrap_or(0),
+        last_seen_at: row.get(7).unwrap_or(0),
+        last_scanned_at: row.get(8).unwrap_or(0),
         tools,
     }
 }
@@ -275,6 +305,8 @@ mod tests {
             path: "/Users/test/project".into(),
             name: "project".into(),
             git_remote: Some("git@github.com:test/project.git".into()),
+            initial_commit_sha: None,
+            historical_paths: Vec::new(),
             discovered_at: 1000,
             last_seen_at: 2000,
             last_scanned_at: 0,

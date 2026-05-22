@@ -95,41 +95,6 @@ pub fn find_subagent_transcripts(project_path: &str, session_id: &str) -> Vec<(S
     result
 }
 
-/// Count user/assistant messages in a Claude session file.
-pub fn count_messages(project_path: &str, session_id: &str) -> u32 {
-    let path = match find_transcript_path(project_path, session_id) {
-        Some(p) => p,
-        None => return 0,
-    };
-    count_messages_in_file(&path)
-}
-
-fn count_messages_in_file(path: &Path) -> u32 {
-    let file = match fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return 0,
-    };
-
-    let reader = std::io::BufReader::new(file);
-    let mut count = 0u32;
-
-    for line in reader.lines().map_while(Result::ok) {
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
-
-        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
-            let entry_type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            if entry_type == "user" || entry_type == "assistant" {
-                count += 1;
-            }
-        }
-    }
-
-    count
-}
-
 /// Parse Claude transcript into structured messages.
 pub fn parse_messages(path: &Path) -> Vec<Message> {
     let file = match fs::File::open(path) {
@@ -183,8 +148,7 @@ pub fn parse_messages(path: &Path) -> Vec<Message> {
 }
 
 /// Parse Claude JSONL transcript lines into rich structured messages.
-/// This is the canonical implementation — used by both file-based parsing
-/// and inline string-based parsing in the interceptor.
+#[cfg(test)]
 pub fn parse_rich_transcript_lines<'a>(
     lines: impl Iterator<Item = &'a str>,
 ) -> Vec<crate::remote::payload::TranscriptMessage> {
@@ -243,7 +207,7 @@ pub fn parse_rich_transcript_lines<'a>(
                             .to_string();
                         let is_error = part
                             .get("is_error")
-                            .and_then(|v| v.as_bool())
+                            .and_then(serde_json::Value::as_bool)
                             .unwrap_or(false);
                         let output =
                             extract_tool_result_output(part).map(|s| truncate_str(&s, 500));
@@ -360,6 +324,7 @@ pub fn parse_rich_transcript_lines<'a>(
     messages
 }
 
+#[cfg(test)]
 fn extract_tool_result_output(part: &serde_json::Value) -> Option<String> {
     let content = part.get("content")?;
     if let Some(s) = content.as_str() {
@@ -381,26 +346,6 @@ fn extract_tool_result_output(part: &serde_json::Value) -> Option<String> {
         }
     }
     None
-}
-
-/// Read a Claude transcript as formatted text.
-pub fn read_transcript(path: &Path, max_messages: u32) -> String {
-    let messages = parse_messages(path);
-    let mut output = Vec::new();
-    let mut count = 0u32;
-
-    for msg in &messages {
-        output.push(format!("{}:", msg.role));
-        output.push(msg.text.clone());
-        output.push(String::new());
-        count += 1;
-        if count >= max_messages {
-            output.push(format!("... (truncated at {max_messages} messages)"));
-            break;
-        }
-    }
-
-    output.join("\n")
 }
 
 /// Extract session stats from a Claude transcript file.
@@ -448,19 +393,19 @@ pub fn extract_stats(path: &Path) -> Option<crate::remote::payload::SessionStats
                 if let Some(usage) = msg.get("usage") {
                     input_tokens += usage
                         .get("input_tokens")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
                     output_tokens += usage
                         .get("output_tokens")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
                     cache_read_tokens += usage
                         .get("cache_read_input_tokens")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
                     cache_creation_tokens += usage
                         .get("cache_creation_input_tokens")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
                 }
 
@@ -501,11 +446,11 @@ pub fn extract_stats(path: &Path) -> Option<crate::remote::payload::SessionStats
                 if let Some(usage) = result.get("usage") {
                     input_tokens += usage
                         .get("input_tokens")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
                     output_tokens += usage
                         .get("output_tokens")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
                 }
             }
@@ -547,18 +492,6 @@ pub fn extract_stats(path: &Path) -> Option<crate::remote::payload::SessionStats
     })
 }
 
-/// Convenience wrapper for callers that have (project_path, session_id)
-/// instead of a direct file path. Kept for API consistency with other
-/// tool modules (codex, gemini, copilot, opencode).
-#[allow(dead_code)]
-pub(crate) fn stats_for_session(
-    project_path: &str,
-    session_id: &str,
-) -> Option<crate::remote::payload::SessionStats> {
-    let path = find_transcript_path(project_path, session_id)?;
-    extract_stats(&path)
-}
-
 /// Extract native telemetry suitable for the analytics pipeline.
 pub fn extract_native_stats(
     project_path: &str,
@@ -567,7 +500,6 @@ pub fn extract_native_stats(
     let path = find_transcript_path(project_path, session_id)?;
     let stats = extract_stats(&path)?;
     Some(crate::analytics::NativeStats {
-        model: stats.model,
         input_tokens: stats.input_tokens,
         output_tokens: stats.output_tokens,
         cache_read_tokens: stats.cache_read_tokens,
@@ -633,6 +565,47 @@ fn extract_assistant_text(entry: &serde_json::Value) -> String {
     }
 
     String::new()
+}
+
+#[cfg(test)]
+fn count_messages_in_file(path: &Path) -> u32 {
+    let file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return 0,
+    };
+    let reader = std::io::BufReader::new(file);
+    let mut count = 0u32;
+    for line in reader.lines().map_while(Result::ok) {
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) {
+            let entry_type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if entry_type == "user" || entry_type == "assistant" {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+#[cfg(test)]
+fn read_transcript(path: &Path, max_messages: u32) -> String {
+    let messages = parse_messages(path);
+    let mut output = Vec::new();
+    let mut count = 0u32;
+    for msg in &messages {
+        output.push(format!("{}:", msg.role));
+        output.push(msg.text.clone());
+        output.push(String::new());
+        count += 1;
+        if count >= max_messages {
+            output.push(format!("... (truncated at {max_messages} messages)"));
+            break;
+        }
+    }
+    output.join("\n")
 }
 
 #[cfg(test)]

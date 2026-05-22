@@ -1,159 +1,164 @@
 pub mod payload;
 
-use crate::config::Config;
-
-/// Spawn a background thread to POST the anchor to the ingestion API.
-/// Returns the JoinHandle so the caller can wait if needed (e.g. from a
-/// post-commit hook where the process would otherwise exit immediately).
-pub fn send_event(
-    cfg: &Config,
-    payload: &payload::EventPayload,
-    api_key_override: Option<&str>,
-) -> std::thread::JoinHandle<()> {
-    let url = format!("{}/anchors/ingest", cfg.server.url.trim_end_matches('/'));
-    let api_key = api_key_override.unwrap_or(&cfg.server.api_key).to_string();
-    let body = match serde_json::to_string(payload) {
-        Ok(b) => b,
-        Err(_) => return std::thread::spawn(|| {}),
-    };
-
-    std::thread::spawn(move || {
-        let client = match reqwest::blocking::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(2))
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-        {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-
-        let resp = match client
-            .post(&url)
-            .header("Authorization", format!("Bearer {api_key}"))
-            .header("Content-Type", "application/json")
-            .header("User-Agent", format!("oobo/{}", env!("CARGO_PKG_VERSION")))
-            .body(body)
-            .send()
-        {
-            Ok(r) => r,
-            Err(_) => return,
-        };
-
-        let status = resp.status();
-
-        if status.is_success() {
-            return;
-        }
-
-        // Duplicate anchor → (git_remote, commit_hash) unique constraint.
-        // Treat 409 as success.
-        if status.as_u16() == 409 {
-            return;
-        }
-
-        if status.as_u16() == 500 {
-            let body = resp.text().unwrap_or_default();
-            if body.contains("duplicate") || body.contains("unique") || body.contains("UNIQUE") {
-                return;
-            }
-            eprintln!("oobo: warning: server error during sync: {body}");
-            return;
-        }
-
-        if status.as_u16() == 401 {
-            if let Ok(err) = resp.json::<payload::IngestError>() {
-                let detail = err
-                    .detail
-                    .unwrap_or_else(|| "invalid or missing API key".into());
-                eprintln!("oobo: sync auth error: {detail}");
-                eprintln!("      run `oobo sync on` to reconfigure.");
-            }
-            return;
-        }
-
-        if status.as_u16() == 422 {
-            let detail = resp.text().unwrap_or_default();
-            if detail.is_empty() {
-                eprintln!("oobo: warning: sync payload rejected (422). Run `oobo --version` to check for updates.");
-            } else {
-                eprintln!("oobo: warning: sync payload rejected (422): {detail}");
-            }
-        }
-    })
+#[derive(Debug, thiserror::Error)]
+pub enum RemoteError {
+    #[error("client: {0}")]
+    Client(String),
+    #[error("request: {0}")]
+    Request(String),
+    #[error("cannot parse response: {0}")]
+    Parse(String),
+    #[error("auth: {0}")]
+    Auth(String),
+    #[error("rejected: {0}")]
+    Rejected(String),
+    #[error("server: {0}")]
+    Server(String),
+    #[error("http: {0}")]
+    Http(String),
 }
 
-/// Synchronous anchor ingestion — returns the parsed response.
-/// Used by explicit `oobo sync` commands and tests.
-#[allow(dead_code)]
-pub fn ingest_anchor(
-    cfg: &Config,
-    payload: &payload::EventPayload,
-) -> Result<payload::IngestResponse, String> {
-    let url = format!("{}/anchors/ingest", cfg.server.url.trim_end_matches('/'));
+pub type RemoteResult<T> = Result<T, RemoteError>;
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
+impl From<RemoteError> for String {
+    fn from(error: RemoteError) -> Self {
+        error.to_string()
+    }
+}
+
+fn endpoint_with_base(base_url: &str, path: &str) -> String {
+    format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
+async fn authenticated_post(
+    base_url: &str,
+    path: &str,
+    api_key: &str,
+    body: &impl serde::Serialize,
+    timeout: std::time::Duration,
+) -> RemoteResult<reqwest::Response> {
+    let url = endpoint_with_base(base_url, path);
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(2))
+        .timeout(timeout)
         .build()
-        .map_err(|e| format!("client error: {e}"))?;
+        .map_err(|e| RemoteError::Client(e.to_string()))?;
 
-    let resp = client
+    client
         .post(&url)
-        .header("Authorization", format!("Bearer {}", cfg.server.api_key))
+        .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .header("User-Agent", format!("oobo/{}", env!("CARGO_PKG_VERSION")))
-        .json(payload)
+        .json(body)
         .send()
-        .map_err(|e| format!("request failed: {e}"))?;
+        .await
+        .map_err(|e| RemoteError::Request(e.to_string()))
+}
 
+fn map_common_errors(status: reqwest::StatusCode) -> Option<RemoteError> {
+    if status.as_u16() == 401 {
+        return Some(RemoteError::Auth(
+            "invalid or missing API key — run: oobo settings set key <KEY>".to_string(),
+        ));
+    }
+    None
+}
+
+async fn map_server_error(status: reqwest::StatusCode, resp: reqwest::Response) -> RemoteError {
+    if status.is_server_error() {
+        let body = resp.text().await.unwrap_or_default();
+        return RemoteError::Server(if body.is_empty() {
+            format!("HTTP {status}")
+        } else {
+            body
+        });
+    }
+    RemoteError::Http(format!("HTTP {status}"))
+}
+
+pub async fn search_anchors_with_timeout(
+    request: &payload::SearchRequest,
+    api_key: &str,
+    base_url: &str,
+    timeout: std::time::Duration,
+) -> RemoteResult<payload::SearchResponse> {
+    let resp = authenticated_post(base_url, "anchors/search", api_key, request, timeout).await?;
     let status = resp.status();
 
     if status.is_success() {
         return resp
-            .json::<payload::IngestResponse>()
-            .map_err(|e| format!("cannot parse response: {e}"));
+            .json::<payload::SearchResponse>()
+            .await
+            .map_err(|e| RemoteError::Parse(e.to_string()));
     }
 
-    let body = resp.text().unwrap_or_default();
-
-    // Duplicate → treat as success.
-    if body.contains("duplicate") || body.contains("unique") || body.contains("UNIQUE") {
-        return Ok(payload::IngestResponse {
-            success: true,
-            message: "Anchor already ingested (duplicate)".into(),
-            data: None,
-        });
+    if let Some(e) = map_common_errors(status) {
+        return Err(e);
     }
 
-    if let Ok(err) = serde_json::from_str::<payload::IngestError>(&body) {
-        let msg = err
-            .detail
-            .or(err.message)
-            .unwrap_or_else(|| format!("HTTP {status}"));
-        return Err(msg);
+    if status.as_u16() == 422 {
+        let detail = resp.text().await.unwrap_or_default();
+        return Err(RemoteError::Rejected(if detail.is_empty() {
+            "search request rejected (422)".to_string()
+        } else {
+            format!("search request rejected (422): {detail}")
+        }));
     }
 
-    Err(format!("HTTP {status}: {body}"))
+    Err(map_server_error(status, resp).await)
 }
 
-/// Synchronous check: can we reach the API?
-pub fn check_connection(cfg: &Config) -> Result<String, String> {
-    let url = format!("{}/anchors/health", cfg.server.url.trim_end_matches('/'));
-
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| format!("client error: {e}"))?;
-
-    let resp = client
-        .get(&url)
-        .header("User-Agent", format!("oobo/{}", env!("CARGO_PKG_VERSION")))
-        .send()
-        .map_err(|e| format!("connection failed: {e}"))?;
-
+pub async fn post_delta(
+    request: &payload::DeltaRequest,
+    api_key: &str,
+    base_url: &str,
+    timeout: std::time::Duration,
+) -> RemoteResult<payload::DeltaResponse> {
+    let resp = authenticated_post(base_url, "anchors/delta", api_key, request, timeout).await?;
     let status = resp.status();
+
     if status.is_success() {
-        Ok(format!("connected (HTTP {status})"))
-    } else {
-        Err(format!("server returned HTTP {status}"))
+        return resp
+            .json::<payload::DeltaResponse>()
+            .await
+            .map_err(|e| RemoteError::Parse(e.to_string()));
+    }
+
+    if let Some(e) = map_common_errors(status) {
+        return Err(e);
+    }
+
+    if status.as_u16() == 404 {
+        let body: payload::DeltaErrorResponse =
+            resp.json().await.unwrap_or(payload::DeltaErrorResponse {
+                error: Some("anchor_not_found".into()),
+                message: Some("anchor not found".into()),
+            });
+        return Err(RemoteError::Rejected(
+            body.message.unwrap_or_else(|| "anchor not found".into()),
+        ));
+    }
+
+    Err(map_server_error(status, resp).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn endpoint_joins_without_double_slashes() {
+        assert_eq!(
+            endpoint_with_base("https://example.com/", "/anchors/search"),
+            "https://example.com/anchors/search"
+        );
+        assert_eq!(
+            endpoint_with_base("https://example.com", "anchors/search"),
+            "https://example.com/anchors/search"
+        );
     }
 }

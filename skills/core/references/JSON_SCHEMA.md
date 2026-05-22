@@ -1,17 +1,19 @@
 # JSON Response Fields (--json)
 
-**anchors**: `commit_hash`, `message`, `author`, `author_type`, `branch`, `committed_at`, `contributors[]` (each with `name`, `role`, `model`), `files_changed[]`, `added`, `deleted`, `file_changes[]` (each with `path`, `added`, `deleted`, `attribution` [ai/human/mixed], `agent`), `ai_added`, `ai_deleted`, `human_added`, `human_deleted`, `ai_percentage`, `sessions[]` (each with `session_id`, `agent`, `model`, `link_type`, `input_tokens`, `output_tokens`, `files_touched[]`, `parent_session_id?`, `subagent_type?`, `peer_session_ids[]`), `transparency_mode`, `summary`, `intent`, `file_interactions[]?` (each with `path`, `sessions[]` of `{session_id, role}` where role is writer/reader/both)
+These fields describe the current 1.0 command surface. Removed 0.1.x commands such as `sessions`, `projects`, `stats`, and `share` are not public commands.
 
-**sessions list**: `session_id`, `name`, `source`, `mode`, `project_path`, `created_at`, `updated_at`, `model`, `input_tokens`, `output_tokens`, `duration_secs`, `is_estimated`, `files_touched`, `tool_calls`, `parent_session_id?`, `subagent_type?`, `peer_session_ids[]?`
+**anchors list**: array of objects with `sha`, `project`, `subject`, `timestamp`, `tool`, `tokens`, `sessions`, `ai_pct`.
 
-**sessions show**: All above plus `messages` array of `{role, text, timestamp_ms}`, `message_count`, and `peer_session_ids[]?`
+**anchor show**: object with `sha`, `parents[]`, `timestamp`, `author.raw`, `subject`, `tools[]`, `tokens.{input,output,cache_read,cache_write,total}`, `attribution.{ai_lines,human_lines,ai_pct}`, `sessions[]`, `files_changed[]`.
 
-**sessions search**: All session fields plus `matched_on` (`name` or `first_message`) and `peer_session_ids[]?`
+**search**: object containing `query`, `sources[]`, `total_hits`, and `hits[]` for local and/or remote session/anchor matches. Use `--local`, `--remote`, or `--both` to control sources.
 
-**stats**: `sessions`, `input_tokens`, `output_tokens`, `total_tokens`, `per_tool[]`, `per_model[]`, `ai_code`, `productivity`, `daily[]`
+**bare `oobo` outside a repo**: object with `projects[]` and aggregate `stats`. Each project includes `id`, `name`, `path`, `remote`, `enabled`, `last_activity`, `anchors`, `tokens`, `ai_pct`.
 
-**projects list**: `id`, `name`, `path`, `tools`, `sessions`, `input_tokens`, `output_tokens`
+**settings**: object/array of effective setting rows. Valid keys are `key`, `api_url`, `remote`, `transparency`, `tools.experimental`, `setup.scan_roots`.
 
-**share**: `session_id`, `source`, `model`, `messages[]` (redacted), `stats`, `shared_at`, `oobo_version`
+**blame**: per-file/per-line attribution data including path, line numbers, commit metadata, and AI attribution when available. Machine-output git blame formats bypass the AI overlay.
 
-**blame**: `path`, `added`, `deleted`, `attribution` (ai/human/mixed), `agent`, `line_attributions[]` (each with `author`, `ranges[]` of `{start, end}`, `agent?`)
+**goto**: object with `action: "goto"`, `target` (label), `stashed` (bool), `memory_path` (optional path to materialized turn memory).
+
+**back**: object with `action: "back"`, `label` (where you returned to), `stash_applied` (bool), `remaining_depth` (int — how many more entries in the stack).

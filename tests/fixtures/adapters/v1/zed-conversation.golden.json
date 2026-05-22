@@ -1,0 +1,10 @@
+[
+  {
+    "role": "user",
+    "text": "Find a minimal invariant for anchors"
+  },
+  {
+    "role": "assistant",
+    "text": "The attribution totals should match the file change totals before persistence."
+  }
+]
