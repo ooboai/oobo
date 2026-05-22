@@ -1092,7 +1092,7 @@ fn test_e2e_turn_capture_and_from_preview() {
         String::from_utf8_lossy(&goto_result.stderr)
     );
     assert_eq!(
-        fs::read_to_string(tmp.path().join("app.txt")).unwrap(),
+        fs::read_to_string(tmp.path().join("app.txt")).unwrap().replace("\r\n", "\n"),
         "v2\n"
     );
 
@@ -1109,7 +1109,7 @@ fn test_e2e_turn_capture_and_from_preview() {
         String::from_utf8_lossy(&back_result.stderr)
     );
     assert_eq!(
-        fs::read_to_string(tmp.path().join("app.txt")).unwrap(),
+        fs::read_to_string(tmp.path().join("app.txt")).unwrap().replace("\r\n", "\n"),
         "v3\n",
         "stash should be restored by oobo back"
     );
@@ -1237,7 +1237,7 @@ fn test_e2e_from_anchor_loads_commit_tree() {
         String::from_utf8_lossy(&load.stderr)
     );
     assert_eq!(
-        fs::read_to_string(tmp.path().join("app.txt")).unwrap(),
+        fs::read_to_string(tmp.path().join("app.txt")).unwrap().replace("\r\n", "\n"),
         "anchor-v1\n"
     );
 
@@ -2545,7 +2545,7 @@ fn test_pre_tool_use_creates_edit_chain() {
     let file_snap = turn_snapshot
         .files
         .iter()
-        .find(|f| f.path == "chain.txt")
+        .find(|f| f.path.replace('\\', "/") == "chain.txt" || f.path == "chain.txt")
         .expect("chain.txt should be in the turn snapshot files");
 
     assert!(
