@@ -77,7 +77,10 @@ fn ensure_symlink(skill_dir: &PathBuf, link: &PathBuf) {
                     return;
                 }
             }
+            #[cfg(unix)]
             let _ = fs::remove_file(link);
+            #[cfg(windows)]
+            let _ = fs::remove_dir(link);
         } else {
             return;
         }

@@ -176,6 +176,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn normalizes_absolute_paths_under_project_root() {
         let project_root = "/tmp/project";
         assert_eq!(
