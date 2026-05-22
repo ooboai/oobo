@@ -2400,6 +2400,7 @@ fn git_stdout(repo: &Path, args: &[&str]) -> String {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "pre_blob capture uses Unix path normalization")]
 fn test_pre_tool_use_creates_edit_chain() {
     let tmp = TempDir::new().unwrap();
     let oobo_home = isolated_oobo_home();
