@@ -222,6 +222,10 @@ fn run_initial_scan() -> ScanInfo {
 
     let mut project_choices: Vec<ProjectChoice> = project_map
         .into_iter()
+        .filter(|(path, _)| {
+            let p = std::path::Path::new(path);
+            p.is_absolute() && p.parent().is_some() && path != "/"
+        })
         .map(|(path, (tools, session_count))| {
             let name = std::path::Path::new(&path)
                 .file_name()
@@ -257,6 +261,9 @@ fn apply_project_choices(projects: &[ProjectChoice]) -> Result<(usize, usize), C
     let mut enabled = 0usize;
     let mut disabled = 0usize;
     for project in projects {
+        if project.path.is_empty() || project.path == "/" {
+            continue;
+        }
         match project.state {
             ProjectState::Enabled => {
                 crate::project_config::set_enabled(&project.path, &project.id, true)?;

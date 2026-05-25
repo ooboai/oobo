@@ -312,6 +312,10 @@ EOF
     rm -rf "$_oobo_tmpdir" 2>/dev/null || true
     trap - EXIT
 
+    # Ensure HOME is explicitly exported (some pipe/exec contexts lose it)
+    export HOME="${HOME:-$(eval echo ~)}"
+    export OOBO_HOME="${OOBO_HOME:-$HOME/.oobo}"
+
     # Run setup. The interactive TUI wizard requires a real TTY for both
     # stdout and stdin (crossterm event reader). When piped (curl | bash),
     # use --non-interactive to avoid TUI failures, then tell the user to
@@ -320,16 +324,12 @@ EOF
         # stdin is already a TTY (script run directly, not piped)
         echo -e "  Running ${BOLD}oobo setup${RESET}..."
         echo ""
-        exec "${INSTALL_DIR}/${BINARY_NAME}" setup
+        exec env HOME="$HOME" "${INSTALL_DIR}/${BINARY_NAME}" setup
     else
-        # stdin is a pipe (curl | bash) - run non-interactive setup
+        # stdin is a pipe (curl | bash)
         echo -e "  Running ${BOLD}oobo setup --non-interactive${RESET}..."
         echo ""
-        "${INSTALL_DIR}/${BINARY_NAME}" setup --non-interactive
-        echo ""
-        echo -e "  To customize which projects are tracked, run:"
-        echo -e "    ${BOLD}oobo setup${RESET}"
-        echo ""
+        exec env HOME="$HOME" "${INSTALL_DIR}/${BINARY_NAME}" setup --non-interactive
     fi
 }
 
