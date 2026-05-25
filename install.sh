@@ -316,17 +316,21 @@ EOF
     export HOME="${HOME:-$(eval echo ~)}"
     export OOBO_HOME="${OOBO_HOME:-$HOME/.oobo}"
 
-    # Run setup. The interactive TUI wizard requires a real TTY for both
-    # stdout and stdin (crossterm event reader). When piped (curl | bash),
-    # use --non-interactive to avoid TUI failures, then tell the user to
-    # run `oobo setup` manually if they want the interactive wizard.
+    # Run the interactive setup wizard. When piped (curl | bash), stdin is
+    # the script content, not the keyboard. Redirect from /dev/tty to give
+    # the TUI access to the real terminal.
     if [[ -t 0 ]]; then
-        # stdin is already a TTY (script run directly, not piped)
+        # stdin is already a TTY (script run directly)
         echo -e "  Running ${BOLD}oobo setup${RESET}..."
         echo ""
         exec env HOME="$HOME" "${INSTALL_DIR}/${BINARY_NAME}" setup
+    elif [[ -r /dev/tty && -w /dev/tty ]]; then
+        # stdin is a pipe but terminal is available (curl | bash in a terminal)
+        echo -e "  Running ${BOLD}oobo setup${RESET}..."
+        echo ""
+        exec env HOME="$HOME" "${INSTALL_DIR}/${BINARY_NAME}" setup </dev/tty
     else
-        # stdin is a pipe (curl | bash)
+        # No terminal at all (CI, Docker build, cron, etc.)
         echo -e "  Running ${BOLD}oobo setup --non-interactive${RESET}..."
         echo ""
         exec env HOME="$HOME" "${INSTALL_DIR}/${BINARY_NAME}" setup --non-interactive
