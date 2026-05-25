@@ -3,7 +3,7 @@
 #
 # This script installs oobo, an open-source developer memory tool by Oobo Inc.
 # It downloads a pre-built binary from GitHub Releases and places it in
-# ~/.oobo/bin — no sudo, no daemons, no telemetry. The only network
+# ~/.oobo/bin - no sudo, no daemons, no telemetry. The only network
 # requests go to api.github.com (to resolve the latest version) and
 # github.com (to download the release tarball). Nothing else is touched.
 #
@@ -20,9 +20,9 @@
 #   curl -fsSL https://oobo.ai/install.sh | bash -s -- --agent
 #
 # Environment variables:
-#   OOBO_INSTALL_DIR    — override install directory (default: ~/.oobo/bin)
-#   OOBO_VERSION        — install a specific version (default: latest)
-#   OOBO_NO_MODIFY_PATH — set to 1 to skip PATH modification
+#   OOBO_INSTALL_DIR    - override install directory (default: ~/.oobo/bin)
+#   OOBO_VERSION        - install a specific version (default: latest)
+#   OOBO_NO_MODIFY_PATH - set to 1 to skip PATH modification
 
 set -euo pipefail
 
@@ -275,11 +275,11 @@ main() {
         if is_on_path "$link_dir"; then
             needs_source=0
         else
-            # ~/.local/bin was created but isn't on PATH yet — add it
+            # ~/.local/bin was created but isn't on PATH yet - add it
             ensure_rc_has_dir "$link_dir" "$rc_file"
         fi
     else
-        # No symlink target available — fall back to rc file
+        # No symlink target available - fall back to rc file
         ensure_rc_has_dir "$INSTALL_DIR" "$rc_file"
     fi
 
@@ -302,9 +302,9 @@ EOF
     fi
 
     echo "  Quick reference:"
-    echo "    oobo                    — open the memory feed"
-    echo "    oobo anchor show <sha>  — drill into a commit"
-    echo "    oobo search \"query\"    — search local anchor memory"
+    echo "    oobo                    - open the memory feed"
+    echo "    oobo anchor show <sha>  - drill into a commit"
+    echo "    oobo search \"query\"    - search local anchor memory"
     echo ""
 
     # Clean up tmpdir before exec (exec replaces the process so the
@@ -312,14 +312,18 @@ EOF
     rm -rf "$_oobo_tmpdir" 2>/dev/null || true
     trap - EXIT
 
-    # Run setup — hand off the process entirely so the TUI wizard
-    # gets a real TTY (stdin is consumed by the pipe).
-    if [[ -r /dev/tty && -w /dev/tty ]]; then
-        echo -e "  Running ${BOLD}oobo setup${RESET}..."
-        echo ""
+    # Run setup - hand off the process entirely so the TUI wizard
+    # gets a real TTY (stdin is consumed by the pipe when curl | bash).
+    echo -e "  Running ${BOLD}oobo setup${RESET}..."
+    echo ""
+    if [[ -t 0 ]]; then
+        # stdin is already a TTY (script run directly, not piped)
+        exec "${INSTALL_DIR}/${BINARY_NAME}" setup
+    elif [[ -r /dev/tty && -w /dev/tty ]]; then
+        # stdin is a pipe (curl | bash) - redirect from /dev/tty
         exec "${INSTALL_DIR}/${BINARY_NAME}" setup </dev/tty
     else
-        info "No TTY available — run ${BOLD}oobo setup${RESET} to finish configuration."
+        info "No TTY available - run ${BOLD}oobo setup${RESET} to finish configuration."
     fi
 }
 

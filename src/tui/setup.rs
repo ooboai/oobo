@@ -22,6 +22,28 @@ impl ScanInfo {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectState {
+    Enabled,
+    Disabled,
+    Unchanged,
+}
+
+impl ProjectState {
+    #[must_use]
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Unchanged => Self::Enabled,
+            Self::Enabled => Self::Disabled,
+            Self::Disabled => Self::Unchanged,
+        }
+    }
+
+    pub fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ProjectChoice {
     pub id: String,
@@ -29,7 +51,8 @@ pub struct ProjectChoice {
     pub path: String,
     pub tools: Vec<String>,
     pub sessions: usize,
-    pub enabled: bool,
+    pub state: ProjectState,
+    pub had_config: bool,
 }
 
 pub struct SetupOutcome {
@@ -111,8 +134,15 @@ impl Wizard {
 
         let mut projects = scan.project_choices.clone();
         for p in &mut projects {
-            if p.sessions > 0 && !p.enabled {
-                p.enabled = true;
+            if p.had_config {
+                // Previously configured - default to unchanged
+                p.state = ProjectState::Unchanged;
+            } else if p.sessions > 0 {
+                // New project with sessions - default to enabled
+                p.state = ProjectState::Enabled;
+            } else {
+                // New project without sessions - default to disabled
+                p.state = ProjectState::Disabled;
             }
         }
 
@@ -150,7 +180,11 @@ impl Wizard {
     }
 
     fn enabled_project_count(&self) -> usize {
-        self.projects.iter().filter(|p| p.enabled).count()
+        self.projects.iter().filter(|p| p.state.is_enabled()).count()
+    }
+
+    fn unchanged_project_count(&self) -> usize {
+        self.projects.iter().filter(|p| p.state == ProjectState::Unchanged).count()
     }
 }
 
@@ -206,12 +240,13 @@ fn handle_key(wiz: &mut Wizard, code: KeyCode) -> Action {
                 wiz.focus = wiz.focus.saturating_sub(1);
             }
             KeyCode::Char(' ') if wiz.focus < wiz.projects.len() => {
-                wiz.projects[wiz.focus].enabled = !wiz.projects[wiz.focus].enabled;
+                wiz.projects[wiz.focus].state = wiz.projects[wiz.focus].state.cycle();
             }
             KeyCode::Char('a') => {
-                let all_enabled = wiz.projects.iter().all(|p| p.enabled);
+                let all_enabled = wiz.projects.iter().all(|p| p.state.is_enabled());
+                let new_state = if all_enabled { ProjectState::Disabled } else { ProjectState::Enabled };
                 for project in &mut wiz.projects {
-                    project.enabled = !all_enabled;
+                    project.state = new_state;
                 }
             }
             KeyCode::Enter | KeyCode::Tab => {
@@ -357,7 +392,7 @@ fn render_projects(f: &mut Frame, area: ratatui::layout::Rect, wiz: &Wizard) {
         Line::from(""),
         Line::from(Span::styled("  Select projects to track.", bold)),
         Line::from(Span::styled(
-            "  Projects with AI sessions are pre-enabled. Toggle with space, a for all.",
+            "  Toggle with space: [✓] enable  [~] leave unchanged  [ ] disable",
             dim,
         )),
         Line::from(""),
@@ -394,11 +429,22 @@ fn render_projects(f: &mut Frame, area: ratatui::layout::Rect, wiz: &Wizard) {
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("  ", dim),
-        Span::styled(format!("{enabled}"), green),
-        Span::styled(format!(" of {total} projects enabled"), dim),
-    ]));
+    let unchanged = wiz.unchanged_project_count();
+    if unchanged > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("  ", dim),
+            Span::styled(format!("{enabled}"), green),
+            Span::styled(" enabling, ", dim),
+            Span::styled(format!("{unchanged}"), Style::default().fg(Color::Yellow)),
+            Span::styled(" unchanged", dim),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("  ", dim),
+            Span::styled(format!("{enabled}"), green),
+            Span::styled(format!(" of {total} projects enabled"), dim),
+        ]));
+    }
 
     f.render_widget(Paragraph::new(lines), area);
 }
@@ -406,18 +452,19 @@ fn render_projects(f: &mut Frame, area: ratatui::layout::Rect, wiz: &Wizard) {
 fn project_line(idx: usize, p: &ProjectChoice, focus: usize) -> Line<'static> {
     let focused = idx == focus;
     let marker = if focused { "▸ " } else { "  " };
-    let check = if p.enabled { "✓" } else { " " };
-    let check_style = if p.enabled {
-        Style::default().fg(Color::Green)
-    } else {
-        Style::default().fg(Color::DarkGray)
+    let (check, check_style) = match p.state {
+        ProjectState::Enabled => ("✓", Style::default().fg(Color::Green)),
+        ProjectState::Disabled => (" ", Style::default().fg(Color::DarkGray)),
+        ProjectState::Unchanged => ("~", Style::default().fg(Color::Yellow)),
     };
     let label_style = if focused {
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD)
-    } else if p.enabled {
+    } else if p.state.is_enabled() {
         Style::default().fg(Color::White)
+    } else if p.state == ProjectState::Unchanged {
+        Style::default().fg(Color::Gray)
     } else {
         Style::default().fg(Color::DarkGray)
     };
@@ -515,17 +562,30 @@ fn render_save(f: &mut Frame, area: ratatui::layout::Rect, wiz: &Wizard) {
     let tools_str = format!("{}{extra}", tools_summary.join(", "));
 
     let p_enabled = wiz.enabled_project_count();
+    let p_unchanged = wiz.unchanged_project_count();
     let p_total = wiz.projects.len();
+
+    let project_summary = if p_unchanged > 0 {
+        vec![
+            Span::styled("  Projects:      ", dim),
+            Span::styled(format!("{p_enabled}"), green),
+            Span::styled(" enabling, ", dim),
+            Span::styled(format!("{p_unchanged}"), Style::default().fg(Color::Yellow)),
+            Span::styled(format!(" unchanged, {p_total} total"), dim),
+        ]
+    } else {
+        vec![
+            Span::styled("  Projects:      ", dim),
+            Span::styled(format!("{p_enabled}"), green),
+            Span::styled(format!(" of {p_total} enabled"), dim),
+        ]
+    };
 
     let lines: Vec<Line<'static>> = vec![
         Line::from(""),
         Line::from(Span::styled("  Review your configuration:", bold)),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  Projects:      ", dim),
-            Span::styled(format!("{p_enabled}"), green),
-            Span::styled(format!(" of {p_total} enabled"), dim),
-        ]),
+        Line::from(project_summary),
         Line::from(""),
         Line::from(vec![
             Span::styled("  Tools:         ", dim),

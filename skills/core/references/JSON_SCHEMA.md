@@ -16,4 +16,4 @@ These fields describe the current 1.0 command surface. Removed 0.1.x commands su
 
 **goto**: object with `action: "goto"`, `target` (label), `stashed` (bool), `memory_path` (optional path to materialized turn memory).
 
-**back**: object with `action: "back"`, `label` (where you returned to), `stash_applied` (bool), `remaining_depth` (int — how many more entries in the stack).
+**back**: object with `action: "back"`, `label` (where you returned to), `stash_applied` (bool), `remaining_depth` (int - how many more entries in the stack).

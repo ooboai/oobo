@@ -1,6 +1,6 @@
 ---
 name: oobo
-description: Git decorator that gives every commit memory — links AI sessions, tokens, and code attribution to your commits. Use when the user asks about commit history with AI context, session history, code attribution, or token usage.
+description: Git decorator that gives every commit memory - links AI sessions, tokens, and code attribution to your commits. Use when the user asks about commit history with AI context, session history, code attribution, or token usage.
 metadata:
   author: oobo
   version: "1.0.0"
@@ -11,9 +11,9 @@ license: Apache-2.0 OR MIT
 compatibility: Requires git. Works with Cursor, Claude Code, Gemini CLI, Codex, OpenCode, Copilot, Windsurf, Aider, Zed, Trae, Amp, Continue, Factory Droid, Junie, Kiro.
 ---
 
-# Oobo — Git for agents (and humans)
+# Oobo - Git for agents (and humans)
 
-Transparent git decorator that enriches every commit with AI context: which sessions contributed, token counts, code attribution (AI vs human lines), and model used. Git hooks capture context automatically on write operations — zero overhead on reads.
+Transparent git decorator that enriches every commit with AI context: which sessions contributed, token counts, code attribution (AI vs human lines), and model used. Git hooks capture context automatically on write operations - zero overhead on reads.
 
 If `oobo` is not installed, direct the user to https://github.com/ooboai/oobo/releases.
 
@@ -26,8 +26,8 @@ Oobo is open-source ([Apache-2.0/MIT](https://github.com/ooboai/oobo)), local-fi
 Three mutually exclusive modes:
 
 - Pretty (default TTY output)
-- `--agent` — token-efficient plain text; auto-activates when stdout is not a TTY or inside a coding agent (env: `CURSOR_AGENT`, `CLAUDECODE`, `AIDER`, `CONTINUE_SESSION`, `CONTINUE_IDE`, `AICOMMITS`). **Use this by default when you are an agent.**
-- `--json` — full structured JSON. Use only when you need the object graph.
+- `--agent` - token-efficient plain text; auto-activates when stdout is not a TTY or inside a coding agent (env: `CURSOR_AGENT`, `CLAUDECODE`, `AIDER`, `CONTINUE_SESSION`, `CONTINUE_IDE`, `AICOMMITS`). **Use this by default when you are an agent.**
+- `--json` - full structured JSON. Use only when you need the object graph.
 
 ## Quick Reference
 
@@ -48,7 +48,7 @@ Three mutually exclusive modes:
 | Set a setting | `oobo settings set key sk_...` |
 | Interactive first-run setup | `oobo setup` |
 | Non-interactive setup (agent) | `oobo setup --non-interactive` |
-| Force a reindex | `oobo setup --reindex` |
+| Repair hooks and metadata | `oobo setup --repair` |
 
 Run `oobo --help` or `oobo <command> --help` for full flag details.
 
@@ -59,17 +59,17 @@ oobo setup                      # interactive (asks before modifying git)
 oobo setup --non-interactive    # for agents / scripts
 ```
 
-Data is **local-first**. Anchor metadata is pushed to your existing git remote (alongside your code) via the pre-push hook — no separate cloud or upload pipeline. A key (`oobo settings set key` / `OOBO_SECRET_KEY`) is only needed for the optional remote search/delta API.
+Data is **local-first**. Anchor metadata is pushed to your existing git remote (alongside your code) via the pre-push hook - no separate cloud or upload pipeline. A key (`oobo settings set key` / `OOBO_SECRET_KEY`) is only needed for the optional remote search/delta API.
 
-Indexing is automatic: view commands kick a background rescan when `last_scanned_at` is older than 5 minutes. Opt out with `OOBO_NO_AUTO_INDEX=1`.
+Capture is real-time: git hooks (post-commit, pre-push, post-merge, post-rewrite) fire automatically and write anchors to the orphan branch. No background scanning or indexing needed.
 
 ## Key Behaviors
 
 - Commit SHA prefix matching for `oobo anchor show` (unambiguous prefixes only)
-- Token counts marked `is_estimated: true` are tiktoken estimates; `false` means native from the tool
+- Token counts marked `is_estimated: true` are heuristic estimates; `false` means native counts from the tool
 - `oobo update` self-updates and runs migrations automatically
-- Data lives on a git orphan branch (`oobo/anchors/v1`) — git-native with a local cache for fast lookups
-- `oobo blame` is a strict superset of `git blame` — every flag is forwarded; machine-output formats (`--porcelain`, `--line-porcelain`, `--incremental`) bypass the AI overlay automatically.
+- Data lives on a git orphan branch (`oobo/anchors/v1`) - git-native, no external database
+- `oobo blame` is a strict superset of `git blame` - every flag is forwarded; machine-output formats (`--porcelain`, `--line-porcelain`, `--incremental`) bypass the AI overlay automatically.
 
 ## Legacy commands
 
@@ -77,7 +77,7 @@ Indexing is automatic: view commands kick a background rescan when `last_scanned
 
 ## References
 
-- [Commands](references/COMMANDS.md) — full command reference with all flags and examples
-- [API Surface](references/API_SURFACE.md) — remote endpoints and agent lifecycle hooks
-- [JSON Schema](references/JSON_SCHEMA.md) — `--json` field listings per command
-- [Trust & Security](references/TRUST.md) — privacy policy, security details, data handling
+- [Commands](references/COMMANDS.md) - full command reference with all flags and examples
+- [API Surface](references/API_SURFACE.md) - remote endpoints and agent lifecycle hooks
+- [JSON Schema](references/JSON_SCHEMA.md) - `--json` field listings per command
+- [Trust & Security](references/TRUST.md) - privacy policy, security details, data handling

@@ -13,7 +13,7 @@ oobo --agent -n 5                                  # Short and sweet
 
 Equivalent to `oobo anchors`. Shows a scrollable TUI in interactive mode, or a flat list in agent/JSON mode.
 
-## Anchor Show — drill into a commit
+## Anchor Show - drill into a commit
 
 ```bash
 oobo anchor show <sha> --agent                     # Compact anchor detail
@@ -28,7 +28,7 @@ oobo blame src/main.rs abc123                       # Blame at a specific commit
 oobo blame src/main.rs --json                       # Structured per-line output
 ```
 
-## Time Travel — Goto / Back
+## Time Travel - Goto / Back
 
 ```bash
 oobo goto <turn-id-or-commit-sha>                  # Travel to a turn or commit
@@ -50,7 +50,7 @@ oobo search "auth" --project oobo-cli --json       # Explicit project scope
 
 Search is local-first. With an API key, default search merges local and remote results; use `--local`, `--remote`, or `--both` to force a source.
 
-## Delta — compare two anchors
+## Delta - compare two anchors
 
 ```bash
 oobo delta                                         # Compare HEAD to its previous anchor
@@ -77,7 +77,7 @@ Disabled projects are recorded in `.oobo/config` with `[project].enabled = false
 ```bash
 oobo setup                                         # Onboard, select projects, install hooks
 oobo setup --non-interactive                       # CI-safe defaults
-oobo setup --reindex                               # Force reindex of enabled projects
+oobo setup --reindex                               # Legacy (prints info message only)
 oobo setup --repair                                # Reinstall hooks + repair local metadata
 oobo update                                        # Self-update
 oobo update --check                                # Check only
@@ -98,7 +98,7 @@ oobo settings set setup.scan_roots ~/dev,~/work    # Directories to scan for rep
 oobo settings project set remote oobo              # Push anchor branch to specific remote
 ```
 
-Valid keys: `key`, `api_url`, `remote` (project-only), `transparency`, `tools.experimental`, `setup.scan_roots`.
+Valid keys: `key`, `api_url`, `remote`, `transparency`, `tools.experimental`, `setup.scan_roots`.
 
 A non-empty default API key is used for remote search and delta. `oobo settings unset key` removes the persisted key. `OOBO_SECRET_KEY` overrides the persisted key for the current process only. There is no cloud upload pipeline; team sync is Git-first via the orphan branch.
 

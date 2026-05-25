@@ -153,8 +153,15 @@ pub fn run_setup(non_interactive: bool) -> Result<(), CliError> {
         Config::config_path().display()
     );
     if !outcome.projects.is_empty() {
-        println!("  Projects enabled: {enabled_projects}");
-        println!("  Projects disabled: {disabled_projects}");
+        let unchanged: usize = outcome.projects.iter()
+            .filter(|p| p.state == crate::tui::setup::ProjectState::Unchanged)
+            .count();
+        if enabled_projects > 0 || disabled_projects > 0 {
+            println!("  Projects enabled: {enabled_projects}, disabled: {disabled_projects}");
+        }
+        if unchanged > 0 {
+            println!("  Projects unchanged: {unchanged}");
+        }
     }
 
     println!("  Agent skill installed at ~/.agents/skills/oobo/");
@@ -220,15 +227,15 @@ fn run_initial_scan() -> ScanInfo {
                 .unwrap_or("unknown")
                 .to_string();
             let id = crate::project::id_for_root(&path);
-            let already_enabled = crate::project_config::is_enabled(&path);
-            let has_sessions = session_count > 0;
+            let had_config = crate::project_config::exists(&path);
             ProjectChoice {
                 id,
                 name,
                 path,
                 tools: tools.into_iter().collect(),
                 sessions: session_count,
-                enabled: already_enabled || has_sessions,
+                state: crate::tui::setup::ProjectState::Disabled,
+                had_config,
             }
         })
         .collect();
@@ -244,17 +251,24 @@ fn run_initial_scan() -> ScanInfo {
 }
 
 fn apply_project_choices(projects: &[ProjectChoice]) -> Result<(usize, usize), CliError> {
+    use crate::tui::setup::ProjectState;
     let mut enabled = 0usize;
     let mut disabled = 0usize;
     for project in projects {
-        if project.enabled {
-            crate::project_config::set_enabled(&project.path, &project.id, true)?;
-            enabled += 1;
-        } else {
-            if crate::project_config::exists(&project.path) {
-                crate::project_config::set_enabled(&project.path, &project.id, false)?;
+        match project.state {
+            ProjectState::Enabled => {
+                crate::project_config::set_enabled(&project.path, &project.id, true)?;
+                enabled += 1;
             }
-            disabled += 1;
+            ProjectState::Disabled => {
+                if crate::project_config::exists(&project.path) {
+                    crate::project_config::set_enabled(&project.path, &project.id, false)?;
+                }
+                disabled += 1;
+            }
+            ProjectState::Unchanged => {
+                // Don't touch the project config at all
+            }
         }
     }
     Ok((enabled, disabled))
@@ -268,16 +282,24 @@ fn install_selected_project_hooks(cfg: &Config, projects: &[ProjectChoice]) {
         return;
     }
 
-    let enabled: Vec<&ProjectChoice> = projects.iter().filter(|p| p.enabled).collect();
-    if enabled.is_empty() {
+    use crate::tui::setup::ProjectState;
+    let active: Vec<&ProjectChoice> = projects
+        .iter()
+        .filter(|p| match p.state {
+            ProjectState::Enabled => true,
+            ProjectState::Unchanged => crate::project_config::is_enabled(&p.path),
+            ProjectState::Disabled => false,
+        })
+        .collect();
+    if active.is_empty() {
         println!();
         println!("  No project git hooks installed (all projects disabled).");
         return;
     }
 
     println!();
-    println!("  Git hooks installed for enabled projects:");
-    for project in enabled {
+    println!("  Git hooks refreshed for active projects:");
+    for project in active {
         install_project_hooks_with_status(&project.path, &project.name);
     }
 }

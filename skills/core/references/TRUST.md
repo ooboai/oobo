@@ -4,15 +4,15 @@ Oobo is open-source software published by [NoCode Inc](https://nocode.inc).
 
 | Property | Detail |
 |----------|--------|
-| Source code | Public at [github.com/ooboai/oobo](https://github.com/ooboai/oobo) — Apache 2.0 / MIT dual-licensed |
-| Security policy | [SECURITY.md](https://github.com/ooboai/oobo/blob/main/SECURITY.md) — responsible disclosure, safe harbor |
+| Source code | Public at [github.com/ooboai/oobo](https://github.com/ooboai/oobo) - Apache 2.0 / MIT dual-licensed |
+| Security policy | [SECURITY.md](https://github.com/ooboai/oobo/blob/main/SECURITY.md) - responsible disclosure, safe harbor |
 | Privacy policy | [oobo.ai/privacy](https://oobo.ai/privacy) |
-| Read-only | Never writes to AI tool directories — only reads session metadata (timestamps, model names, token counts) |
-| Local-first | All data stays in `~/.oobo/` and the local orphan branch. Anchor metadata is pushed only to your existing git remote (alongside your code) via the pre-push hook. The optional remote API (search, delta) requires a separate API key. |
+| Read-only data access | Never modifies AI tool conversation history or databases. Reads session metadata (timestamps, model names, token counts). Writes hook configuration files during `oobo setup`. |
+| Local-first | All data stays on the local orphan branch (`oobo/anchors/v1`). Anchor metadata is pushed only to your existing git remote (alongside your code) via the pre-push hook. The optional remote API (search, delta) requires a separate API key. |
 | No telemetry | Does not phone home or collect usage data |
 | No credentials | Never accesses API keys, browsing history, or file contents outside of AI tool storage |
 | Secret redaction | Sessions scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before any sharing |
-| Install | Downloads a pre-built binary from GitHub Releases — no arbitrary code execution |
+| Install | Downloads a pre-built binary from GitHub Releases - no arbitrary code execution |
 | No sudo required | Installs to `~/.oobo/bin`, no elevated permissions needed |
 
 ## Supported Tools
@@ -21,11 +21,11 @@ Cursor, Claude Code, Gemini CLI, Codex CLI, OpenCode, GitHub Copilot Chat, Winds
 
 ## Architecture
 
-Oobo is a git decorator that intercepts commits, enriches them with anchor metadata (linked sessions, agent/human attribution, diff stats, token counts), and stores everything on the `oobo/anchors/v1` orphan branch. Anchor data is git-native; a lightweight local SQLite cache under `~/.oobo/` accelerates lookups but is fully rebuildable from git.
+Oobo is a git decorator that intercepts commits, enriches them with anchor metadata (linked sessions, agent/human attribution, diff stats, token counts), and stores everything on the `oobo/anchors/v1` orphan branch. Anchor data is git-native and fully contained within the repository.
 
 ## Agent Configuration
 
-Agents should operate with **transparency on** — this is the recommended default for all automated workflows. Transparency mode writes anchor metadata and redacted transcripts to a local orphan branch (`oobo/anchors/v1`), giving teams visibility into AI contributions.
+Agents should operate with **transparency on** - this is the recommended default for all automated workflows. Transparency mode writes anchor metadata and redacted transcripts to the local orphan branch (`oobo/anchors/v1`), giving teams visibility into AI contributions.
 
 | Setting | Value | Why |
 |---------|-------|-----|
