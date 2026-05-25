@@ -312,18 +312,24 @@ EOF
     rm -rf "$_oobo_tmpdir" 2>/dev/null || true
     trap - EXIT
 
-    # Run setup - hand off the process entirely so the TUI wizard
-    # gets a real TTY (stdin is consumed by the pipe when curl | bash).
-    echo -e "  Running ${BOLD}oobo setup${RESET}..."
-    echo ""
+    # Run setup. The interactive TUI wizard requires a real TTY for both
+    # stdout and stdin (crossterm event reader). When piped (curl | bash),
+    # use --non-interactive to avoid TUI failures, then tell the user to
+    # run `oobo setup` manually if they want the interactive wizard.
     if [[ -t 0 ]]; then
         # stdin is already a TTY (script run directly, not piped)
+        echo -e "  Running ${BOLD}oobo setup${RESET}..."
+        echo ""
         exec "${INSTALL_DIR}/${BINARY_NAME}" setup
-    elif [[ -r /dev/tty && -w /dev/tty ]]; then
-        # stdin is a pipe (curl | bash) - redirect from /dev/tty
-        exec "${INSTALL_DIR}/${BINARY_NAME}" setup </dev/tty
     else
-        info "No TTY available - run ${BOLD}oobo setup${RESET} to finish configuration."
+        # stdin is a pipe (curl | bash) - run non-interactive setup
+        echo -e "  Running ${BOLD}oobo setup --non-interactive${RESET}..."
+        echo ""
+        "${INSTALL_DIR}/${BINARY_NAME}" setup --non-interactive
+        echo ""
+        echo -e "  To customize which projects are tracked, run:"
+        echo -e "    ${BOLD}oobo setup${RESET}"
+        echo ""
     fi
 }
 
