@@ -316,25 +316,12 @@ EOF
     export HOME="${HOME:-$(eval echo ~)}"
     export OOBO_HOME="${OOBO_HOME:-$HOME/.oobo}"
 
-    # Run the interactive setup wizard. When piped (curl | bash), stdin is
-    # the script content, not the keyboard. Redirect from /dev/tty to give
-    # the TUI access to the real terminal.
-    if [[ -t 0 ]]; then
-        # stdin is already a TTY (script run directly)
-        echo -e "  Running ${BOLD}oobo setup${RESET}..."
-        echo ""
-        exec env HOME="$HOME" "${INSTALL_DIR}/${BINARY_NAME}" setup
-    elif [[ -r /dev/tty && -w /dev/tty ]]; then
-        # stdin is a pipe but terminal is available (curl | bash in a terminal)
-        echo -e "  Running ${BOLD}oobo setup${RESET}..."
-        echo ""
-        exec env HOME="$HOME" "${INSTALL_DIR}/${BINARY_NAME}" setup </dev/tty
-    else
-        # No terminal at all (CI, Docker build, cron, etc.)
-        echo -e "  Running ${BOLD}oobo setup --non-interactive${RESET}..."
-        echo ""
-        exec env HOME="$HOME" "${INSTALL_DIR}/${BINARY_NAME}" setup --non-interactive
-    fi
+    # Launch setup. The binary handles TTY detection internally:
+    # - If stdin is a terminal (or /dev/tty is available), shows interactive wizard
+    # - Otherwise falls back to non-interactive defaults
+    echo -e "  Running ${BOLD}oobo setup${RESET}..."
+    echo ""
+    exec env HOME="$HOME" "${INSTALL_DIR}/${BINARY_NAME}" setup
 }
 
 main "$@"

@@ -18,7 +18,34 @@ use ratatui::DefaultTerminal;
 
 pub const KEY_POLL: Duration = Duration::from_millis(50);
 
+/// Reopen stdin from /dev/tty if it's not already a terminal.
+/// This allows the TUI to read keyboard input even when the binary
+/// is launched from a pipe (e.g. curl | bash -> exec oobo setup).
+#[cfg(unix)]
+pub fn ensure_tty_stdin() -> io::Result<()> {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        use std::fs::File;
+        use std::os::unix::io::IntoRawFd;
+        let tty = File::open("/dev/tty")?;
+        let tty_fd = tty.into_raw_fd();
+        if tty_fd != 0 {
+            unsafe {
+                libc::dup2(tty_fd, 0);
+                libc::close(tty_fd);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn ensure_tty_stdin() -> io::Result<()> {
+    Ok(())
+}
+
 pub fn init() -> io::Result<DefaultTerminal> {
+    ensure_tty_stdin()?;
     ratatui::try_init()
 }
 

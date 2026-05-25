@@ -128,7 +128,9 @@ pub fn run_setup(non_interactive: bool) -> Result<(), CliError> {
 
     let cfg = Config::load_or_default();
 
-    let outcome = if !non_interactive && std::io::stdout().is_terminal() {
+    let can_interactive = std::io::stdout().is_terminal()
+        && (std::io::stdin().is_terminal() || std::path::Path::new("/dev/tty").exists());
+    let outcome = if !non_interactive && can_interactive {
         if let Some(outcome) = crate::tui::setup::run_setup_wizard(&cfg, scan)? {
             outcome
         } else {
