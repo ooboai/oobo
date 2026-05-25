@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-05-25
+
+### Added
+
+- Three-state project selection in `oobo setup` wizard: `[✓]` enable, `[~]` leave unchanged, `[ ]` disable. Re-running setup no longer accidentally modifies previously configured projects.
+
+### Fixed
+
+- `install.sh`: detect when stdin is already a TTY to avoid "Failed to initialize input reader" error when the script is run directly (not piped from curl).
+- Skill docs: removed false `OOBO_NO_AUTO_INDEX` env var and stale "5-minute background rescan" claim. Capture is real-time via git hooks.
+- Skill docs: corrected "never writes to AI tool directories" claim (oobo writes hook config files during setup).
+- Skill docs: removed "local SQLite cache" reference (data is git-native only).
+- Skill docs: updated agent hook events to list all 11 actual events.
+- Skill docs: fixed `--reindex` description (legacy no-op since 1.0).
+
 ## [1.0.0] - 2026-05-22
 
 Complete rewrite. oobo is no longer a git wrapper — it is a standalone

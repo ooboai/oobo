@@ -3,7 +3,7 @@ name: oobo
 description: Git decorator that gives every commit memory - links AI sessions, tokens, and code attribution to your commits. Use when the user asks about commit history with AI context, session history, code attribution, or token usage.
 metadata:
   author: oobo
-  version: "1.0.0"
+  version: "1.0.1"
 install:
   check: command -v oobo
   url: https://github.com/ooboai/oobo/releases

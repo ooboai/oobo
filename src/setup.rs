@@ -153,7 +153,9 @@ pub fn run_setup(non_interactive: bool) -> Result<(), CliError> {
         Config::config_path().display()
     );
     if !outcome.projects.is_empty() {
-        let unchanged: usize = outcome.projects.iter()
+        let unchanged: usize = outcome
+            .projects
+            .iter()
             .filter(|p| p.state == crate::tui::setup::ProjectState::Unchanged)
             .count();
         if enabled_projects > 0 || disabled_projects > 0 {

@@ -180,11 +180,17 @@ impl Wizard {
     }
 
     fn enabled_project_count(&self) -> usize {
-        self.projects.iter().filter(|p| p.state.is_enabled()).count()
+        self.projects
+            .iter()
+            .filter(|p| p.state.is_enabled())
+            .count()
     }
 
     fn unchanged_project_count(&self) -> usize {
-        self.projects.iter().filter(|p| p.state == ProjectState::Unchanged).count()
+        self.projects
+            .iter()
+            .filter(|p| p.state == ProjectState::Unchanged)
+            .count()
     }
 }
 
@@ -244,7 +250,11 @@ fn handle_key(wiz: &mut Wizard, code: KeyCode) -> Action {
             }
             KeyCode::Char('a') => {
                 let all_enabled = wiz.projects.iter().all(|p| p.state.is_enabled());
-                let new_state = if all_enabled { ProjectState::Disabled } else { ProjectState::Enabled };
+                let new_state = if all_enabled {
+                    ProjectState::Disabled
+                } else {
+                    ProjectState::Enabled
+                };
                 for project in &mut wiz.projects {
                     project.state = new_state;
                 }
