@@ -40,7 +40,7 @@ tempfile = "3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
-sonar-core = { path = "../sonar/crates/core" }
+sonar-core = { git = "https://github.com/ooboai/sonar", tag = "v0.3.0", package = "sonar-core" }
 ctrlc = "3"
 
 [target.'cfg(unix)'.dependencies]

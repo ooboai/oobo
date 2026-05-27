@@ -2865,7 +2865,8 @@ dependencies = [
 
 [[package]]
 name = "sonar-core"
-version = "0.1.0"
+version = "0.3.0"
+source = "git+https://github.com/ooboai/sonar?tag=v0.3.0#0135ddadb1fc832c52790d3110b33b889e1f665a"
 dependencies = [
  "anyhow",
  "blake3",
