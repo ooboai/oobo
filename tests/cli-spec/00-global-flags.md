@@ -30,7 +30,7 @@ d4e5f6g 18m  add rate limiter           gemini 31k 2s
 
 ## `--json`
 
-Forces **JSON mode**: full-fidelity structured data for tools/scripts parsing oobo's output. Verbose by design — do NOT use for LLM consumption.
+Forces **JSON mode**: full-fidelity structured data for tools/scripts parsing oobo's output. Verbose by design  --  do NOT use for LLM consumption.
 
 ### Invocation
 `oobo --json`
@@ -104,7 +104,7 @@ Escape hatch. Forces pretty/TUI mode even when auto-detection would flip to `--a
 
 **Example output (shape):**
 ```
-oobo — git with memory.
+oobo  --  git with memory.
 
 USAGE:
     oobo [OPTIONS] [COMMAND]
@@ -140,7 +140,7 @@ Run `oobo <command> --help` for per-command help.
 
 ### Subcommand help
 
-`oobo anchor show --help`, `oobo settings --help`, etc. — every subcommand must print its own help showing ONLY its own flags and positional args. No clap-default brag about global flags except for a brief footer:
+`oobo anchor show --help`, `oobo settings --help`, etc.  --  every subcommand must print its own help showing ONLY its own flags and positional args. No clap-default brag about global flags except for a brief footer:
 
 ```
 Global flags: --agent, --json, --interactive. See `oobo --help`.

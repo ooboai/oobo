@@ -1,4 +1,4 @@
-//! `oobo enable` / `oobo disable` — per-project on/off toggles.
+//! `oobo enable` / `oobo disable`  --  per-project on/off toggles.
 //!
 //! Imperative verbs, NOT settings keys. The project folder is the source of
 //! truth: `.oobo/config` exists for enabled projects, and
@@ -8,7 +8,7 @@ use crate::cli::OutputMode;
 use crate::config::Config;
 use crate::error::CmdResult;
 
-/// `oobo enable` — mark the current project as tracked.
+/// `oobo enable`  --  mark the current project as tracked.
 pub fn enable(cfg: &Config, mode: OutputMode) -> CmdResult {
     let (root, name) = if let Some(tuple) = project_context(cfg) {
         tuple
@@ -37,7 +37,7 @@ pub fn enable(cfg: &Config, mode: OutputMode) -> CmdResult {
     Ok(0)
 }
 
-/// `oobo disable` — mark the current project as not tracked.
+/// `oobo disable`  --  mark the current project as not tracked.
 pub fn disable(cfg: &Config, mode: OutputMode) -> CmdResult {
     let (root, name) = if let Some(tuple) = project_context(cfg) {
         tuple

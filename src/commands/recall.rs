@@ -1,4 +1,4 @@
-//! `oobo recall` — local-first search across sessions, anchors, and commit
+//! `oobo recall`  --  local-first search across sessions, anchors, and commit
 //! subjects. When an API key is configured, remote results are merged in.
 
 use crate::cli::OutputMode;
@@ -12,7 +12,7 @@ pub enum Source {
     Both,
 }
 
-/// Search scope — which projects to consider.
+/// Search scope  --  which projects to consider.
 #[derive(Debug, Clone)]
 pub enum Scope {
     /// All projects.

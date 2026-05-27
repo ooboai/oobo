@@ -3,15 +3,15 @@
 Built-in documentation system. Shows rich prose-based help for specific topics. Always available, works offline, respects output modes.
 
 Positional arg:
-- `<topic>` — optional. Omit for a list of all topics.
+- `<topic>`  --  optional. Omit for a list of all topics.
 
 Available topics:
-- `anchors` — What anchors are and how they work
-- `search` — Search syntax, filters, and cloud vs local
-- `blame` — Reading the AI attribution overlay
-- `hooks` — How git and agent hooks capture sessions
-- `config` — All settings explained
-- `keyboard` — TUI keybindings reference
+- `anchors`  --  What anchors are and how they work
+- `search`  --  Search syntax, filters, and cloud vs local
+- `blame`  --  Reading the AI attribution overlay
+- `hooks`  --  How git and agent hooks capture sessions
+- `config`  --  All settings explained
+- `keyboard`  --  TUI keybindings reference
 
 ---
 
@@ -24,7 +24,7 @@ Available topics:
 
 **Example output (TTY):**
 ```
-oobo help — built-in documentation
+oobo help  --  built-in documentation
 
   Usage: oobo help <topic>
 
@@ -90,7 +90,7 @@ keyboard TUI keybindings reference
 oobo help anchors
 
 Anchors are the core unit of oobo memory. Every git commit that was made
-while an AI coding tool was active gets an anchor — a metadata record that
+while an AI coding tool was active gets an anchor  --  a metadata record that
 links the commit to the AI session(s) that contributed to it.
 ...
 ```
@@ -152,7 +152,7 @@ available topics:
 ### Invocation
 `oobo help anchors` (outside any git repository)
 
-**Behavior:** Help is self-contained — no repo context needed. Works the same as inside a repo.
+**Behavior:** Help is self-contained  --  no repo context needed. Works the same as inside a repo.
 
 **Exit code:** `0`.
 
@@ -164,5 +164,5 @@ available topics:
 - `--agent` output never contains ANSI escapes.
 - `--json` output always parses per `jq '.'`.
 - Unknown topics exit `2` with a helpful error listing all valid topics.
-- The topic list in help output MUST match the compiled `TOPICS` constant — any mismatch is a bug.
-- Help content is compiled into the binary — always available offline, always current with the installed version.
+- The topic list in help output MUST match the compiled `TOPICS` constant  --  any mismatch is a bug.
+- Help content is compiled into the binary  --  always available offline, always current with the installed version.

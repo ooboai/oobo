@@ -6,7 +6,7 @@ use crate::error::{CliError, CmdResult};
 /// State file recording the navigation stack, so `oobo back` can return.
 const GOTO_STATE_FILE: &str = "oobo-state/goto-stack.json";
 
-/// `oobo goto <id>` — travel to a turn or commit.
+/// `oobo goto <id>`  --  travel to a turn or commit.
 ///
 /// Safety guarantees:
 /// 1. If the worktree is dirty, we auto-stash (unless `--no-stash`).
@@ -45,7 +45,7 @@ pub fn run(cfg: &Config, target: &str, no_stash: bool, mode: OutputMode) -> CmdR
         }
         Target::Ambiguous(matches) => {
             eprintln!(
-                "oobo: '{target}' is ambiguous — matches {} turns:",
+                "oobo: '{target}' is ambiguous  --  matches {} turns:",
                 matches.len()
             );
             for t in &matches {
@@ -62,7 +62,7 @@ pub fn run(cfg: &Config, target: &str, no_stash: bool, mode: OutputMode) -> CmdR
 
     // Safety: handle dirty worktree.
     // Only stash on the first goto (empty stack). When already navigating,
-    // the worktree was set by a previous goto — nothing user-owned to save.
+    // the worktree was set by a previous goto  --  nothing user-owned to save.
     let is_first_goto = stack_depth(&project_root) == 0;
     let stash_ref = if is_first_goto {
         let dirty = has_dirty_changes(&project_root)?;
@@ -85,7 +85,7 @@ pub fn run(cfg: &Config, target: &str, no_stash: bool, mode: OutputMode) -> CmdR
     let current_tree = git_capture(&project_root, &["write-tree"])?;
     // Label: describes what we're leaving (shown on `back`).
     let leaving_label = if is_first_goto {
-        // Leaving HEAD — use its commit message.
+        // Leaving HEAD  --  use its commit message.
         git_capture(&project_root, &["show", "-s", "--format=%s", "HEAD"])
             .unwrap_or_else(|_| "HEAD".into())
     } else {
@@ -128,7 +128,7 @@ pub fn run(cfg: &Config, target: &str, no_stash: bool, mode: OutputMode) -> CmdR
     Ok(0)
 }
 
-/// `oobo back` — pop one level from the navigation stack.
+/// `oobo back`  --  pop one level from the navigation stack.
 pub fn run_back(cfg: &Config, mode: OutputMode) -> CmdResult {
     let Some(project_root) = crate::git::proxy::project_root(cfg) else {
         eprintln!("oobo: not inside a git repository.");
@@ -213,7 +213,7 @@ pub fn run_back(cfg: &Config, mode: OutputMode) -> CmdResult {
                 println!("Returned to {}.", entry.label);
             }
             if remaining > 0 {
-                println!("  {remaining} more in history — run `oobo back` again to keep going.");
+                println!("  {remaining} more in history  --  run `oobo back` again to keep going.");
             }
         }
     }

@@ -62,7 +62,7 @@ async fn authenticated_post(
 fn map_common_errors(status: reqwest::StatusCode) -> Option<RemoteError> {
     if status.as_u16() == 401 {
         return Some(RemoteError::Auth(
-            "invalid or missing API key — run: oobo settings set key <KEY>".to_string(),
+            "invalid or missing API key  --  run: oobo settings set key <KEY>".to_string(),
         ));
     }
     None

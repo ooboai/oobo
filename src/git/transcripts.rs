@@ -41,7 +41,7 @@ pub(in crate::git) fn build_sync_transcripts(
 /// Collect rich transcript content for active sessions (for full-transparency mode).
 ///
 /// Priority order per session:
-/// 1. Cursor's bubbleId: DB — includes thinking, tool calls, timestamps, tokens
+/// 1. Cursor's bubbleId: DB  --  includes thinking, tool calls, timestamps, tokens
 /// 2. transcript_path from the stop hook payload
 /// 3. Tool registry's find_transcript (JSONL/text file)
 ///

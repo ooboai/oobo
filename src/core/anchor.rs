@@ -13,7 +13,7 @@ fn default_anchor_schema_version() -> u32 {
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum TransparencyMode {
-    /// Metadata only — no transcripts on the orphan branch.
+    /// Metadata only  --  no transcripts on the orphan branch.
     #[default]
     Off,
     /// Metadata + redacted transcripts on the orphan branch.
@@ -24,9 +24,9 @@ pub enum TransparencyMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LinkType {
-    /// From lifecycle hooks — we know for certain.
+    /// From lifecycle hooks  --  we know for certain.
     Explicit,
-    /// From time-window matching — best guess.
+    /// From time-window matching  --  best guess.
     Inferred,
 }
 
@@ -47,7 +47,7 @@ pub enum AuthorType {
     Automated,
 }
 
-/// A contributor to a commit — human or AI.
+/// A contributor to a commit  --  human or AI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Contributor {
     pub name: String,
@@ -123,7 +123,7 @@ pub struct FileChange {
     pub line_attributions: Vec<LineAttribution>,
 }
 
-/// Anchor metadata — the enriched commit primitive.
+/// Anchor metadata  --  the enriched commit primitive.
 /// One per commit, stored on the orphan branch (`oobo/anchors/v1`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Anchor {
@@ -137,7 +137,7 @@ pub struct Anchor {
     pub author: String,
     #[serde(default)]
     pub author_type: AuthorType,
-    /// All contributors to this commit — human(s) and AI tool(s).
+    /// All contributors to this commit  --  human(s) and AI tool(s).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub contributors: Vec<Contributor>,
     pub committed_at: i64,

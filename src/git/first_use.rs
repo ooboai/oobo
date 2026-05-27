@@ -26,7 +26,7 @@ pub fn check_first_use(cfg: &Config, project_root: &str) {
             .and_then(|n| n.to_str())
             .unwrap_or(project_root);
         eprintln!(
-            "  \x1b[1moorbo:\x1b[0m enriching commits in \x1b[36m{short}\x1b[0m with AI attribution — run \x1b[1moorbo disable\x1b[0m to opt out"
+            "  \x1b[1moorbo:\x1b[0m enriching commits in \x1b[36m{short}\x1b[0m with AI attribution  --  run \x1b[1moorbo disable\x1b[0m to opt out"
         );
     }
 

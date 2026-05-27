@@ -1,4 +1,4 @@
-//! M4 — Subagent inference engine.
+//! M4  --  Subagent inference engine.
 //!
 //! # What this module answers
 //!
@@ -14,8 +14,8 @@
 //!
 //! # Design: multi-signal scoring, never overwrite explicit
 //!
-//! Each evaluation takes an **orphan child** — a session with
-//! `parent_session_id IS NULL` — and scores it against every
+//! Each evaluation takes an **orphan child**  --  a session with
+//! `parent_session_id IS NULL`  --  and scores it against every
 //! **parent candidate** (an assistant turn that invoked the `Task`
 //! tool). Each heuristic contributes a weighted [`SignalHit`]; the
 //! total score is capped at `1.0`. We apply a link iff
@@ -127,7 +127,7 @@ pub enum SignalHit {
         weight: f32,
         /// Gap from parent turn start to child first turn (ms).
         /// Negative values mean the child started before the parent
-        /// turn's timestamp — still counted inside a tolerance.
+        /// turn's timestamp  --  still counted inside a tolerance.
         gap_ms: i64,
     },
     /// Child's first user message starts with a well-known subagent
@@ -200,7 +200,7 @@ pub fn infer(orphans: &[OrphanChild], parents: &[ParentTurn]) -> Vec<Inference> 
 
         for parent in parents {
             // A candidate only counts if its turn names include
-            // "Task" — this is the hard precondition the DB query
+            // "Task"  --  this is the hard precondition the DB query
             // already enforces but we re-assert in the pure fn.
             if !tool_names_contains(&parent.tool_names, "Task") {
                 continue;
@@ -360,7 +360,7 @@ fn abs_gap(inf: &Inference) -> i64 {
 }
 
 /// `true` if `needle` first occurs within the first `head_bytes`
-/// bytes of `haystack`. Keeps the template check tight — a template
+/// bytes of `haystack`. Keeps the template check tight  --  a template
 /// wouldn't be buried deep in a user message.
 fn starts_within_head(haystack: &str, needle: &str, head_bytes: usize) -> bool {
     let head_end = haystack.len().min(head_bytes);
@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn temporal_match_outside_window_rejects() {
         let p = parent("P", 3, 1_000_000, "Task");
-        // child starts a minute and 10s later — outside AFTER window
+        // child starts a minute and 10s later  --  outside AFTER window
         let c = orphan("C", Some(1_000_000 + 70_000), None);
         assert!(temporal_match(&p, &c).is_none());
     }
@@ -491,7 +491,7 @@ mod tests {
 
     #[test]
     fn infer_applies_on_temporal_alone_at_full_weight() {
-        // Temporal alone at 0.7 exceeds the 0.6 threshold — this is
+        // Temporal alone at 0.7 exceeds the 0.6 threshold  --  this is
         // the common case for subagent detection without template
         // preambles in the preview.
         let parents = vec![parent("P", 5, 1_000_000, "Task")];

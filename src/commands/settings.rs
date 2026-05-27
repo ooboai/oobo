@@ -1,4 +1,4 @@
-//! `oobo settings` — declarative KV config.
+//! `oobo settings`  --  declarative KV config.
 //!
 //! Grammar: `oobo settings [scope] [verb] <key> [value]`
 //! - scope (optional, default `default`): `default` | `project`

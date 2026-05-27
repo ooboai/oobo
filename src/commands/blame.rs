@@ -1,9 +1,9 @@
-//! `oobo blame` — strict superset of `git blame`.
+//! `oobo blame`  --  strict superset of `git blame`.
 //!
 //! For every line in the file, we trace it back to the commit that introduced
 //! it (via `git blame --porcelain`), load that commit's anchor from the orphan
 //! branch, and look up per-line AI/human attribution. This gives historically
-//! accurate blame across the full file history — not just the latest commit.
+//! accurate blame across the full file history  --  not just the latest commit.
 //!
 //! Machine-output modes (`--porcelain`, `--line-porcelain`,
 //! `--incremental`) forward to `git blame` byte-for-byte.
@@ -160,7 +160,7 @@ fn lookup_attribution(
             }
         }
     }
-    // Line exists in the file change but has no explicit attribution —
+    // Line exists in the file change but has no explicit attribution  -- 
     // fall back to the file-level attribution if present.
     (fc.attribution.clone(), fc.agent.clone())
 }
@@ -292,7 +292,7 @@ fn detect_file_and_commit(args: &[String]) -> (String, Option<String>) {
 }
 
 // ------------------------------------------------------------------
-// JSON — rich output for plugins and tooling
+// JSON  --  rich output for plugins and tooling
 // ------------------------------------------------------------------
 
 fn emit_json(cfg: &Config, file: &str, commit: Option<&str>, args: &[String]) -> CmdResult {
@@ -350,7 +350,7 @@ fn emit_json(cfg: &Config, file: &str, commit: Option<&str>, args: &[String]) ->
 }
 
 // ------------------------------------------------------------------
-// Agent — compact text columns
+// Agent  --  compact text columns
 // ------------------------------------------------------------------
 
 fn emit_agent(cfg: &Config, file: &str, commit: Option<&str>, args: &[String]) -> CmdResult {
@@ -373,7 +373,7 @@ fn emit_agent(cfg: &Config, file: &str, commit: Option<&str>, args: &[String]) -
 }
 
 // ------------------------------------------------------------------
-// TUI (overlay) — colored git-blame with AI column
+// TUI (overlay)  --  colored git-blame with AI column
 // ------------------------------------------------------------------
 
 fn emit_overlay(cfg: &Config, file: &str, commit: Option<&str>, args: &[String]) -> CmdResult {

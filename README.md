@@ -4,9 +4,9 @@
 
 # oobo
 
-### Git for agents (and humans).
+### Context beyond the diff.
 
-A transparent git decorator that enriches every commit with AI context:<br/>sessions, tokens, and code attribution — across 15 AI coding tools.<br/>No workflow changes. No plugins. No cloud required.
+Capture, search, and recall AI context across every commit.<br/>Sessions, tokens, code attribution, and semantic code search -- across 15 AI coding tools.<br/>No workflow changes. No plugins. No cloud required.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0%20%2F%20MIT-blue)](LICENSE-APACHE)
 [![CI](https://img.shields.io/github/actions/workflow/status/ooboai/oobo/ci.yml?label=CI)](https://github.com/ooboai/oobo/actions/workflows/ci.yml)
@@ -34,23 +34,24 @@ Or grab a binary from [Releases](https://github.com/ooboai/oobo/releases).
 
 ## Features
 
-- **Transparent Git Hooks** — Works alongside your normal `git` workflow. Post-commit hooks automatically capture AI context without changing how you work.
-- **AI Session Tracking** — Automatically discovers and links AI chat sessions to your commits — which agent wrote what, how many tokens it took, and which conversation produced each change.
-- **15 Tools Supported** — Cursor, Claude Code, Gemini CLI, OpenCode, Codex, Aider, GitHub Copilot, Windsurf, Zed, Trae, Amp, Continue, Factory Droid, Junie, and Kiro.
-- **Code Attribution** — Know exactly which lines were AI-generated vs human-written, per commit.
-- **Agent-Native** — Three output modes (pretty / `--agent` token-efficient plain text / `--json` structured). `--agent` auto-activates when stdout isn't a TTY or inside a coding agent.
-- **Local-First, Private by Default** — Anchors live in your git repo (orphan branch), with a lightweight local cache in `~/.oobo/`. Anchor metadata travels only where your code already goes (your git remote, via `git push`). No telemetry. Secrets are redacted before sharing.
-- **Anchor System** — Extends git commits with structured AI metadata that travels with the repo via a git orphan branch. No external dependencies.
+- **Transparent Git Hooks** -- Works alongside your normal `git` workflow. Post-commit hooks automatically capture AI context without changing how you work.
+- **AI Session Tracking** -- Automatically discovers and links AI chat sessions to your commits -- which agent wrote what, how many tokens it took, and which conversation produced each change.
+- **Semantic Code Search** -- Hybrid BM25 + vector search (powered by sonar) finds code by meaning, not just keywords. Indexes locally, no cloud needed.
+- **15 Tools Supported** -- Cursor, Claude Code, Gemini CLI, OpenCode, Codex, Aider, GitHub Copilot, Windsurf, Zed, Trae, Amp, Continue, Factory Droid, Junie, and Kiro.
+- **Code Attribution** -- Know exactly which lines were AI-generated vs human-written, per commit.
+- **Agent-Native** -- Three output modes (pretty / `--agent` token-efficient plain text / `--json` structured). `--agent` auto-activates when stdout isn't a TTY or inside a coding agent.
+- **Local-First, Private by Default** -- Anchors live in your git repo (orphan branch), with a lightweight local cache in `~/.oobo/`. Anchor metadata travels only where your code already goes (your git remote, via `git push`). No telemetry. Secrets are redacted before sharing.
+- **Anchor System** -- Extends git commits with structured AI metadata that travels with the repo via a git orphan branch. No external dependencies.
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Install — setup runs automatically, detects your tools, configures everything
+# 1. Install -- setup runs automatically, detects your tools, configures everything
 curl -fsSL https://oobo.ai/install.sh | bash
 
-# 2. Use git normally — hooks capture AI context on every commit
+# 2. Use git normally -- hooks capture AI context on every commit
 git commit -m "fix auth middleware"
 git push origin main
 
@@ -84,18 +85,18 @@ You run:  git commit -m "fix auth middleware"
   5. Writes anchor to git orphan branch
 ```
 
-Git operations work exactly as normal — oobo captures context via hooks, not by wrapping git.
+Git operations work exactly as normal -- oobo captures context via hooks, not by wrapping git.
 
 ### The anchor
 
-An **anchor** is oobo's core primitive — it extends a git commit with AI context:
+An **anchor** is oobo's core primitive -- it extends a git commit with AI context:
 
 ```
 Git:     commit = diff(files)
 Anchor:  anchor = commit + sessions + tokens + attribution
 ```
 
-Each anchor records which AI sessions contributed, token counts, code attribution (AI vs human lines), model used, and session duration. Anchors live on a git orphan branch (`oobo/anchors/v1`) that travels with the repo — no external dependencies.
+Each anchor records which AI sessions contributed, token counts, code attribution (AI vs human lines), model used, and session duration. Anchors live on a git orphan branch (`oobo/anchors/v1`) that travels with the repo -- no external dependencies.
 
 ---
 
@@ -107,19 +108,19 @@ Each anchor records which AI sessions contributed, token counts, code attributio
 | Claude Code         | ✓        | ✓           | ✓           | ✓           |
 | Gemini CLI          | ✓        | ✓           | ✓           | ✓           |
 | OpenCode            | ✓        | ✓           | ✓           | ✓           |
-| Codex CLI           | ✓        | ✓           | ✓           | —           |
-| Aider               | ✓        | ✓           | ✓           | —           |
-| GitHub Copilot Chat | ✓        | ✓           | ✓           | —           |
-| Windsurf            | ✓        | ✓           | partial     | —           |
-| Zed                 | ✓        | ✓           | ✓           | —           |
-| Trae                | ✓        | ✓           | partial     | —           |
-| Amp                 | ✓        | ✓           | —           | —           |
-| Continue            | ✓        | ✓           | —           | ✓           |
-| Factory Droid       | ✓        | ✓           | —           | ✓           |
-| Junie               | ✓        | ✓           | —           | —           |
-| Kiro                | ✓        | ✓           | —           | ✓           |
+| Codex CLI           | ✓        | ✓           | ✓           | -           |
+| Aider               | ✓        | ✓           | ✓           | -           |
+| GitHub Copilot Chat | ✓        | ✓           | ✓           | -           |
+| Windsurf            | ✓        | ✓           | partial     | -           |
+| Zed                 | ✓        | ✓           | ✓           | -           |
+| Trae                | ✓        | ✓           | partial     | -           |
+| Amp                 | ✓        | ✓           | -           | -           |
+| Continue            | ✓        | ✓           | -           | ✓           |
+| Factory Droid       | ✓        | ✓           | -           | ✓           |
+| Junie               | ✓        | ✓           | -           | -           |
+| Kiro                | ✓        | ✓           | -           | ✓           |
 
-All tools are read-only — oobo never writes to AI tool data directories.
+All tools are read-only -- oobo never writes to AI tool data directories.
 
 ---
 
@@ -140,9 +141,9 @@ The `--agent` flag suppresses colors and interactive prompts and returns a singl
 
 Every command has three mutually exclusive output modes:
 
-- **Pretty (default)** — rich TTY output with color, alignment, and interactive TUIs where available.
-- **`--agent`** — token-efficient plain text, similar in spirit to `git log --oneline`. Auto-activates when stdout is not a TTY or one of `CURSOR_AGENT`, `CLAUDECODE`, `AIDER`, `CONTINUE_SESSION`, `CONTINUE_IDE`, `AICOMMITS` is set.
-- **`--json`** — full-fidelity structured JSON for scripts and programmatic use (`jq`-parseable).
+- **Pretty (default)** -- rich TTY output with color, alignment, and interactive TUIs where available.
+- **`--agent`** -- token-efficient plain text, similar in spirit to `git log --oneline`. Auto-activates when stdout is not a TTY or one of `CURSOR_AGENT`, `CLAUDECODE`, `AIDER`, `CONTINUE_SESSION`, `CONTINUE_IDE`, `AICOMMITS` is set.
+- **`--json`** -- full-fidelity structured JSON for scripts and programmatic use (`jq`-parseable).
 
 ```bash
 oobo --agent                         # token-efficient commit feed
@@ -175,14 +176,14 @@ oobo --tool cursor               # per-tool
 oobo --project myapp             # outside a repo, aggregate one project
 ```
 
-### Show — drill into a commit
+### Show -- drill into a commit
 
 ```bash
 oobo anchor show <sha>           # drill-down: sessions, tokens, attribution
 oobo anchor show <sha> --json    # structured JSON for scripts
 ```
 
-### Goto / Back — time travel
+### Goto / Back -- time travel
 
 ```bash
 oobo goto <turn-id-or-sha>              # travel to a turn or commit
@@ -190,9 +191,9 @@ oobo goto <id> --no-stash               # fail if worktree is dirty
 oobo back                               # return to where you were
 ```
 
-`goto` auto-stashes dirty changes, loads the target tree, and records a return point. Multiple `goto` calls stack — each `back` pops one level, like a browser back button.
+`goto` auto-stashes dirty changes, loads the target tree, and records a return point. Multiple `goto` calls stack -- each `back` pops one level, like a browser back button.
 
-### Blame — git blame + AI attribution
+### Blame -- git blame + AI attribution
 
 ```bash
 oobo blame src/main.rs                       # git blame with an extra AI column
@@ -219,7 +220,7 @@ oobo recall "auth" --since 7d --tool claude --project myapp
 oobo recall "auth" --json                    # structured results
 ```
 
-### Delta — compare two anchors
+### Delta -- compare two anchors
 
 ```bash
 oobo delta                                   # compare HEAD to its previous anchor
@@ -229,7 +230,7 @@ oobo delta --full --json                     # include sessions, decisions, tech
 
 Requires an API key (`oobo settings set key <...>`).
 
-### Help — built-in documentation
+### Help -- built-in documentation
 
 ```bash
 oobo help                                    # list all topics
@@ -237,7 +238,7 @@ oobo help blame                              # reading the AI attribution overla
 oobo help hooks                              # git and agent hooks explained
 ```
 
-### Settings — declarative per-scope config
+### Settings -- declarative per-scope config
 
 ```bash
 oobo settings                                # list default-scope keys
@@ -289,7 +290,7 @@ oobo settings set setup.scan_roots "~/src,~/work"
 oobo settings project set remote git@github.com:org/repo-anchors.git
 ```
 
-Anchor data is always written locally first. If the push fails, data is safe — the next successful push includes all pending anchors.
+Anchor data is always written locally first. If the push fails, data is safe -- the next successful push includes all pending anchors.
 
 For full fidelity or automation, `~/.oobo/config` still works:
 
@@ -317,7 +318,7 @@ Full tool list: `cursor`, `claude`, `gemini`, `windsurf`, `aider`, `copilot`, `z
 
 ## Remote & Self-Hosting
 
-By default, oobo points at **`api.oobo.ai`** — our free hosted backend. Create a free account at [oobo.ai](https://oobo.ai), grab an API key, and run:
+By default, oobo points at **`api.oobo.ai`** -- our free hosted backend. Create a free account at [oobo.ai](https://oobo.ai), grab an API key, and run:
 
 ```bash
 oobo settings set key <your_key>
@@ -353,11 +354,11 @@ cargo build --release
 
 ## Privacy
 
-- **Read-only** — never writes to AI tool directories
-- **Local by default** — anchors live on a git orphan branch in your repo, config in `~/.oobo/`. Metadata is pushed alongside your code to your existing git remote; the optional search/delta API requires a separate key
-- **Secret redaction** — sessions are scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before sharing
-- **No telemetry** — oobo does not phone home
-- **Config protection** — API keys in config get `chmod 0600`
+- **Read-only** -- never writes to AI tool directories
+- **Local by default** -- anchors live on a git orphan branch in your repo, config in `~/.oobo/`. Metadata is pushed alongside your code to your existing git remote; the optional search/delta API requires a separate key
+- **Secret redaction** -- sessions are scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before sharing
+- **No telemetry** -- oobo does not phone home
+- **Config protection** -- API keys in config get `chmod 0600`
 
 See [SECURITY.md](SECURITY.md) for the full policy.
 

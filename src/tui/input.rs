@@ -735,7 +735,7 @@ fn goto_selected(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Resu
     let root = app.root.clone();
     suspend_and_run(terminal, || run_oobo_goto(&root, &target))?;
     app.reload_anchors();
-    app.flash("loaded — run `oobo back` to return");
+    app.flash("loaded  --  run `oobo back` to return");
     Ok(())
 }
 
@@ -854,7 +854,7 @@ fn open_blame_picker(app: &mut App) {
     let mut list = ListState::default();
     list.select(Some(0));
     app.stack.push(View::Picker(PickerState {
-        title: format!("blame — pick a file (at {})", short_sha(&anchor.sha)),
+        title: format!("blame  --  pick a file (at {})", short_sha(&anchor.sha)),
         list,
         kind: PickerKind::BlameFile {
             files,

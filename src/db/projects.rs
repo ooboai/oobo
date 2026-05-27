@@ -49,7 +49,7 @@ pub struct ProjectRow {
 impl Db {
     /// Lightweight insert that creates the project row only if it doesn't
     /// already exist.  Uses `INSERT OR IGNORE` so existing data is never
-    /// overwritten — safe to call on every git operation.
+    /// overwritten  --  safe to call on every git operation.
     pub fn ensure_project(&self, id: &str, path: &str) -> Result<(), String> {
         let name = std::path::Path::new(path)
             .file_name()

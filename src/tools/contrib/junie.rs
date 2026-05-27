@@ -1,4 +1,4 @@
-/// Junie CLI (JetBrains) — session storage in ~/.junie/.
+/// Junie CLI (JetBrains)  --  session storage in ~/.junie/.
 ///
 /// Note: Junie is in beta (as of Q1 2026). Storage format may change.
 /// This implementation scans for JSON/JSONL session files in the Junie data dir.
@@ -79,7 +79,7 @@ fn session_from_file(path: &Path) -> Option<Session> {
         });
     }
 
-    // Try as JSONL — scan lines for cwd and title
+    // Try as JSONL  --  scan lines for cwd and title
     let mut jsonl_name: Option<String> = None;
     let mut jsonl_project_path = String::new();
     let mut has_any_json_line = false;

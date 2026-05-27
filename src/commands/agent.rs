@@ -40,7 +40,7 @@ fn ensure_all_symlinks(skill_dir: &PathBuf) {
         None => return,
     };
 
-    // .agents/skills is the universal convention — always create
+    // .agents/skills is the universal convention  --  always create
     ensure_symlink(skill_dir, &home.join(".agents").join("skills").join("oobo"));
 
     // Tool-specific paths: only create if the tool's base directory already exists,

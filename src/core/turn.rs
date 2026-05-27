@@ -1,6 +1,6 @@
 //! The atomic unit of AI capture.
 //!
-//! A [`Turn`] represents a single model invocation within a session —
+//! A [`Turn`] represents a single model invocation within a session  -- 
 //! one user→assistant exchange plus any tool-call activity that
 //! happened in that exchange. Tokens recorded on a turn are **deltas**
 //! (exactly what the model API billed for this call), never cumulative.
@@ -57,7 +57,7 @@ impl TurnRole {
 /// Invariants:
 /// - `(session_id, source, turn_index)` is globally unique.
 /// - Token counts, when populated, are exactly the values reported by
-///   the model API for **this single call** — not cumulative totals.
+///   the model API for **this single call**  --  not cumulative totals.
 /// - `id` is deterministic (see [`Turn::deterministic_id`]) so
 ///   re-ingesting the same artifact is idempotent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -113,13 +113,13 @@ pub struct Turn {
     /// source); `Some("")` would be unusual but permitted.
     ///
     /// This is the hook the M4 subagent inference engine uses to find
-    /// parent turns that spawned subagents — `Task` presence is the
+    /// parent turns that spawned subagents  --  `Task` presence is the
     /// strongest signal in our heuristic stack.
     pub tool_names: Option<String>,
 }
 
 /// Per-call token deltas. Every number is the value the API billed
-/// for **this specific call** — not a cumulative sum across the session.
+/// for **this specific call**  --  not a cumulative sum across the session.
 ///
 /// Field semantics (Anthropic & compatible vendors; OpenAI maps nearly 1:1):
 /// - `input`: non-cached prompt tokens on this call
@@ -257,7 +257,7 @@ impl Turn {
     /// The DB already enforces uniqueness via `UNIQUE(session_id,
     /// source, turn_index)`, so this value is purely for external
     /// references (URIs, logs, orphan-branch payloads). We use a
-    /// 64-bit FNV-1a hash rendered as 16 hex chars — short, readable,
+    /// 64-bit FNV-1a hash rendered as 16 hex chars  --  short, readable,
     /// and collision-free at workstation scale.
     pub fn deterministic_id(source: &str, session_id: &str, turn_index: i64) -> String {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;

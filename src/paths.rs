@@ -27,7 +27,7 @@ pub fn normalize_path(p: &str) -> String {
 ///
 /// Resolution order:
 /// 1. `$OOBO_HOME` (explicit override)
-/// 2. `~/.oobo/` (legacy — used if it already exists)
+/// 2. `~/.oobo/` (legacy  --  used if it already exists)
 /// 3. `~/.config/oobo/` (XDG default)
 pub fn oobo_home() -> PathBuf {
     if let Ok(v) = std::env::var("OOBO_HOME") {

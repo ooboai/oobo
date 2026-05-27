@@ -252,13 +252,13 @@ pub(super) fn collect_ai_files_touched(
 
 /// Filter active sessions to only those relevant to the current commit.
 ///
-/// Primary signal: **file overlap** — if a session edited files that appear in
+/// Primary signal: **file overlap**  --  if a session edited files that appear in
 /// the commit, it's linked. This is much more reliable than timestamps because
 /// we know exactly which files each Cursor session touched via `edit_file_v2`
 /// bubbles.
 ///
 /// Fallback (non-Cursor tools or when DB is unavailable): recency-based
-/// heuristic — most recently updated session within a reasonable window.
+/// heuristic  --  most recently updated session within a reasonable window.
 ///
 /// When multiple sessions touch the same file, all are included (they both
 /// contributed).
@@ -292,7 +292,7 @@ pub(super) fn filter_relevant_sessions(
             if has_overlap {
                 matched_by_files.push(session.clone());
             }
-            // If a Cursor session edited files but none overlap, skip it —
+            // If a Cursor session edited files but none overlap, skip it  -- 
             // it was working on something else.
             // If it edited zero files (e.g. DB unavailable), fall through
             // to recency.
@@ -314,7 +314,7 @@ pub(super) fn filter_relevant_sessions(
         return matched_by_files;
     }
 
-    // No file-based matches — fall back to recency heuristic, but only for
+    // No file-based matches  --  fall back to recency heuristic, but only for
     // sessions we couldn't resolve (unknown files, non-Cursor tools, DB
     // unavailable). Sessions that were explicitly rejected because they edited
     // files not in this commit are NOT reconsidered.
@@ -329,7 +329,7 @@ pub(super) fn filter_relevant_sessions(
 /// for this project).
 ///
 /// Only returns sessions updated after `since_epoch` (the parent commit time)
-/// and within the last 2 hours — we don't want to link stale sessions.
+/// and within the last 2 hours  --  we don't want to link stale sessions.
 pub(super) fn discover_sessions_from_tools(
     cfg: &crate::config::Config,
     project_root: &str,
@@ -410,7 +410,7 @@ fn is_cursor_session(agent: &str) -> bool {
 }
 
 /// Extract live session stats directly from the tool's data files at commit
-/// time. No prior manual reindex needed — reads Cursor's state.vscdb, Claude's
+/// time. No prior manual reindex needed  --  reads Cursor's state.vscdb, Claude's
 /// JSONL transcripts, etc.
 fn extract_live_stats(
     session_id: &str,

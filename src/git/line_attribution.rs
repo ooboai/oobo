@@ -116,7 +116,7 @@ pub(in crate::git) fn compute_chain_line_attrs(
     for pair in chain {
         let null_blob = "0000000000000000000000000000000000000000";
         let ranges = if pair.pre_blob == null_blob {
-            // New file created by the AI — all lines are AI.
+            // New file created by the AI  --  all lines are AI.
             blob_total_range(cfg, &pair.post_blob)
                 .map(|r| vec![r])
                 .unwrap_or_default()

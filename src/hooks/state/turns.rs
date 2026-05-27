@@ -1,4 +1,4 @@
-//! Turn finalization — snapshot current turn state into git-backed storage.
+//! Turn finalization  --  snapshot current turn state into git-backed storage.
 
 use crate::core::turn::{TurnFileSnapshot, TurnMemoryPayload, TurnSnapshot};
 use crate::error::Result;
@@ -69,7 +69,7 @@ pub fn finish_turn(
     state.current_turn_started_at = None;
     state.current_turn_hook_events = None;
     state.current_turn_tool_calls = None;
-    // Reset per-turn edit chain — each turn gets a fresh chain.
+    // Reset per-turn edit chain  --  each turn gets a fresh chain.
     state.pre_edit_pending = None;
     state.file_edit_chain = None;
     state.bump();

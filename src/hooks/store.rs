@@ -2,9 +2,9 @@
 //!
 //! Two backends, tried in order:
 //!
-//! 1. **Buffer files** — `~/.oobo/tmp/hook-buffer/<sid>.json`. Primary
+//! 1. **Buffer files**  --  `~/.oobo/tmp/hook-buffer/<sid>.json`. Primary
 //!    write target.
-//! 2. **Legacy `.git/oobo-sessions/<sid>.json`** — read-only. Files
+//! 2. **Legacy `.git/oobo-sessions/<sid>.json`**  --  read-only. Files
 //!    written by oobo 0.1.x.
 //!
 //! Read path: buffer → legacy.

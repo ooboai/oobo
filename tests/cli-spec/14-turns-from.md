@@ -13,7 +13,7 @@ unless the user runs `oobo goto <id>`.
 
 **Behavior:** Load the turn snapshot into the worktree. If the worktree has
 uncommitted changes, they are automatically stashed. Records the current HEAD
-so `oobo back` can return. Does not move HEAD — only updates the index and
+so `oobo back` can return. Does not move HEAD  --  only updates the index and
 worktree.
 
 **Exit code:** `0` when loaded, `1` when blocked or not found.

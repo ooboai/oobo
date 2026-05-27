@@ -2,16 +2,16 @@
 //!
 //! The new data model (v11 turns + v12 subagent inference) is built
 //! by re-reading the tool-native transcripts on disk. A user should
-//! *never* have to run a "rebuild" command — the rebuild happens:
+//! *never* have to run a "rebuild" command  --  the rebuild happens:
 //!
-//! 1. **On every `oobo update`** — the post-update hook always runs
+//! 1. **On every `oobo update`**  --  the post-update hook always runs
 //!    a fresh full backfill so new token accounting and inference
 //!    logic take effect immediately.
 //!
-//! 2. **Opportunistically, once per schema bump** — migration v12
+//! 2. **Opportunistically, once per schema bump**  --  migration v12
 //!    arms a `backfill_pending` flag in `oobo_state`. The first
 //!    `oobo` invocation afterward runs the backfill (silently, in
-//!    the background conceptually — today synchronously, cheaply)
+//!    the background conceptually  --  today synchronously, cheaply)
 //!    and clears the flag. Subsequent invocations do nothing.
 //!
 //! This module is the single source of both triggers.
@@ -36,7 +36,7 @@ pub struct AggregateReport {
 }
 
 /// Run a full backfill across every known project. Never fails the
-/// process as a whole — per-project errors are captured in
+/// process as a whole  --  per-project errors are captured in
 /// [`AggregateReport::failures`] so the caller can report them
 /// without aborting the calling flow (update, first-run trigger).
 pub fn backfill_all_projects(db: &mut Db, cfg: &Config) -> AggregateReport {
@@ -85,12 +85,12 @@ pub fn backfill_if_pending(db: &mut Db, cfg: &Config) -> Option<AggregateReport>
 
     let report = backfill_all_projects(db, cfg);
 
-    // Clear the flag even if some projects failed — leaving it set
+    // Clear the flag even if some projects failed  --  leaving it set
     // would retrigger on every invocation and spam the user. The
     // admin can always re-run `oobo update --post-update` to force
     // another pass.
     if let Err(e) = db.state_clear(PENDING_KEY) {
-        // Not fatal — but surface to the caller via the report so
+        // Not fatal  --  but surface to the caller via the report so
         // we don't silently lose this.
         let mut r = report;
         r.failures.push(("<clear-flag>".into(), e));

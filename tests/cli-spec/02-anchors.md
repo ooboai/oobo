@@ -1,4 +1,4 @@
-# Bare `oobo` — memory feed
+# Bare `oobo`  --  memory feed
 
 See the memory: committed anchors plus local restorable working memory for the
 current repo. This is the flagship view. Bare `oobo` (with optional `--agent`,
@@ -7,16 +7,21 @@ the drill-down for committed anchors.
 
 Filter flags (global on `Cli`):
 
-- `-n, --limit N` (default `50`) — how many anchors to return.
-- `--since <timestamp|duration>` — only anchors at or after this point. Accepts ISO-8601 (`2026-04-22T00:00:00Z`) or relative (`24h`, `7d`, `1mo`).
-- `--tool <name>` — filter by tool (claude, cursor, gemini, codex, ...).
+- `-n, --limit N` (default `50`)  --  how many anchors to return.
+- `--since <timestamp|duration>`  --  only anchors at or after this point. Accepts ISO-8601 (`2026-04-22T00:00:00Z`) or relative (`24h`, `7d`, `1mo`).
+- `--tool <name>`  --  filter by tool (claude, cursor, gemini, codex, ...).
 
 ---
 
-## List — TTY / pretty mode
+## List  --  TTY / pretty mode
 
 ### Invocation
 `oobo`
+
+`oobo anchors` is an explicit alias for the same command.
+
+### Invocation
+`oobo anchors`
 
 **Context:** inside an enabled repo with anchors.
 
@@ -38,7 +43,7 @@ branch main  tree clean  anchors origin
 
 ---
 
-## List — agent mode
+## List  --  agent mode
 
 ### Invocation
 `oobo --agent`
@@ -67,7 +72,7 @@ anchor a1b2c3d    18m  add rate limiter                         gemini   31k  2s
 
 ---
 
-## List — JSON mode
+## List  --  JSON mode
 
 ### Invocation
 `oobo --json`
@@ -166,7 +171,7 @@ d4e5f6g 18m  add rate limiter                         gemini 31k  2s
 
 ---
 
-## Drill-down — `oobo anchor show <sha>`
+## Drill-down  --  `oobo anchor show <sha>`
 
 ### Invocation
 `oobo anchor show a1b2c3d`
@@ -175,7 +180,7 @@ d4e5f6g 18m  add rate limiter                         gemini 31k  2s
 
 **Example output (pretty, shape):**
 ```
-a1b2c3d — fix auth middleware
+a1b2c3d  --  fix auth middleware
 Teddy <teddy@example.com>  ·  2m ago
 ─────────────────────────────────────────────────────────
 SUBJECT
@@ -202,7 +207,7 @@ DIFF
 
 ### `oobo anchor show <sha> --agent`
 
-**Behavior:** Flat, minimal. One section per line with `key: value` shape. Transcript is NOT inlined in agent mode — the session ID is emitted so the agent can fetch it separately if needed.
+**Behavior:** Flat, minimal. One section per line with `key: value` shape. Transcript is NOT inlined in agent mode  --  the session ID is emitted so the agent can fetch it separately if needed.
 
 **Example output:**
 ```

@@ -286,7 +286,7 @@ pub(super) fn draw_help_overlay(frame: &mut ratatui::Frame<'_>) {
         Line::from("   b           blame (file picker)"),
         Line::from("   L           goto selected (time-travel, auto-stashes)"),
         Line::from("   /           live filter (type to narrow list)"),
-        Line::from("   s           remote search (memory + full-text)"),
+        Line::from("   s           remote recall (sessions + anchors)"),
         Line::from("   t           cycle time window (all / 24h / 7d / 30d)"),
         Line::from("   e           toggle tracking on/off"),
         Line::from("   r           reload"),

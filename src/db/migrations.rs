@@ -601,7 +601,7 @@ fn migrate_v9(conn: &Connection) -> Result<(), String> {
 
 /// v10: hook_sessions table. Moves per-session hook state (previously in
 /// `.git/oobo-sessions/<sid>.json`) into the DB. Existing legacy files
-/// are NOT touched by the migration itself — they're lazily imported on
+/// are NOT touched by the migration itself  --  they're lazily imported on
 /// the first read/write of each session (see `hooks::store`).
 fn migrate_v10(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -864,17 +864,17 @@ fn migrate_v11(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// v12 — Subagent inference substrate.
+/// v12  --  Subagent inference substrate.
 ///
 /// Two tiny additions enable heuristic parent/child detection for
 /// sessions whose tool didn't expose the link explicitly:
 ///
-/// 1. `turns.tool_names` — comma-joined list of tool_use names per
+/// 1. `turns.tool_names`  --  comma-joined list of tool_use names per
 ///    turn (e.g. `"Task"`, `"Read,Write"`). Makes it O(1) to locate
 ///    every parent turn that spawned a subagent without re-parsing
 ///    transcripts. NULL for turns without tool_use.
 ///
-/// 2. `subagent_inferences` — immutable audit log for every
+/// 2. `subagent_inferences`  --  immutable audit log for every
 ///    inference decision. Records which signals fired, the combined
 ///    score, and whether the link was applied. This preserves the
 ///    reasoning so a future run (or a human) can revisit borderline
@@ -944,7 +944,7 @@ fn migrate_v12(conn: &Connection) -> Result<(), String> {
     // native tool artifacts and clear the flag on success. This is
     // how we replace the old `oobo _rebuild` command: the upgrade
     // itself arms the trigger, and the very next invocation does
-    // the work — once.
+    // the work  --  once.
     conn.execute(
         "INSERT OR REPLACE INTO oobo_state (key, value) VALUES ('backfill_pending', '1')",
         [],
@@ -954,7 +954,7 @@ fn migrate_v12(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// v13 — Robust project identity + legacy drain.
+/// v13  --  Robust project identity + legacy drain.
 ///
 /// 1. Adds `initial_commit_sha` and `historical_paths` columns to
 ///    `projects`. Together with the existing `git_remote`, projects

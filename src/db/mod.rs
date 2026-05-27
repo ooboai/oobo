@@ -59,7 +59,7 @@ impl Db {
             )
             .map_err(|e| format!("cannot set pragmas: {e}"))?;
         migrations::run_with_path(&self.conn, db_path)?;
-        // Migration v9 may have temporarily disabled FKs — restore them.
+        // Migration v9 may have temporarily disabled FKs  --  restore them.
         self.conn
             .execute_batch("PRAGMA foreign_keys=ON;")
             .map_err(|e| format!("cannot restore fk pragma: {e}"))?;

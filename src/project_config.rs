@@ -224,7 +224,7 @@ fn strip_utf8_bom(data: &[u8]) -> &str {
 /// Ensure `.oobo/.gitignore` exists so ephemeral data is never committed.
 ///
 /// Only `config` is intended to be version-controlled (shared team settings).
-/// Everything else — caches, temp files — stays local.
+/// Everything else  --  caches, temp files  --  stays local.
 fn ensure_gitignore(oobo_dir: &Path) {
     let gi = oobo_dir.join(".gitignore");
     if gi.exists() {
@@ -232,7 +232,7 @@ fn ensure_gitignore(oobo_dir: &Path) {
     }
     let _ = std::fs::write(
         gi,
-        "# Managed by oobo — do not edit.\n\
+        "# Managed by oobo  --  do not edit.\n\
          # Only config is intended to be committed.\n\
          *\n\
          !.gitignore\n\

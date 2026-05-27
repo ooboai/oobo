@@ -3,14 +3,14 @@
 Self-update. Checks GitHub (or the configured update channel) for a newer release, downloads it, swaps the binary in place, and verifies the new binary runs.
 
 Flags:
-- `--check` — only check; don't download or install.
-- `--channel <stable|beta>` — pick a release channel (default: `stable`).
-- `--force` — overwrite even if the local binary is already at the latest version (useful for repair).
-- `--yes` / `-y` — skip the confirmation prompt.
+- `--check`  --  only check; don't download or install.
+- `--channel <stable|beta>`  --  pick a release channel (default: `stable`).
+- `--force`  --  overwrite even if the local binary is already at the latest version (useful for repair).
+- `--yes` / `-y`  --  skip the confirmation prompt.
 
 ---
 
-## `oobo update` — interactive
+## `oobo update`  --  interactive
 
 ### Invocation (upgrade available)
 `oobo update`

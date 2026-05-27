@@ -18,22 +18,20 @@ It serves two purposes:
 | File | Covers |
 |---|---|
 | `00-global-flags.md` | `--agent`, `--json`, `--interactive`, `--version`, `--help`, auto-detection, filter flags (`-n`, `--since`, `--tool`) |
-| `01-bare.md` | Bare `oobo` (no subcommand) — four-quadrant behavior |
+| `01-bare.md` | Bare `oobo` (no subcommand)  --  four-quadrant behavior |
 | `02-anchors.md` | Bare `oobo` memory feed + `oobo anchor show <sha>` drill-down |
 | `03-blame.md` | `oobo blame <file> [commit]` (strict superset of `git blame`) |
 | `04-recall.md` | `oobo recall <query>` (local-first, remote when an API key is configured) |
-| `05-enable-disable.md` | `oobo enable`, `oobo disable` — per-project tracking toggle |
-| `06-alias.md` | `oobo alias` — removed, legacy hint only |
+| `05-enable-disable.md` | `oobo enable`, `oobo disable` -- per-project tracking toggle |
 | `07-setup.md` | `oobo setup` + flags (onboarding, repair, reindex) |
 | `08-settings.md` | `oobo settings [scope] [verb] <key> [value]` |
 | `09-update.md` | `oobo update` (self-update, incl. hidden `--post-update`) |
-| `10-git-passthrough.md` | Git passthrough — removed; unknown commands → clap errors |
-| `11-legacy-hints.md` | Removed 0.1.x commands and their hint messages (incl. `anchors`, `alias`) |
-| `12-hooks.md` | Hidden `oobo hooks …` — agent/post-commit/pre-push/post-merge/post-rewrite |
+| `12-hooks.md` | Hidden `oobo hooks ...` -- agent/post-commit/pre-push/post-merge/post-rewrite |
 | `13-env-vars.md` | Environment variables (`OOBO_HOME`, `NO_COLOR`, agent env, internal markers) |
-| `14-turns-from.md` | `oobo goto` / `oobo back` — time travel between turns and commits |
-| `15-delta.md` | `oobo delta` — textual diff between two anchors (requires API key) |
-| `16-help.md` | `oobo help [topic]` — built-in documentation system |
+| `14-turns-from.md` | `oobo goto` / `oobo back`  --  time travel between turns and commits |
+| `15-delta.md` | `oobo delta`  --  textual diff between two anchors (requires API key) |
+| `16-help.md` | `oobo help [topic]` -- built-in documentation system |
+| `17-code-search.md` | `oobo search <query>` -- semantic code search (hybrid BM25 + vector) |
 
 ## Conventions
 
@@ -62,10 +60,10 @@ Every invocation follows this block shape:
 
 ### Placeholders
 
-- `<sha>`, `<file>`, `<key>`, `<value>` — required positional args.
-- `[optional]` — optional args.
-- `$REPO`, `$CWD` — stand-ins for paths that vary by environment.
-- `{timestamp}`, `{uuid}`, `{hash}` — non-deterministic values the harness should accept as any matching token.
+- `<sha>`, `<file>`, `<key>`, `<value>`  --  required positional args.
+- `[optional]`  --  optional args.
+- `$REPO`, `$CWD`  --  stand-ins for paths that vary by environment.
+- `{timestamp}`, `{uuid}`, `{hash}`  --  non-deterministic values the harness should accept as any matching token.
 
 ### Glossary
 
@@ -75,7 +73,7 @@ Every invocation follows this block shape:
 - **Pretty mode.** TTY output with colors/borders/TUI. Default when none of `--agent` / `--json` is set.
 - **JSON mode.** `--json` flag is active. Full structured data.
 - **Enabled project.** Project has `.oobo/config` and `[project].enabled` is not `false`.
-- **Reserved verbs.** `anchor`, `anchors`, `blame`, `delta`, `goto`, `back`, `search`, `enable`, `disable`, `setup`, `settings`, `help`, `update`, `hooks` (hidden). Anything else at position 1 is a clap error (or a legacy hint if it matches the hint table).
+- **Reserved verbs.** `anchor`, `anchors`, `blame`, `delta`, `goto`, `back`, `search`, `recall`, `enable`, `disable`, `setup`, `settings`, `help`, `update`, `hooks` (hidden). Anything else at position 1 is a clap error.
 
 ### Completeness check
 
@@ -83,7 +81,7 @@ Every user-visible and internal command in the 1.0 surface is specced in this fo
 
 - User-visible: `anchors`, `anchor` (show, blame), `blame`, `delta`, `goto`, `back`, `search`, `enable`, `disable`, `setup`, `settings`, `help`, `update`.
 - Hidden: `hooks` (agent / post-commit / pre-push / post-merge / post-rewrite), `update --post-update`.
-- Bare `oobo` (the primary feed), legacy hints, global flags, environment variables.
+- Bare `oobo` (the primary feed), global flags, environment variables.
 
 Anything missing is a bug in the spec. Open an issue or patch the relevant file.
 

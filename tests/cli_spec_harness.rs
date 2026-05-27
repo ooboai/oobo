@@ -16,18 +16,9 @@ const SPECS: &[(&str, &str)] = &[
         "05-enable-disable.md",
         include_str!("cli-spec/05-enable-disable.md"),
     ),
-    ("06-alias.md", include_str!("cli-spec/06-alias.md")),
     ("07-setup.md", include_str!("cli-spec/07-setup.md")),
     ("08-settings.md", include_str!("cli-spec/08-settings.md")),
     ("09-update.md", include_str!("cli-spec/09-update.md")),
-    (
-        "10-git-passthrough.md",
-        include_str!("cli-spec/10-git-passthrough.md"),
-    ),
-    (
-        "11-legacy-hints.md",
-        include_str!("cli-spec/11-legacy-hints.md"),
-    ),
     ("12-hooks.md", include_str!("cli-spec/12-hooks.md")),
     ("13-env-vars.md", include_str!("cli-spec/13-env-vars.md")),
     (

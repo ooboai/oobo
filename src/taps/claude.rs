@@ -25,7 +25,7 @@
 //!
 //! These are **per-call deltas**, exactly what the new model demands.
 //! The old session-level stats collector had been summing them already
-//! into `session_stats` — what it was missing was keeping the per-turn
+//! into `session_stats`  --  what it was missing was keeping the per-turn
 //! granularity. This tap fixes that.
 //!
 //! Subagents: Claude writes subagent transcripts under
@@ -177,7 +177,7 @@ fn ingest_one_file(
     }
 
     // Capture the ingestion epoch in a warning-less way by embedding
-    // it in the summary if zero turns made it through — useful signal
+    // it in the summary if zero turns made it through  --  useful signal
     // for debugging empty transcripts.
     if summary.turns_emitted == 0 {
         summary

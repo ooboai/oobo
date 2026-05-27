@@ -1,7 +1,7 @@
 //! File-based turn cache.
 //!
 //! Turns are cached as JSON files under `.oobo/cache/turns/<source>/<session_id>.json`.
-//! This is a local working cache — rebuildable from native AI tool artifacts.
+//! This is a local working cache  --  rebuildable from native AI tool artifacts.
 
 use crate::core::turn::Turn;
 use crate::taps::{SubagentLink, TurnSink};

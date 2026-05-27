@@ -1,6 +1,6 @@
 # `oobo settings`
 
-Declarative KV config. NOT imperative actions — those live in `enable`/`disable`/`alias`/`update`. Storage:
+Declarative KV config. NOT imperative actions  --  those live in `enable`/`disable`/`alias`/`update`. Storage:
 
 - **Default scope** → `~/.oobo/config.toml` (this user, all projects).
 - **Project scope** → committed `.oobo/config` for team-safe keys (`remote`, `transparency`).
@@ -36,7 +36,7 @@ not through `oobo settings`.
 
 ---
 
-## GET — show
+## GET  --  show
 
 ### `oobo settings`
 
@@ -158,7 +158,7 @@ remote   (no project override) falling back to default: https://api.oobo.ai
 
 ---
 
-## SET — write
+## SET  --  write
 
 ### `oobo settings set <key> <value>`
 
@@ -244,7 +244,7 @@ error: 'set' requires a value: oobo settings [scope] set <key> <value>
 
 ---
 
-## UNSET — remove
+## UNSET  --  remove
 
 ### `oobo settings unset <key>`
 
@@ -316,7 +316,7 @@ Reserved words (`default`, `project`, `set`, `unset`) are only recognized in pos
 ### Redundant scope + verb
 `oobo settings default default get key`
 
-**Behavior:** Clap error — unknown arg `default` in position 2 (only scope or verb allowed there).
+**Behavior:** Clap error  --  unknown arg `default` in position 2 (only scope or verb allowed there).
 
 **Exit code:** `2`.
 

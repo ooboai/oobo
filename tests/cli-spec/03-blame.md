@@ -2,11 +2,11 @@
 
 Per-line attribution: who (or which AI tool) wrote each line of a file, at a given commit.
 
-**Strict superset of `git blame`.** Every `git blame` flag is supported and produces identical results to `git blame` for the same flags — plus an additional `ai/human` attribution column. If you `alias git=oobo`, typing `git blame` delegates here and you get more info, never less.
+**Strict superset of `git blame`.** Every `git blame` flag is supported and produces identical results to `git blame` for the same flags  --  plus an additional `ai/human` attribution column. If you `alias git=oobo`, typing `git blame` delegates here and you get more info, never less.
 
 Positional args:
-- `<file>` — required path to a tracked file, relative to repo root or absolute.
-- `[commit]` — optional commit-ish (SHA, branch, tag); defaults to `HEAD`.
+- `<file>`  --  required path to a tracked file, relative to repo root or absolute.
+- `[commit]`  --  optional commit-ish (SHA, branch, tag); defaults to `HEAD`.
 
 Forwarded flags from `git blame` (not exhaustive): `-L <range>`, `-w`, `--abbrev=N`, `-M`, `-C`, `--root`, `--incremental`, `--line-porcelain`, `--porcelain`, `-s`, `-e`, `--date=<fmt>`, `--since=<date>`, `--until=<date>`, `-b`. These are forwarded verbatim to the underlying git invocation. Machine-output formats (`--porcelain`, `--line-porcelain`, `--incremental`) bypass the AI overlay automatically.
 
@@ -100,7 +100,7 @@ a1b2c3d claude Teddy     5  }
 ### `--porcelain`
 `oobo blame --porcelain src/main.rs`
 
-**Behavior:** Emit git's porcelain format UNCHANGED — no extra AI column, because porcelain is intended for machine parsing and must round-trip. This mode is for scripts that already parse `git blame --porcelain`. To get machine-readable AI attribution, use `--json` instead.
+**Behavior:** Emit git's porcelain format UNCHANGED  --  no extra AI column, because porcelain is intended for machine parsing and must round-trip. This mode is for scripts that already parse `git blame --porcelain`. To get machine-readable AI attribution, use `--json` instead.
 
 **Exit code:** `0`.
 
@@ -130,7 +130,7 @@ a1b2c3d claude Teddy     5  }
 ```
 fatal: no such ref: nothere
 ```
-**Exit code:** `128` (git's exit code — passed through unchanged).
+**Exit code:** `128` (git's exit code  --  passed through unchanged).
 
 ---
 

@@ -1,9 +1,9 @@
 ---
 name: oobo
-description: Git decorator that gives every commit memory - links AI sessions, tokens, and code attribution to your commits. Use when the user asks about commit history with AI context, session history, code attribution, or token usage.
+description: Context beyond the diff - captures AI sessions, tokens, code attribution, and enables semantic code search. Use when the user asks about commit history with AI context, session history, code attribution, token usage, or code search.
 metadata:
   author: oobo
-  version: "1.0.3"
+  version: "1.1.0"
 install:
   check: command -v oobo
   url: https://github.com/ooboai/oobo/releases
@@ -11,9 +11,9 @@ license: Apache-2.0 OR MIT
 compatibility: Requires git. Works with Cursor, Claude Code, Gemini CLI, Codex, OpenCode, Copilot, Windsurf, Aider, Zed, Trae, Amp, Continue, Factory Droid, Junie, Kiro.
 ---
 
-# Oobo - Git for agents (and humans)
+# Oobo - Context beyond the diff
 
-Transparent git decorator that enriches every commit with AI context: which sessions contributed, token counts, code attribution (AI vs human lines), and model used. Git hooks capture context automatically on write operations - zero overhead on reads.
+Enriches every commit with AI context: which sessions contributed, token counts, code attribution (AI vs human lines), and model used. Includes semantic code search (hybrid BM25 + vector). Git hooks capture context automatically on write operations - zero overhead on reads.
 
 If `oobo` is not installed, direct the user to https://github.com/ooboai/oobo/releases.
 

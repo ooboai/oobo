@@ -3,20 +3,20 @@
 Find any past session across all projects. Search is local-first and reads the local anchor DB. When an API key is configured, remote results are fetched from the backend and merged by score.
 
 Positional arg:
-- `<query>` — free-text query. Multi-word queries are treated as AND across terms by default. Quoted substrings match literally.
+- `<query>`  --  free-text query. Multi-word queries are treated as AND across terms by default. Quoted substrings match literally.
 
 Flags:
-- `--local` — local DB only (default when no API key is configured).
-- `--remote` — remote server only (requires `settings set key <...>`).
-- `--both` — local + remote merged (default when API key is configured).
-- `--since <duration|iso>` — time window.
-- `--project <name>` — scope to one project.
-- `--tool <name>` — scope to one tool.
+- `--local`  --  local DB only (default when no API key is configured).
+- `--remote`  --  remote server only (requires `settings set key <...>`).
+- `--both`  --  local + remote merged (default when API key is configured).
+- `--since <duration|iso>`  --  time window.
+- `--project <name>`  --  scope to one project.
+- `--tool <name>`  --  scope to one tool.
 - `--limit N` (default `20`).
 
 ---
 
-## Basic search — TTY / pretty
+## Basic search  --  TTY / pretty
 
 ### Invocation
 `oobo recall "auth middleware"`
@@ -34,7 +34,7 @@ oobo-cli · cursor · 3h     extract payment adapter
   anchor e1f2d3c · 28k tokens
 ```
 
-**Exit code:** `0` if at least one hit, `0` if zero hits (NOT an error — emit "no results" footer).
+**Exit code:** `0` if at least one hit, `0` if zero hits (NOT an error  --  emit "no results" footer).
 
 ---
 

@@ -40,10 +40,10 @@ Have an idea? [Open a feature request](https://github.com/ooboai/oobo/issues/new
 
 ### What Makes a Good Pull Request
 
-- **Focused** — one feature or fix per PR
-- **Tested** — add or update tests for your changes
-- **Clean** — no unrelated changes, passes clippy and fmt
-- **Documented** — update README if you add or change commands
+- **Focused**  --  one feature or fix per PR
+- **Tested**  --  add or update tests for your changes
+- **Clean**  --  no unrelated changes, passes clippy and fmt
+- **Documented**  --  update README if you add or change commands
 
 ## Development Setup
 
@@ -77,7 +77,7 @@ oobo is a Rust binary that enriches git commits with AI context via hooks. Key m
 | `src/commands/` | CLI subcommands (anchors, blame, delta, goto, search, settings, etc.) |
 | `src/git/` | Interceptor, orphan branch, anchor builder, session resolver, line attribution |
 | `src/hooks/` | Git hook handlers and agent lifecycle event processing |
-| `src/taps/` | TurnTap pipeline — per-turn workspace snapshots (Claude, Cursor, Codex, OpenCode) |
+| `src/taps/` | TurnTap pipeline  --  per-turn workspace snapshots (Claude, Cursor, Codex, OpenCode) |
 | `src/attribution/` | Turn store, inference engine, backfill, code attribution |
 | `src/tools/cursor/` | Cursor IDE local data extraction (transcripts, composer) |
 | `src/tools/claude/` | Claude Code local data extraction (JSONL sessions) |

@@ -244,7 +244,7 @@ fn reconcile_local_with(project_root: &str, remote_tip: &str) -> Result<(), CliE
     replay_local_files(project_root, &local_tip, remote_tip)
 }
 
-/// Builds a merged commit before moving the branch ref — if any step
+/// Builds a merged commit before moving the branch ref  --  if any step
 /// fails, the branch is untouched.
 pub(super) fn replay_local_files(
     project_root: &str,

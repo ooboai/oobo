@@ -51,7 +51,7 @@ fn trace_value_enabled(value: &str) -> bool {
 
 /// Initialize the `tracing` subscriber based on `OOBO_DEBUG` env var.
 ///
-/// - Default (unset or `0`): no subscriber installed — zero cost.
+/// - Default (unset or `0`): no subscriber installed  --  zero cost.
 /// - `OOBO_DEBUG=1`: compact file appender to `<oobo_home>/logs/anchor.log`.
 /// - `OOBO_DEBUG=2`: file appender + stderr output.
 ///

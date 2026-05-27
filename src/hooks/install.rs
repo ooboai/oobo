@@ -40,7 +40,7 @@ pub fn install_all_agent_hooks() -> Vec<String> {
     installed
 }
 
-// Cursor — ~/.cursor/hooks.json
+// Cursor  --  ~/.cursor/hooks.json
 
 fn install_cursor_hooks() -> Option<String> {
     let path = dirs::home_dir()?.join(".cursor/hooks.json");
@@ -90,7 +90,7 @@ fn install_cursor_hooks() -> Option<String> {
     Some(format!("Cursor hooks → {}", path.display()))
 }
 
-// Claude Code — ~/.claude/settings.json
+// Claude Code  --  ~/.claude/settings.json
 
 fn install_claude_hooks() -> Option<String> {
     let path = dirs::home_dir()?.join(".claude/settings.json");
@@ -130,7 +130,7 @@ fn install_claude_hooks() -> Option<String> {
     Some(format!("Claude Code hooks → {}", path.display()))
 }
 
-// Gemini CLI — ~/.gemini/settings.json
+// Gemini CLI  --  ~/.gemini/settings.json
 
 fn install_gemini_hooks() -> Option<String> {
     let path = dirs::home_dir()?.join(".gemini/settings.json");
@@ -155,7 +155,7 @@ fn install_gemini_hooks() -> Option<String> {
     Some(format!("Gemini CLI hooks → {}", path.display()))
 }
 
-// OpenCode — ~/.config/opencode/plugins/oobo.ts
+// OpenCode  --  ~/.config/opencode/plugins/oobo.ts
 
 fn install_opencode_hooks() -> Option<String> {
     let path = dirs::config_dir()?.join("opencode/plugins/oobo.ts");
@@ -197,7 +197,7 @@ fn install_opencode_hooks() -> Option<String> {
     Some(format!("OpenCode plugin → {}", path.display()))
 }
 
-// Kiro — ~/.kiro/agents/oobo.json (Kiro agent config format)
+// Kiro  --  ~/.kiro/agents/oobo.json (Kiro agent config format)
 
 fn install_kiro_hooks() -> Option<String> {
     let dir = dirs::home_dir()?.join(".kiro/agents");
@@ -242,7 +242,7 @@ fn install_kiro_hooks() -> Option<String> {
     Some(format!("Kiro agent hooks → {}", path.display()))
 }
 
-// Continue — ~/.continue/settings.json (Claude Code-compatible format)
+// Continue  --  ~/.continue/settings.json (Claude Code-compatible format)
 
 fn install_continue_hooks() -> Option<String> {
     let path = dirs::home_dir()?.join(".continue/settings.json");
@@ -273,7 +273,7 @@ fn install_continue_hooks() -> Option<String> {
     Some(format!("Continue hooks → {}", path.display()))
 }
 
-// Factory Droid — ~/.factory/settings.json (Claude Code-compatible format)
+// Factory Droid  --  ~/.factory/settings.json (Claude Code-compatible format)
 
 fn install_droid_hooks() -> Option<String> {
     let path = dirs::home_dir()?.join(".factory/settings.json");

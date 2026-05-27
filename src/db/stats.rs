@@ -456,7 +456,7 @@ impl Db {
         &self,
         _keys: &[(String, String)],
     ) -> Result<std::collections::HashMap<(String, String), StatsRow>, String> {
-        // NOTE: _keys is currently unused — always loads all stats.
+        // NOTE: _keys is currently unused  --  always loads all stats.
         // This is intentional: callers pass &[] to mean "get everything."
         // If filtering is needed later, add a WHERE clause with key matching.
         use std::collections::HashMap;

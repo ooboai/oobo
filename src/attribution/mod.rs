@@ -1,4 +1,4 @@
-//! L3 — Attribution: assign session turn windows to anchors.
+//! L3  --  Attribution: assign session turn windows to anchors.
 //!
 //! # The core question
 //!
@@ -117,7 +117,7 @@ pub fn compute_windows(
 
             // Find the largest turn_index whose started_at <= anchor.committed_at_ms.
             // Turns with no timestamp are considered "before" any
-            // anchor — this is the behavior the store's backfill
+            // anchor  --  this is the behavior the store's backfill
             // path expects (timestamps are optional per schema).
             let mut window_end: i64 = -1;
             for t in session_turns {

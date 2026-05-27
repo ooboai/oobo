@@ -1,4 +1,4 @@
-//! Unified TUI — the single entry point for `oobo`, `oobo recall`, `oobo search`,
+//! Unified TUI  --  the single entry point for `oobo`, `oobo recall`, `oobo search`,
 //! and `oobo anchor show`.
 //!
 //! Architecture: a single [`App`] owns all state (anchors, filter, time

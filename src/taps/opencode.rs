@@ -7,14 +7,14 @@
 //!   `data` as JSON containing `{role, modelID, tokens:{input,
 //!   output, cache:{read,write}}, finish, ...}`. `part` rows hold
 //!   individual content pieces (text / tool calls / tool results).
-//!   These are **per-call** tokens — exactly what we want.
+//!   These are **per-call** tokens  --  exactly what we want.
 //! - **Legacy (pre-v1.2)**: session-level aggregates only. No per-turn
 //!   deltas, so this tap emits a single synthetic assistant turn
 //!   carrying the rolled-up tokens rather than fabricating ones that
 //!   don't exist.
 //!
 //! Subagent hierarchy: modern schema stores `session.parent_id`
-//! natively. The tap does **not** emit those links here — they're
+//! natively. The tap does **not** emit those links here  --  they're
 //! already captured during session discovery. Keeping this tap
 //! narrowly focused on turn emission (the hierarchy is attached
 //! session-level, which the store's `sessions` upsert owns).
@@ -88,7 +88,7 @@ fn ingest_modern(
     let mut summary = TapSummary::default();
 
     // Gather all parts for this session up-front, grouped by
-    // message_id. One SQL roundtrip; O(total parts) memory — modest
+    // message_id. One SQL roundtrip; O(total parts) memory  --  modest
     // given one session's transcript typically fits comfortably.
     let tool_names_by_message = load_tool_names_per_message(conn, session_id);
     let text_by_message = load_text_per_message(conn, session_id);
@@ -126,7 +126,7 @@ fn ingest_modern(
         let role = match role_str {
             "user" => TurnRole::User,
             "assistant" => TurnRole::Assistant,
-            // OpenCode also uses 'tool' for tool results — we fold
+            // OpenCode also uses 'tool' for tool results  --  we fold
             // those into the assistant turn's tool metadata via
             // part lookup, so skip here.
             _ => {
@@ -337,7 +337,7 @@ fn ingest_legacy(
         cost_usd: (cost > 0.0).then_some(cost),
         tool_call_count: 0,
         thinking_ms: None,
-        message_preview: Some("(legacy OpenCode session — aggregated turn)".into()),
+        message_preview: Some("(legacy OpenCode session  --  aggregated turn)".into()),
         raw_ref: Some(format!("opencode-legacy:{session_id}")),
         tool_names: None,
     };

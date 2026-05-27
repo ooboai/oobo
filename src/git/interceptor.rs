@@ -192,7 +192,7 @@ fn load_commit_evidence(cfg: &Config, project_root: &str) -> CommitEvidence {
 
     // Reconcile missing hook state by scanning native tool storage. This is
     // fallback behavior, not the preferred path. Only fire when the hook layer
-    // had *no* sessions at all — if it found sessions but none overlapped the
+    // had *no* sessions at all  --  if it found sessions but none overlapped the
     // committed files, we should respect that verdict instead of re-discovering
     // those same sessions through tool storage and matching by recency alone.
     if active_sessions.is_empty() && all_sessions.is_empty() && !project_root.is_empty() {

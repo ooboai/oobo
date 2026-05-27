@@ -1,4 +1,4 @@
-//! L1 — Taps: tool-specific adapters that emit normalized [`Turn`]
+//! L1  --  Taps: tool-specific adapters that emit normalized [`Turn`]
 //! streams.
 //!
 //! A tap's job is narrow and pure: given a handle to a session's
@@ -93,7 +93,7 @@ pub trait TurnSink {
 
 /// A capture adapter for one AI tool. Implementations live alongside
 /// the existing `tools::*` adapters and share their project / session
-/// discovery helpers — tap is strictly "read the artifact, emit
+/// discovery helpers  --  tap is strictly "read the artifact, emit
 /// turns", nothing about project scanning.
 pub trait TurnTap {
     fn source(&self) -> Source;

@@ -34,7 +34,7 @@ pub struct HookEvent {
 ///
 /// Called by `oobo hooks agent <event> [--tool <name>]` which receives JSON on stdin.
 /// The `--tool` flag provides explicit tool identity (preferred over payload guessing).
-/// This is internal plumbing — never typed by the user.
+/// This is internal plumbing  --  never typed by the user.
 pub fn handle_event(
     event_name: &str,
     payload: &str,
@@ -274,7 +274,7 @@ pub fn handle_event(
                 batch.flush()?;
 
                 // record_post_edit_file does git hash-object (subprocess) +
-                // its own mutate round-trip — must happen after flush.
+                // its own mutate round-trip  --  must happen after flush.
                 if let Some(ref rel) = mutating_rel {
                     let _ = state::record_post_edit_file(
                         &project_root,
@@ -768,7 +768,7 @@ mod tests {
         ] {
             assert!(
                 is_read_tool(tool),
-                "{tool} is in is_dir_scoped_tool but not is_read_tool — \
+                "{tool} is in is_dir_scoped_tool but not is_read_tool  --  \
                  the dir-scoped check will never fire"
             );
         }

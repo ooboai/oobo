@@ -1,6 +1,6 @@
 # Environment variables
 
-Variables that change oobo's behavior. Part of the public contract — tests, scripts, and integrations depend on them. Any change to one of these is a breaking change.
+Variables that change oobo's behavior. Part of the public contract  --  tests, scripts, and integrations depend on them. Any change to one of these is a breaking change.
 
 ## User-facing
 
@@ -128,7 +128,7 @@ Marker that oobo sets when it shells out to `git` from within its own commit/pus
 - **Set by:** `crate::git::interceptor::on_write_op`, `crate::git::proxy::run_and_intercept`.
 - **Read by:** `oobo hooks post-commit`, `oobo hooks pre-push`.
 
-If a user manually sets this in their shell, oobo's hooks become no-ops — useful for reproducing bugs where hooks cause interference.
+If a user manually sets this in their shell, oobo's hooks become no-ops  --  useful for reproducing bugs where hooks cause interference.
 
 ### `OOBO_SKIP_UPDATE_CHECK`
 
@@ -181,5 +181,5 @@ CURSOR_AGENT=1 ssh user@host 'cd repo && oobo'
 - `OOBO_HOME` takes precedence over `$HOME`-derived defaults for EVERY file oobo writes.
 - `NO_COLOR` and `--agent` both independently disable ANSI escapes.
 - Agent env vars only auto-flip to `--agent`, never to `--json`.
-- `OOBO_INTERCEPTED` set in the user's environment disables all write-path hooks — NEVER recommend setting it except for debugging.
+- `OOBO_INTERCEPTED` set in the user's environment disables all write-path hooks  --  NEVER recommend setting it except for debugging.
 - Changing any listed env var's name or semantics in a non-major release is a breaking change.

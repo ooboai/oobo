@@ -210,9 +210,9 @@ mod tests {
         let dummy = std::path::Path::new("/nonexistent/transcript.jsonl");
         for tool in reg.all() {
             let n = tool.name();
-            // find_transcript for nonexistent session — must not panic.
+            // find_transcript for nonexistent session  --  must not panic.
             let _ = tool.find_transcript("/nonexistent", "nonexistent-session-id");
-            // parse_messages on a nonexistent path — must not panic.
+            // parse_messages on a nonexistent path  --  must not panic.
             let msgs = tool.parse_messages(dummy);
             assert!(
                 msgs.is_empty(),

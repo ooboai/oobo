@@ -9,7 +9,7 @@ fn default_event_payload_schema_version() -> u32 {
     EVENT_PAYLOAD_SCHEMA_VERSION
 }
 
-/// Anchor payload envelope — kept for schema documentation and test round-trips.
+/// Anchor payload envelope  --  kept for schema documentation and test round-trips.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EventPayload {
     /// Version of the remote transport envelope. The embedded anchor has its
@@ -22,7 +22,7 @@ pub struct EventPayload {
     pub project: ProjectInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor: Option<AnchorPayload>,
-    /// Flat transcript messages (backward compat — all sessions concatenated).
+    /// Flat transcript messages (backward compat  --  all sessions concatenated).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transcript: Vec<TranscriptMessage>,
     /// Structured per-session transcripts with parent-child relationships.
@@ -63,7 +63,7 @@ pub struct ToolResultMessage {
     pub output_summary: Option<String>,
 }
 
-/// A single transcript message. All optional fields are additive — older
+/// A single transcript message. All optional fields are additive  --  older
 /// backends that only read `role` + `text` continue to work unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptMessage {

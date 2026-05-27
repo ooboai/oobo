@@ -19,7 +19,7 @@ A clear and concise description of what you expected to happen.
 
 **Environment**
 - OS: [e.g. macOS 15.3, Ubuntu 24.04]
-- oobo version: [e.g. 0.1.0 — run `oobo --version`]
+- oobo version: [e.g. 0.1.0  --  run `oobo --version`]
 - Shell: [e.g. zsh, bash]
 - AI tools in use: [e.g. Cursor, Claude Code]
 

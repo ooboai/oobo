@@ -3,11 +3,11 @@
 Compare two anchors and get a narrative summary of what changed between them. Requires an API key (the comparison is performed server-side).
 
 Positional args (all optional):
-- `<anchor_sha>` — commit to inspect (defaults to HEAD).
-- `<previous_sha>` — commit to compare against (auto-resolved if omitted).
+- `<anchor_sha>`  --  commit to inspect (defaults to HEAD).
+- `<previous_sha>`  --  commit to compare against (auto-resolved if omitted).
 
 Flags:
-- `--full` — include detailed sessions, decisions, and techniques in the response.
+- `--full`  --  include detailed sessions, decisions, and techniques in the response.
 
 ---
 
@@ -195,5 +195,5 @@ no delta data for abc123
 - `--json` output always parses per `jq '.'` and contains at minimum `current`, `previous`, and `changes` keys (any may be null).
 - `--agent` output never contains ANSI escapes.
 - Without `--full`, `current_detail` and `previous_detail` are null in JSON.
-- The command NEVER writes to the local repo or orphan branch — it is read-only (aside from the network POST).
+- The command NEVER writes to the local repo or orphan branch  --  it is read-only (aside from the network POST).
 - SHA resolution uses `git rev-parse` so prefixes, tags, and branch names all work as `<anchor_sha>`.

@@ -46,7 +46,7 @@ pub fn strip_absolute_paths(text: &str, project_root: &str) -> String {
 
 /// Strip absolute paths from a file path string, returning a relative path.
 /// Unlike `strip_absolute_paths` which does text replacement, this handles
-/// a single path value — stripping the project root or replacing the home
+/// a single path value  --  stripping the project root or replacing the home
 /// directory prefix.
 pub fn sanitize_path(path: &str, project_root: &str) -> String {
     let p = std::path::Path::new(path);

@@ -11,19 +11,19 @@ pub enum OutputMode {
     Json,
 }
 
-/// oobo — developer memory for humans and agents
+/// oobo  --  developer memory for humans and agents
 #[derive(Parser, Debug)]
 #[command(
     name = "oobo",
     version,
-    about = "oobo — developer memory for humans and agents.",
+    about = "oobo  --  developer memory for humans and agents.",
     help_template = "\
 {about}
 
 Usage: oobo [OPTIONS] [COMMAND]
 
 Commands (require a git repository):
-  anchors      Memory feed — list anchors and active sessions
+  anchors      Memory feed  --  list anchors and active sessions
   anchor       Inspect a single anchor (show, blame)
   delta        Textual diff between two anchors
   goto         Travel to a turn or commit (auto-stashes)
@@ -35,7 +35,7 @@ Commands (require a git repository):
   disable      Stop tracking this project
 
 Commands (work anywhere):
-  setup        Onboarding wizard — install hooks, configure tools
+  setup        Onboarding wizard  --  install hooks, configure tools
   settings     Show / set / unset configuration
   help         Built-in documentation (oobo help <topic>)
   update       Self-update to the latest version
@@ -87,7 +87,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Memory feed — list anchors and active sessions
+    /// Memory feed  --  list anchors and active sessions
     #[command(
         display_order = 1,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
@@ -380,19 +380,6 @@ pub enum HookAction {
     },
 }
 
-/// Re-parse the CLI with a synthetic argv and dispatch. Used by the legacy
-/// hint system to rewrite e.g. `oobo scan` → `oobo setup --reindex`.
-fn dispatch_with_argv(
-    cfg: &Config,
-    argv: Vec<String>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = CmdResult> + '_>> {
-    Box::pin(async move {
-        let cli = Cli::try_parse_from(argv).map_err(|e| format!("dispatch rewrite: {e}"))?;
-        let mode = resolve_output_mode(cli.json, cli.agent, cli.interactive);
-        dispatch_parsed(cfg, cli, mode).await
-    })
-}
-
 /// Agent-env-var names. Any of these being set & non-empty implies agent mode.
 const AGENT_ENV_VARS: &[&str] = &[
     "CURSOR_AGENT",
@@ -451,22 +438,6 @@ pub async fn route(cfg: &Config) -> CmdResult {
         return Ok(0);
     }
 
-    // Legacy 0.1.x command hints.
-    if let Some(verb) = raw_args.get(1) {
-        if let Some(hint) = crate::commands::legacy::lookup(verb) {
-            if let Some(code) = crate::commands::legacy::handle(hint) {
-                return Ok(code);
-            }
-            if let Some(mapped) = hint.mapped {
-                let mut new_argv: Vec<String> = vec![raw_args[0].clone()];
-                for m in mapped {
-                    new_argv.push((*m).to_string());
-                }
-                return dispatch_with_argv(cfg, new_argv).await;
-            }
-            return Ok(2);
-        }
-    }
 
     let cli = Cli::parse();
     let mode = resolve_output_mode(cli.json, cli.agent, cli.interactive);

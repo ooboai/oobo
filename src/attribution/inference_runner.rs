@@ -5,7 +5,7 @@
 //! and applies the ones whose score clears [`APPLY_THRESHOLD`] back
 //! onto the `sessions` row.
 //!
-//! This module is kept deliberately thin — the heuristics live in
+//! This module is kept deliberately thin  --  the heuristics live in
 //! [`super::inference`] so they can be tested without touching SQL.
 
 use rusqlite::params;
@@ -82,7 +82,7 @@ pub fn infer_subagents_for_project(
         }
 
         // Apply: only fill columns that are still NULL on the child.
-        // This preserves any explicit link written by a tap — the
+        // This preserves any explicit link written by a tap  --  the
         // hard "never overwrite explicit" invariant.
         let changed = tx
             .execute(
@@ -356,7 +356,7 @@ mod tests {
 
         let report = infer_subagents_for_project(&db, pid).unwrap();
         // Orphans excludes child-1 (already linked) AND other-parent
-        // (no turns), leaving only parent-1 — which is itself an
+        // (no turns), leaving only parent-1  --  which is itself an
         // orphan here but has no Task-using parent candidate.
         assert_eq!(report.orphans_considered, 1);
         assert_eq!(report.applied, 0);

@@ -1,4 +1,4 @@
-# Bare `oobo` — no subcommand
+# Bare `oobo`  --  no subcommand
 
 Bare `oobo` is the primary feed command. It resolves along two dimensions: (1) inside a git repo or not, (2) output mode (pretty / agent / json). Outside a repo it always shows a hint.
 
@@ -123,7 +123,7 @@ oobo: not inside a git repository.
 ### Invocation
 `oobo` (after the project folder was renamed from `/a/b` to `/a/c`)
 
-**Behavior:** Project is resolved by `remote_url` first, then `initial_commit_sha` — NOT by path. The old row is found, its `primary_path` is updated to the new location, and the old path is appended to `historical_paths`. No user-visible churn; the TUI opens as normal with all prior anchors intact.
+**Behavior:** Project is resolved by `remote_url` first, then `initial_commit_sha`  --  NOT by path. The old row is found, its `primary_path` is updated to the new location, and the old path is appended to `historical_paths`. No user-visible churn; the TUI opens as normal with all prior anchors intact.
 
 **Side effects:**
 - UPDATE on `projects` setting `primary_path` to `$CWD` and appending old path to `historical_paths`.

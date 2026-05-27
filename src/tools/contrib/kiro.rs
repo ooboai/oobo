@@ -1,11 +1,11 @@
-/// Kiro (AWS) — agent hooks in ~/.kiro/agents/, SQLite session storage.
+/// Kiro (AWS)  --  agent hooks in ~/.kiro/agents/, SQLite session storage.
 ///
 /// Schema (conversations_v2 table):
-///   key             TEXT NOT NULL  — directory path
-///   conversation_id TEXT NOT NULL  — UUID
-///   value           TEXT NOT NULL  — JSON blob with conversation history
-///   created_at      INTEGER NOT NULL — Unix timestamp in milliseconds
-///   updated_at      INTEGER NOT NULL — Unix timestamp in milliseconds
+///   key             TEXT NOT NULL   --  directory path
+///   conversation_id TEXT NOT NULL   --  UUID
+///   value           TEXT NOT NULL   --  JSON blob with conversation history
+///   created_at      INTEGER NOT NULL  --  Unix timestamp in milliseconds
+///   updated_at      INTEGER NOT NULL  --  Unix timestamp in milliseconds
 ///   PRIMARY KEY (key, conversation_id)
 ///
 /// Session DB location:

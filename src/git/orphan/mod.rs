@@ -321,7 +321,7 @@ pub fn read_all_anchors(project_root: &str) -> (Vec<Anchor>, HashMap<String, Vec
 }
 
 /// Read multiple git objects in a single `git cat-file --batch` process.
-/// Returns a Vec parallel to `refs` — `Some(content)` for successful reads,
+/// Returns a Vec parallel to `refs`  --  `Some(content)` for successful reads,
 /// `None` for missing objects.
 ///
 /// Stdin writes and stdout reads run on separate threads to avoid pipe
@@ -416,7 +416,7 @@ pub(super) fn shard_key(hash: &str) -> (&str, &str) {
     }
 }
 
-/// Create the orphan branch using plumbing commands only — never touches
+/// Create the orphan branch using plumbing commands only  --  never touches
 /// the working tree or index, so uncommitted changes are safe.
 fn ensure_branch(project_root: &str) -> Result<(), CliError> {
     if branch_exists(project_root) {
@@ -1197,7 +1197,7 @@ mod tests {
 
         ensure_branch(&repo).unwrap();
 
-        // Write two entries sequentially — the second write succeeds because
+        // Write two entries sequentially  --  the second write succeeds because
         // try_write_to_branch uses CAS and the retry re-reads the parent.
         write_to_branch(&repo, &[("a/b/m.json".into(), "one".into())]).unwrap();
         write_to_branch(&repo, &[("c/d/m.json".into(), "two".into())]).unwrap();

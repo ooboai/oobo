@@ -216,7 +216,7 @@ const CLONE_FLAGS_WITH_VALUE: &[&str] = &[
 ];
 
 /// Determine the directory a `git clone` created.
-/// `git clone <url> [dir]` — if dir is given, use it; otherwise derive from the URL.
+/// `git clone <url> [dir]`  --  if dir is given, use it; otherwise derive from the URL.
 fn resolve_clone_dir(args: &[&str]) -> Option<String> {
     let after_clone: Vec<&str> = args
         .iter()

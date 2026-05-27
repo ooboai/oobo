@@ -2,11 +2,11 @@
 //!
 //! Projects are resolved in this order:
 //!
-//! 1. **Canonical git remote URL** — git@github.com:owner/repo.git and
+//! 1. **Canonical git remote URL**  --  git@github.com:owner/repo.git and
 //!    https://github.com/owner/repo become the same `owner/repo` key.
-//! 2. **Filesystem path** — the repo's `project_root`. Path-based identity
+//! 2. **Filesystem path**  --  the repo's `project_root`. Path-based identity
 //!    is fragile (project moved, renamed) but always available.
-//! 3. **Initial commit SHA + basename** — for repos with no remote but at
+//! 3. **Initial commit SHA + basename**  --  for repos with no remote but at
 //!    least one commit, stable across moves.
 //!
 //! This module is the single source of truth for `project_id` derivation.

@@ -1,4 +1,4 @@
-/// Amp (Sourcegraph) — ACP-based agent, thread JSON files in ~/.local/share/amp/threads/.
+/// Amp (Sourcegraph)  --  ACP-based agent, thread JSON files in ~/.local/share/amp/threads/.
 ///
 /// Session storage:
 ///   macOS/Linux: ~/.local/share/amp/threads/<thread-id>.json

@@ -1,4 +1,4 @@
-/// Continue (continue.dev) — Claude Code-compatible hook format,
+/// Continue (continue.dev)  --  Claude Code-compatible hook format,
 /// JSONL sessions in ~/.continue/sessions/<session-id>.jsonl.
 use std::fs;
 use std::io::BufRead;

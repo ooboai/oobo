@@ -270,7 +270,7 @@ fn draw_tracking_notice(frame: &mut ratatui::Frame<'_>, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            " — new sessions won't be captured on commit. press ",
+            "  --  new sessions won't be captured on commit. press ",
             Style::default().fg(Color::Yellow),
         ),
         Span::styled(

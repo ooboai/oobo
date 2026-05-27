@@ -483,7 +483,7 @@ fn test_subcommand_extraction() {
     assert_eq!(subcommand_name(&["--version"]), None);
 }
 
-// ── Git decorator integration test ────────────────────────────────────────────
+// ── Core integration test ────────────────────────────────────────────
 
 #[test]
 fn test_agent_json_conflict() {
@@ -1943,7 +1943,7 @@ fn test_oobo_blame_json_output() {
         assert_eq!(val["file"], "src.rs");
         assert!(val["lines"].is_array());
     }
-    // If blame fails (no anchor yet for this commit), that's ok —
+    // If blame fails (no anchor yet for this commit), that's ok  -- 
     // the commit might not have generated line-level data without
     // a proper before-submit-prompt snapshot. The test at minimum
     // verifies the command doesn't crash.
@@ -2054,7 +2054,7 @@ fn test_after_tool_use_snapshots_enable_line_attribution() {
         .unwrap();
     assert!(atu.status.success(), "after-tool-use failed");
 
-    // 4. git add + commit — NO stop hook yet (mirrors real agent flow)
+    // 4. git add + commit  --  NO stop hook yet (mirrors real agent flow)
     Command::new("git")
         .args(["add", "."])
         .current_dir(tmp.path())
@@ -2104,7 +2104,7 @@ fn test_after_tool_use_snapshots_enable_line_attribution() {
         let has_ai = lines.iter().any(|l| !l["ai"].is_null());
         assert!(
             has_ai,
-            "at least one line should have AI attribution — after-tool-use \
+            "at least one line should have AI attribution  --  after-tool-use \
              should have snapshotted the file so enrich_commit can produce \
              per-line data. Got: {stdout}"
         );

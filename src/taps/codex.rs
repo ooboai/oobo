@@ -17,7 +17,7 @@
 //! running total, not a per-call delta. To hand the new model honest
 //! per-turn deltas, the tap subtracts the previous `token_count`
 //! values from each new one and attributes the difference to the
-//! most recent assistant response — which is exactly the call that
+//! most recent assistant response  --  which is exactly the call that
 //! was billed.
 //!
 //! Turn boundaries:
@@ -275,7 +275,7 @@ fn ingest_file(
             &mut summary,
         );
         summary.warnings.push(
-            "codex: trailing assistant activity with no closing token_count — tokens unknown"
+            "codex: trailing assistant activity with no closing token_count  --  tokens unknown"
                 .into(),
         );
     }
@@ -294,7 +294,7 @@ fn flush_assistant(
 ) {
     if !accum.has_content {
         // A token_count with no preceding assistant activity is
-        // ignorable — but we still consumed the delta by updating
+        // ignorable  --  but we still consumed the delta by updating
         // prev_cum. No turn emitted, no warning (this happens
         // naturally at session start).
         *accum = AssistantAccum::default();

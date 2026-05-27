@@ -93,7 +93,7 @@ fn run_repair(opts: &SetupOptions) {
 fn run_reindex(opts: &SetupOptions) {
     let mode = opts.mode;
     if matches!(mode, OutputMode::Tui) {
-        println!("reindex is no longer needed — oobo data lives on the orphan branch.");
+        println!("reindex is no longer needed  --  oobo data lives on the orphan branch.");
     }
 }
 
@@ -106,7 +106,7 @@ pub fn run_setup(non_interactive: bool) -> Result<(), CliError> {
     let scan = run_initial_scan();
 
     if scan.detected.is_empty() {
-        eprintln!("  no existing sessions found — you can enable tools during setup");
+        eprintln!("  no existing sessions found  --  you can enable tools during setup");
     } else {
         let labels: Vec<String> = scan
             .detected
@@ -140,7 +140,7 @@ pub fn run_setup(non_interactive: bool) -> Result<(), CliError> {
             return Ok(());
         }
     } else {
-        eprintln!("  non-interactive environment detected — using defaults");
+        eprintln!("  non-interactive environment detected  --  using defaults");
         crate::tui::setup::build_default_outcome(&cfg, scan)
     };
 

@@ -21,7 +21,7 @@ Cursor, Claude Code, Gemini CLI, Codex CLI, OpenCode, GitHub Copilot Chat, Winds
 
 ## Architecture
 
-Oobo is a git decorator that intercepts commits, enriches them with anchor metadata (linked sessions, agent/human attribution, diff stats, token counts), and stores everything on the `oobo/anchors/v1` orphan branch. Anchor data is git-native and fully contained within the repository.
+Oobo captures AI context alongside commits, enriching them with anchor metadata (linked sessions, agent/human attribution, diff stats, token counts), and stores everything on the `oobo/anchors/v1` orphan branch. Anchor data is git-native and fully contained within the repository.
 
 ## Agent Configuration
 

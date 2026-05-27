@@ -1,4 +1,4 @@
-/// Factory Droid — Claude Code-compatible hooks, JSONL sessions in ~/.factory/.
+/// Factory Droid  --  Claude Code-compatible hooks, JSONL sessions in ~/.factory/.
 ///
 /// Config hierarchy:
 ///   ~/.factory/settings.json (user-level)
@@ -144,7 +144,7 @@ fn collect_from_projects_dir(sessions: &mut Vec<Session>) {
 /// Best-effort reverse of Claude-style path slugification.
 /// e.g. `-Users-dev-myapp` -> `/Users/dev/myapp`
 ///
-/// WARNING: This is lossy — original hyphens in path segments are
+/// WARNING: This is lossy  --  original hyphens in path segments are
 /// indistinguishable from separator hyphens. The cwd field from within
 /// JSONL files always takes priority over this guess (see session_from_jsonl).
 fn slug_to_path(dir: &Path) -> String {

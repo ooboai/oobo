@@ -41,7 +41,7 @@ pub(super) fn resolve_worktree(project_root: &str) -> Option<String> {
 }
 
 /// Capture the pre-agent file state: snapshot currently dirty files in the
-/// worktree. Called on `before-submit-prompt` — any worktree changes at this
+/// worktree. Called on `before-submit-prompt`  --  any worktree changes at this
 /// moment are human edits (the agent hasn't started yet).
 pub fn snapshot_pre_agent_state(project_root: &str, session_id: &str) -> Result<()> {
     let snapshots = snapshot_dirty_files(project_root);
@@ -162,7 +162,7 @@ pub fn snapshot_pre_edit_file(project_root: &str, session_id: &str, rel_path: &s
     let hash = match hash_object(&git, project_root, rel_path) {
         Some(h) => h,
         None => {
-            // File doesn't exist yet — record a sentinel so we know it was created.
+            // File doesn't exist yet  --  record a sentinel so we know it was created.
             "0000000000000000000000000000000000000000".to_string()
         }
     };
@@ -215,7 +215,7 @@ pub fn record_post_edit_file(
 
 /// Clean up stale session state older than `max_age_secs`.
 /// Ended sessions (those with `ended_at` set) use a shorter grace period
-/// of 1 hour — long enough for the user to commit after exiting the agent.
+/// of 1 hour  --  long enough for the user to commit after exiting the agent.
 pub fn cleanup_stale(project_root: &str, max_age_secs: i64) {
     const ENDED_GRACE_SECS: i64 = 3600;
     let now = chrono::Utc::now().timestamp();

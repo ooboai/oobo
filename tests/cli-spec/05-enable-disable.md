@@ -1,6 +1,6 @@
 # `oobo enable` / `oobo disable`
 
-Per-project toggle. Imperative verbs — NOT a settings key. The source of truth is the project folder:
+Per-project toggle. Imperative verbs  --  NOT a settings key. The source of truth is the project folder:
 
 - Enabled: `.oobo/config` exists and `[project].enabled` is not `false`.
 - Disabled: `.oobo/config` exists with `[project].enabled = false`.
@@ -154,7 +154,7 @@ oobo enabled for '$PROJECT_NAME' (warning: no remote and no commits yet; project
 
 ## First-TTY banner
 
-Not a command per se — a side effect of *any* oobo invocation in a new enabled repo where the banner has not yet been shown.
+Not a command per se  --  a side effect of *any* oobo invocation in a new enabled repo where the banner has not yet been shown.
 
 ### Context: first `oobo` (or any view command) in a brand-new enabled repo
 

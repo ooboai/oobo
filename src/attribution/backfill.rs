@@ -6,10 +6,10 @@
 //! is idempotent thanks to upsert semantics all the way down.
 //!
 //! All five first-class sources are wired up here:
-//! - **Claude** — JSONL per session (+ explicit subagents directory)
-//! - **Cursor** — SQLite state.vscdb (`bubbleId:` rows)
-//! - **Codex** — JSONL rollouts in `~/.codex/sessions/`
-//! - **OpenCode** — SQLite `opencode.db` (modern and legacy schemas)
+//! - **Claude**  --  JSONL per session (+ explicit subagents directory)
+//! - **Cursor**  --  SQLite state.vscdb (`bubbleId:` rows)
+//! - **Codex**  --  JSONL rollouts in `~/.codex/sessions/`
+//! - **OpenCode**  --  SQLite `opencode.db` (modern and legacy schemas)
 //!
 //! Adding a new source = adding one entry to [`ingest_sessions_for_source`].
 
@@ -84,7 +84,7 @@ pub fn backfill_project(
     report.tap_summary = summary;
     report.per_source = per_source;
 
-    // M4 — infer subagent parent/child links *before* attribution so
+    // M4  --  infer subagent parent/child links *before* attribution so
     // contributions inherit `is_subagent` from the freshly populated
     // sessions columns. The order is:
     //   taps → inference → attribution

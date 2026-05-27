@@ -1,7 +1,7 @@
 //! Local JSON cache for orphan branch anchor data.
 //!
 //! Stores a snapshot of all anchors + session links at `.oobo/cache/anchors.json`.
-//! The cache is keyed by the orphan branch tip commit — when the branch advances,
+//! The cache is keyed by the orphan branch tip commit  --  when the branch advances,
 //! the cache is invalidated and rebuilt.
 
 use crate::core::anchor::{Anchor, SessionLink};

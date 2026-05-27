@@ -8,12 +8,12 @@
 //!   `tokenCount.inputTokens`, `tokenCount.outputTokens`,
 //!   `createdAt`, `thinking.text`, `toolFormerData.{name,result}`.
 //!
-//! **`tokenCount` is per-bubble** — exactly the per-call delta the
+//! **`tokenCount` is per-bubble**  --  exactly the per-call delta the
 //! new model wants. Unlike Claude's prompt-cache split, Cursor
 //! records only `input_tokens` and `output_tokens`; cache metrics
 //! stay `None`. Cost is `None` too (Cursor doesn't expose pricing
 //! per-call; the downstream cost table can fill that in if/when we
-//! know the model — which Cursor also doesn't persist per-session).
+//! know the model  --  which Cursor also doesn't persist per-session).
 //!
 //! Subagent hierarchy: Cursor has no native notion of subagents on
 //! disk. The tap emits no [`SubagentLink`]; M4's inference engine

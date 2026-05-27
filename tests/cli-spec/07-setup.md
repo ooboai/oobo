@@ -3,16 +3,16 @@
 The single onboarding + repair + reindex entry point. A TTY wizard that combines: project discovery, per-project enable/disable, alias install prompt, API key paste, force reindex, tool/hook re-detection, orphan-branch repair.
 
 Flags (all optional):
-- `--non-interactive` — CI-safe; accept defaults, never prompt, never open a TUI.
-- `--reindex` — force full reindex of every enabled project (replaces the deleted `oobo index --force`).
-- `--uninstall-alias` — remove the `git=oobo` shell alias without re-running the wizard.
-- `--repair` — re-install hooks, re-detect tool paths, repair the orphan branch where needed.
+- `--non-interactive`  --  CI-safe; accept defaults, never prompt, never open a TUI.
+- `--reindex`  --  force full reindex of every enabled project (replaces the deleted `oobo index --force`).
+- `--uninstall-alias`  --  remove the `git=oobo` shell alias without re-running the wizard.
+- `--repair`  --  re-install hooks, re-detect tool paths, repair the orphan branch where needed.
 
 Flags are composable (e.g. `--repair --reindex`), except `--non-interactive` which forces headless defaults and cannot be combined with the wizard's interactive flags.
 
 ---
 
-## `oobo setup` — interactive wizard
+## `oobo setup`  --  interactive wizard
 
 ### Invocation
 `oobo setup`
@@ -186,7 +186,7 @@ Hard fail. `error: cannot create ~/.oobo/ (permission denied)`. Exit `1`.
 
 **Behavior:** Allowed; `--uninstall-alias` runs headlessly.
 
-`oobo setup --non-interactive` combined with bare `oobo setup` itself (re-running from middle of wizard): not applicable — each invocation is independent.
+`oobo setup --non-interactive` combined with bare `oobo setup` itself (re-running from middle of wizard): not applicable  --  each invocation is independent.
 
 ---
 

@@ -1,4 +1,4 @@
-//! `oobo anchors` — the flagship view.
+//! `oobo anchors`  --  the flagship view.
 //!
 //! List anchors (in or out of a repo) and drill into a single anchor via
 //! `anchors show <sha>`. See `tests/cli-spec/02-anchors.md` for the exact
@@ -22,7 +22,7 @@ pub struct Options {
 // LIST
 // ------------------------------------------------------------------
 
-/// `oobo anchors` — list recent anchors.
+/// `oobo anchors`  --  list recent anchors.
 #[tracing::instrument(skip_all)]
 pub fn run_list(cfg: &Config, opts: &Options, mode: OutputMode) -> CmdResult {
     let root = crate::git::proxy::project_root(cfg);
@@ -86,7 +86,7 @@ pub fn run_list(cfg: &Config, opts: &Options, mode: OutputMode) -> CmdResult {
 // SHOW
 // ------------------------------------------------------------------
 
-/// `oobo anchors show <sha>` — drill-down on one anchor.
+/// `oobo anchors show <sha>`  --  drill-down on one anchor.
 #[tracing::instrument(skip_all, fields(sha))]
 pub fn run_show(cfg: &Config, sha: &str, mode: OutputMode) -> CmdResult {
     let root = crate::git::proxy::project_root(cfg).ok_or(CliError::NotARepo)?;
@@ -182,7 +182,7 @@ fn resolve_sha(project_root: &str, prefix: &str) -> Vec<(String, String)> {
 }
 
 // ------------------------------------------------------------------
-// emitters — list
+// emitters  --  list
 // ------------------------------------------------------------------
 
 fn emit_list_agent(rows: &[FeedRow], project_name: &str, in_repo: bool) {
@@ -365,7 +365,7 @@ fn emit_list_json(_cfg: &Config, rows: &[FeedRow], project_name: &str, in_repo: 
 }
 
 // ------------------------------------------------------------------
-// emitters — show
+// emitters  --  show
 // ------------------------------------------------------------------
 
 fn emit_show_agent(anchor: &Anchor, sessions: &[SessionInfo]) {

@@ -64,7 +64,7 @@ pub(in crate::git) fn filter_by_recency(
 
 /// Detect files touched by multiple sessions and return both file interactions
 /// and the peer map. Accepts references to avoid cloning `ActiveSession` data.
-/// Expects only top-level sessions — subagent sessions are filtered out
+/// Expects only top-level sessions  --  subagent sessions are filtered out
 /// by the caller using `subagent_runs` data.
 pub(in crate::git) fn detect_file_interactions_refs(
     sessions: &[&hooks::state::ActiveSession],

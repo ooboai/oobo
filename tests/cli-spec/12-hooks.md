@@ -2,7 +2,7 @@
 
 Internal plumbing called by installed git hooks and AI-tool session hooks. NOT intended to be typed by users. Hidden from `oobo --help` output. Documented here because:
 
-1. It's a stable surface — installed hook scripts depend on these invocation shapes.
+1. It's a stable surface  --  installed hook scripts depend on these invocation shapes.
 2. Third-party tool adapters that want to integrate with oobo call this.
 3. Debugging issues often means running one of these manually.
 
@@ -30,10 +30,10 @@ All `hooks` subcommands:
 | Factory Droid   | `~/.factory/settings.json`                   | Claude-compatible   |
 
 Per-repo git hooks are installed into `.git/hooks/`:
-- `post-commit` — calls `oobo hooks post-commit`
-- `pre-push` — calls `oobo hooks pre-push`
-- `post-merge` — calls `oobo hooks post-merge`
-- `post-rewrite` — calls `oobo hooks post-rewrite`
+- `post-commit`  --  calls `oobo hooks post-commit`
+- `pre-push`  --  calls `oobo hooks pre-push`
+- `post-merge`  --  calls `oobo hooks post-merge`
+- `post-rewrite`  --  calls `oobo hooks post-rewrite`
 
 Existing user hooks are preserved: the original is backed up to `<hook>.pre-oobo` and chained.
 
@@ -43,8 +43,8 @@ Existing user hooks are preserved: the original is backed up to `<hook>.pre-oobo
 
 Session state is stored as **JSON buffer files**, not SQLite.
 
-- **Primary store:** `~/.oobo/tmp/hook-buffer/{session_id}.json` — one file per active session, written atomically via `tempfile` + rename.
-- **Legacy fallback (read-only):** `.git/oobo-sessions/{session_id}.json` — files written by oobo 0.1.x. Read on lookup; never written to.
+- **Primary store:** `~/.oobo/tmp/hook-buffer/{session_id}.json`  --  one file per active session, written atomically via `tempfile` + rename.
+- **Legacy fallback (read-only):** `.git/oobo-sessions/{session_id}.json`  --  files written by oobo 0.1.x. Read on lookup; never written to.
 - **Read path:** buffer file → legacy file. First hit wins.
 - **Write path:** always the buffer file.
 
@@ -69,14 +69,14 @@ Called by AI-tool session hooks when lifecycle events fire. The tool passes a JS
 ### Signature
 `oobo hooks agent <event> [--tool <name>]`
 
-- `<event>` — lifecycle event name (see table below). Unknown events warn and return `0`.
-- `--tool <name>` — the tool firing the hook: `cursor`, `claude`, `gemini`, `codex`, `aider`, `copilot`, `zed`, `continue`, `opencode`, `kiro`, `droid`. Case-insensitive. Overrides `agent` field in payload.
-- **stdin** — a JSON payload:
+- `<event>`  --  lifecycle event name (see table below). Unknown events warn and return `0`.
+- `--tool <name>`  --  the tool firing the hook: `cursor`, `claude`, `gemini`, `codex`, `aider`, `copilot`, `zed`, `continue`, `opencode`, `kiro`, `droid`. Case-insensitive. Overrides `agent` field in payload.
+- **stdin**  --  a JSON payload:
 
 ```json
 {
   "session_id": "string (required for most events)",
-  "agent": "string (optional — overridden by --tool if present)",
+  "agent": "string (optional  --  overridden by --tool if present)",
   "model": "string (optional)",
   "cwd": "absolute path (optional)",
   "workspace_roots": ["path", ...],
@@ -127,7 +127,7 @@ Unknown fields are captured in an `extra` map for forward compatibility. Empty s
 1. Ensure the session exists in the buffer.
 2. Update session metrics from the payload (`loop_count`, `context_tokens`, `context_window_size`).
 3. Snapshot edited files into git's object store (`git hash-object -w`).
-4. Finish the current turn — write a `TurnSnapshot` to a git ref under the orphan branch.
+4. Finish the current turn  --  write a `TurnSnapshot` to a git ref under the orphan branch.
 5. Touch session timestamp.
 
 **Side effects:** Buffer file updated. Turn snapshot written to git refs. Log line appended.
@@ -158,7 +158,7 @@ Unknown fields are captured in an `extra` map for forward compatibility. Empty s
 
 ### Agent env / non-TTY
 
-No difference — this command has no TTY-aware behavior. Always silent stdout.
+No difference  --  this command has no TTY-aware behavior. Always silent stdout.
 
 ---
 
@@ -284,5 +284,5 @@ The `session-end` event removes the buffer file immediately. Cleanup is a safety
 - `OOBO_INTERCEPTED=1` short-circuits the post-commit body (prevents re-entry).
 - Session state is persisted as JSON buffer files in `~/.oobo/tmp/hook-buffer/`, not in SQLite.
 - The append-only log at `~/.oobo/logs/hooks-debug.log` is the canonical debug trail.
-- Changing any of these subcommand signatures is a breaking change for installed hook scripts across users' machines — requires `oobo setup --repair` to refresh.
+- Changing any of these subcommand signatures is a breaking change for installed hook scripts across users' machines  --  requires `oobo setup --repair` to refresh.
 - `oobo hooks` with no subcommand → exit `2` with a clap error (but hidden from normal help).

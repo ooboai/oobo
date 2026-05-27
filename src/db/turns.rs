@@ -1,10 +1,10 @@
-//! L2 — Turn store: DB-backed sink for the new capture pipeline.
+//! L2  --  Turn store: DB-backed sink for the new capture pipeline.
 //!
 //! Responsibilities:
 //!
 //! 1. Accept [`Turn`](crate::core::turn::Turn) and
 //!    [`SubagentLink`](crate::taps::SubagentLink) values from taps.
-//! 2. Upsert them idempotently — same artifact re-ingested any number
+//! 2. Upsert them idempotently  --  same artifact re-ingested any number
 //!    of times yields the same DB state.
 //! 3. Never mutate `turns` rows once written, except via explicit
 //!    `upsert` on the `(session_id, source, turn_index)` key.
@@ -68,7 +68,7 @@ pub fn ensure_session_stub(
 /// Idempotent upsert of a single turn. Returns `true` if a new row
 /// was inserted, `false` if an existing row was updated.
 ///
-/// Upsert key is `(session_id, source, turn_index)` — the natural
+/// Upsert key is `(session_id, source, turn_index)`  --  the natural
 /// identity of a turn. The generated `turns.id` column is kept in
 /// sync with [`Turn::deterministic_id`].
 pub fn upsert_turn(conn: &Connection, turn: &Turn) -> Result<bool, String> {
@@ -145,7 +145,7 @@ pub fn upsert_turn(conn: &Connection, turn: &Turn) -> Result<bool, String> {
 /// Write or update a parent/child link for a subagent session.
 ///
 /// This writes onto the child session's row (`sessions.parent_*`
-/// columns). Only fills columns the caller provided — the function
+/// columns). Only fills columns the caller provided  --  the function
 /// never clears a stronger previously-written link with weaker data.
 pub fn upsert_subagent_link(conn: &Connection, link: &SubagentLink) -> Result<(), String> {
     ensure_session_stub(conn, &link.child_session_id, &link.child_source, None)?;
@@ -234,7 +234,7 @@ pub fn fetch_turn_role(conn: &Connection, turn_id: &str) -> Option<TurnRole> {
 /// DB-backed [`TurnSink`]. Holds a mutable reference to the
 /// connection so the sink can be scoped to a single tap run (and
 /// optionally wrapped in a transaction by the caller). Transactions
-/// are the caller's responsibility — see [`Db::ingest_in_tx`].
+/// are the caller's responsibility  --  see [`Db::ingest_in_tx`].
 pub struct DbTurnSink<'a> {
     pub conn: &'a Connection,
     pub project_id: Option<String>,

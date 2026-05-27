@@ -6,9 +6,9 @@ use tiktoken_rs::{cl100k_base, o200k_base, CoreBPE};
 /// Model families for selecting the appropriate tokenizer encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelFamily {
-    /// Claude models, GPT-4, GPT-3.5 — uses cl100k_base
+    /// Claude models, GPT-4, GPT-3.5  --  uses cl100k_base
     Cl100k,
-    /// GPT-4o, o1, o3 family — uses o200k_base
+    /// GPT-4o, o1, o3 family  --  uses o200k_base
     O200k,
 }
 

@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
-// OoboError — general-purpose library error (pre-existing)
+// OoboError  --  general-purpose library error (pre-existing)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Error)]
@@ -34,7 +34,7 @@ impl From<&str> for OoboError {
 }
 
 // ---------------------------------------------------------------------------
-// CliError — command-layer error with exit-code mapping
+// CliError  --  command-layer error with exit-code mapping
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Error)]

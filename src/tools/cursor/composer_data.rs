@@ -239,7 +239,7 @@ pub fn preload_bubble_data_for(
             }
 
             // Tool results (file contents, terminal output, etc.) are fed back to
-            // the model as context — count them as input tokens via "user" role.
+            // the model as context  --  count them as input tokens via "user" role.
             if !tool_result.is_empty() {
                 entry.messages.push(Message {
                     role: "user".to_string(),
@@ -631,14 +631,14 @@ fn normalize_to_repo_relative(file_path: &str, project_root: &str) -> String {
     if let Ok(rel) = p.strip_prefix(project_root) {
         return rel.to_string_lossy().to_string();
     }
-    // Strip leading `/` — Cursor's relativeWorkspacePath sometimes includes
+    // Strip leading `/`  --  Cursor's relativeWorkspacePath sometimes includes
     // it. If it's truly from another project, it won't match committed files.
     file_path.strip_prefix('/').unwrap_or(file_path).to_string()
 }
 
 /// Build a rich JSONL transcript from Cursor's bubbleId: database entries.
 /// Includes thinking blocks, tool calls (with params), timestamps, and tokens
-/// — the full agent reasoning and actions timeline, not just chat text.
+///  --  the full agent reasoning and actions timeline, not just chat text.
 pub fn build_rich_transcript(session_id: &str) -> Option<String> {
     let db_path = global_state_vscdb_path()?;
     if !db_path.exists() {
@@ -793,7 +793,7 @@ fn bubble_to_transcript_entry(data: &serde_json::Value) -> Option<serde_json::Va
     Some(entry.into())
 }
 
-/// Summarize tool call params — keep file paths and commands, trim large content.
+/// Summarize tool call params  --  keep file paths and commands, trim large content.
 fn summarize_tool_params(tool_name: &str, params: &serde_json::Value) -> serde_json::Value {
     let obj = match params.as_object() {
         Some(o) => o,
@@ -842,7 +842,7 @@ fn global_state_vscdb_path() -> Option<PathBuf> {
 ///
 /// Cursor's new on-disk format (post-2024-ish) stores each composer
 /// message as a `bubbleId:<session>:<uuid>` row carrying its own
-/// token counts — exactly the per-call deltas the new data model
+/// token counts  --  exactly the per-call deltas the new data model
 /// demands. This struct is the tap-facing view.
 ///
 /// `btype` mapping (Cursor internal):
@@ -877,7 +877,7 @@ pub fn read_bubbles(session_id: &str) -> Vec<CursorBubble> {
 
     // Range scan: `bubbleId:<session>:<uuid>` rows live between
     // `bubbleId:<session>:` (inclusive) and `bubbleId:<session>;`
-    // (exclusive — `;` is the next ASCII char after `:`).
+    // (exclusive  --  `;` is the next ASCII char after `:`).
     let prefix = format!("bubbleId:{session_id}:");
     let prefix_end = format!("bubbleId:{session_id};");
 
@@ -1159,7 +1159,7 @@ mod tests {
     fn test_normalize_to_repo_relative_different_root() {
         let root = "/Users/example/dev/projects/trender";
         let abs = "/Users/example/dev/projects/other/file.rs";
-        // Stripped leading `/` — won't match committed files anyway.
+        // Stripped leading `/`  --  won't match committed files anyway.
         assert_eq!(
             normalize_to_repo_relative(abs, root),
             "Users/example/dev/projects/other/file.rs"

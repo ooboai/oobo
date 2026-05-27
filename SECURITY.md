@@ -11,17 +11,17 @@ Instead, please send security-related reports to **[security@oobo.ai](mailto:sec
 ### What to include
 
 - A clear description of the vulnerability
-- Impact assessment — what an attacker could achieve
+- Impact assessment  --  what an attacker could achieve
 - Steps to reproduce
 - Affected versions (if known)
 - Suggested fix (optional)
 
 ### What to expect
 
-- **Acknowledgment** — we will acknowledge receipt within 2 business days
-- **Assessment** — initial assessment within 5 business days
-- **Resolution** — we aim to resolve critical vulnerabilities within 90 days
-- **Confidentiality** — all reports are kept confidential
+- **Acknowledgment**  --  we will acknowledge receipt within 2 business days
+- **Assessment**  --  initial assessment within 5 business days
+- **Resolution**  --  we aim to resolve critical vulnerabilities within 90 days
+- **Confidentiality**  --  all reports are kept confidential
 
 ## Supported Versions
 
@@ -43,11 +43,11 @@ This policy applies to:
 
 ## Security Design
 
-- **Read-only** — oobo reads local AI tool data but never writes to it
-- **Local by default** — anchor metadata is pushed only to your existing git remote (alongside your code) via the pre-push hook. The optional remote search/delta API requires a separate API key
-- **No telemetry** — oobo does not phone home or collect usage data
-- **Secret redaction** — session content is scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before any sharing or sync
-- **Config protection** — files containing API keys are automatically set to `0600` permissions on Unix
+- **Read-only**  --  oobo reads local AI tool data but never writes to it
+- **Local by default**  --  anchor metadata is pushed only to your existing git remote (alongside your code) via the pre-push hook. The optional remote search/delta API requires a separate API key
+- **No telemetry**  --  oobo does not phone home or collect usage data
+- **Secret redaction**  --  session content is scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before any sharing or sync
+- **Config protection**  --  files containing API keys are automatically set to `0600` permissions on Unix
 
 Each tool integration reads only local session metadata (timestamps, model names, token counts) from well-known paths. oobo never accesses credentials, browsing history, or file contents outside of AI tool storage directories.
 

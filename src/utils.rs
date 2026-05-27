@@ -17,7 +17,7 @@ pub fn to_epoch_secs(ts: i64) -> i64 {
 }
 
 /// Truncate a session name to a reasonable display length.
-/// Safe for multi-byte UTF-8 — never slices mid-codepoint.
+/// Safe for multi-byte UTF-8  --  never slices mid-codepoint.
 pub fn truncate_name(text: &str, max_len: usize) -> String {
     let trimmed = text.trim();
     if trimmed.len() <= max_len {

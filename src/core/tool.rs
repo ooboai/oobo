@@ -106,7 +106,7 @@ impl ToolRegistry {
             .map(std::convert::AsRef::as_ref)
     }
 
-    /// All (name, display_name) pairs — single source of truth for tool lists.
+    /// All (name, display_name) pairs  --  single source of truth for tool lists.
     #[cfg(test)]
     pub fn tool_names(&self) -> Vec<(&'static str, &'static str)> {
         self.tools

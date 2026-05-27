@@ -1,4 +1,4 @@
-//! Built-in help system — `oobo help <topic>`
+//! Built-in help system  --  `oobo help <topic>`
 //!
 //! Rich prose-based help compiled into the binary. Always available, always
 //! current, works offline.
@@ -8,7 +8,7 @@ use crate::cli::OutputMode;
 pub const TOPICS: &[(&str, &str)] = &[
     ("anchors", "What are anchors and how do they work"),
     ("search", "Semantic code search (hybrid BM25 + vector)"),
-    ("recall", "Session/anchor search — syntax, filters, cloud vs local"),
+    ("recall", "Session/anchor search  --  syntax, filters, cloud vs local"),
     ("blame", "Reading the AI attribution overlay"),
     ("hooks", "How git and agent hooks capture sessions"),
     ("config", "All settings explained"),
@@ -49,7 +49,7 @@ fn list_topics(mode: OutputMode) {
             }
         }
         OutputMode::Tui => {
-            println!("\x1b[1moobo help\x1b[0m — built-in documentation\n");
+            println!("\x1b[1moobo help\x1b[0m  --  built-in documentation\n");
             println!("  Usage: oobo help <topic>\n");
             for (name, desc) in TOPICS {
                 println!("  \x1b[1m{name:<12}\x1b[0m {desc}");
@@ -90,7 +90,7 @@ fn lookup(topic: &str) -> Option<&'static str> {
 
 const HELP_ANCHORS: &str = "\
 Anchors are the core unit of oobo memory. Every git commit that was made
-while an AI coding tool was active gets an anchor — a metadata record that
+while an AI coding tool was active gets an anchor  --  a metadata record that
 links the commit to the AI session(s) that contributed to it.
 
 An anchor captures:
@@ -165,7 +165,7 @@ Color coding (pretty mode):
   dim gray = unknown (pre-oobo or no anchor)
 
 JSON output includes per line: origin_sha, ai, agent, session_ids,
-tokens, committed_at, and commit message — designed for IDE plugins.
+tokens, committed_at, and commit message  --  designed for IDE plugins.
 
 Every git blame flag is forwarded. Machine-output formats (--porcelain,
 --line-porcelain, --incremental) bypass the AI column automatically.

@@ -1,4 +1,4 @@
-//! `oobo delta` — textual diff between two anchors via the remote API.
+//! `oobo delta`  --  textual diff between two anchors via the remote API.
 
 use crate::cli::OutputMode;
 use crate::config::Config;

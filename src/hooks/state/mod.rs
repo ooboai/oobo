@@ -6,7 +6,7 @@
 //! lazily during session discovery.
 //!
 //! All public functions here are thin wrappers that load, mutate, and save
-//! an [`ActiveSession`] via the store — they never touch the filesystem
+//! an [`ActiveSession`] via the store  --  they never touch the filesystem
 //! directly anymore.
 
 mod snapshots;
@@ -205,7 +205,7 @@ where
     Ok(())
 }
 
-/// Batched session mutations — one disk read, one disk write, N mutations.
+/// Batched session mutations  --  one disk read, one disk write, N mutations.
 ///
 /// Hook events often apply 3–6 mutations to the same session. Without
 /// batching, each mutation does a full JSON round-trip (read + deserialize +
@@ -592,7 +592,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Mutex;
 
-    /// All state tests share a single OOBO_HOME env var — serialize them
+    /// All state tests share a single OOBO_HOME env var  --  serialize them
     /// so that each test's tempdir stays the active home for its duration.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -972,7 +972,7 @@ mod tests {
         assert!(state.is_some());
         assert_eq!(state.unwrap().session_id, "pre-init-sid");
 
-        // End it — state is kept but marked as ended.
+        // End it  --  state is kept but marked as ended.
         remove_session("", "pre-init-sid");
         let ended = read_session("", "pre-init-sid");
         assert!(ended.is_some(), "ended session should still be readable");
@@ -1196,7 +1196,7 @@ mod tests {
 
         write_session(root_str, "noop-sess", "cursor", None).unwrap();
         snapshot_pre_edit_file(root_str, "noop-sess", "noop.txt").unwrap();
-        // Don't modify the file — call record_post_edit_file with the same content.
+        // Don't modify the file  --  call record_post_edit_file with the same content.
         record_post_edit_file(root_str, "noop-sess", "noop.txt", Some("Write")).unwrap();
 
         let state = read_session(root_str, "noop-sess").unwrap();
@@ -1246,7 +1246,7 @@ mod tests {
         assert!(before.ended_at.is_none());
         let snapshot_count = before.file_snapshots.as_ref().unwrap().len();
 
-        // End the session — snapshots must survive.
+        // End the session  --  snapshots must survive.
         remove_session(root_str, "snap-sess");
 
         let after = read_session(root_str, "snap-sess").unwrap();

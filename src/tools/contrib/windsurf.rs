@@ -144,7 +144,7 @@ pub mod transcript {
     use crate::tools::cursor::transcript::Message;
 
     pub fn find_transcript_path(_project_path: &str, _session_id: &str) -> Option<PathBuf> {
-        // Windsurf conversations are encrypted — no transcript available
+        // Windsurf conversations are encrypted  --  no transcript available
         None
     }
 

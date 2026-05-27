@@ -7,7 +7,7 @@ const COMPOSER_KEY: &str = "composer.composerData";
 /// Map Cursor's numeric subagent type IDs to human-readable names.
 /// These values come from Cursor's internal `SubagentType` enum in
 /// composer data (observed via state.vscdb inspection). IDs 2 and 3
-/// are both explore variants (quick/thorough) — collapsed to "explore".
+/// are both explore variants (quick/thorough)  --  collapsed to "explore".
 fn map_subagent_type(type_id: u64) -> String {
     match type_id {
         0 => "generalPurpose".to_string(),
