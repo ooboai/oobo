@@ -21,7 +21,7 @@ It serves two purposes:
 | `01-bare.md` | Bare `oobo` (no subcommand) — four-quadrant behavior |
 | `02-anchors.md` | Bare `oobo` memory feed + `oobo anchor show <sha>` drill-down |
 | `03-blame.md` | `oobo blame <file> [commit]` (strict superset of `git blame`) |
-| `04-search.md` | `oobo search <query>` (local-first, remote when an API key is configured) |
+| `04-recall.md` | `oobo recall <query>` (local-first, remote when an API key is configured) |
 | `05-enable-disable.md` | `oobo enable`, `oobo disable` — per-project tracking toggle |
 | `06-alias.md` | `oobo alias` — removed, legacy hint only |
 | `07-setup.md` | `oobo setup` + flags (onboarding, repair, reindex) |

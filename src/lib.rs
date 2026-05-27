@@ -40,6 +40,7 @@ pub mod redact;
 pub mod remote;
 pub mod session;
 pub mod setup;
+pub mod sonar;
 pub mod taps;
 pub mod tools;
 pub mod trace;

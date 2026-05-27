@@ -176,6 +176,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
         match first {
             View::Feed(feed) => draw_feed(frame, app, feed),
             View::Search(ss) => draw_search(frame, app, ss),
+            View::CodeSearch { query, results } => draw_code_search(frame, query, results),
             View::Transcript(ts) => super::transcript::draw_transcript(frame, ts),
             View::Diff(ds) => draw_diff(frame, ds),
             View::Picker(_) | View::Help => {}
@@ -187,6 +188,7 @@ pub(super) fn draw(frame: &mut ratatui::Frame<'_>, app: &App) {
             match top {
                 View::Feed(_) => {}
                 View::Search(ss) => draw_search(frame, app, ss),
+                View::CodeSearch { query, results } => draw_code_search(frame, query, results),
                 View::Transcript(ts) => super::transcript::draw_transcript(frame, ts),
                 View::Diff(ds) => draw_diff(frame, ds),
                 View::Picker(p) => super::detail::draw_picker_overlay(frame, p),
@@ -998,4 +1000,84 @@ pub(super) fn parse_diff_lines(raw: &str) -> Vec<Line<'static>> {
             }
         })
         .collect()
+}
+
+// ── Code search (sonar) TUI ──────────────────────────────────────────────────
+
+fn draw_code_search(
+    frame: &mut ratatui::Frame,
+    query: &str,
+    results: &[sonar_core::types::SearchResult],
+) {
+    let area = frame.area();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(1)])
+        .split(area);
+
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled("search ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw(format!("\"{}\" ", query)),
+        Span::styled(
+            format!("({} results)", results.len()),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]))
+    .block(Block::default().borders(Borders::BOTTOM));
+    frame.render_widget(header, chunks[0]);
+
+    if results.is_empty() {
+        let empty = Paragraph::new("No results found. Try a different query or run `oobo search --content all`.")
+            .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(empty, chunks[1]);
+        return;
+    }
+
+    let items: Vec<ListItem> = results
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let lang = r.chunk.language.as_deref().unwrap_or("?");
+            let header_line = Line::from(vec![
+                Span::styled(
+                    format!("{:>2}. ", i + 1),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    &r.chunk.file_path,
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!(":{}-{}", r.chunk.start_line, r.chunk.end_line)),
+                Span::styled(format!(" [{lang}]"), Style::default().fg(Color::Blue)),
+                Span::styled(
+                    format!("  {:.3}", r.score),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+
+            let snippet: String = r
+                .chunk
+                .content
+                .lines()
+                .take(3)
+                .map(|l| format!("    {l}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let snippet_line = Line::from(Span::styled(
+                snippet,
+                Style::default().fg(Color::White),
+            ));
+
+            ListItem::new(vec![header_line, snippet_line, Line::raw("")])
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .title(" Code Results ")
+            .borders(Borders::ALL),
+    );
+    frame.render_widget(list, chunks[1]);
 }

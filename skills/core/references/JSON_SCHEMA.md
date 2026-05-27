@@ -6,7 +6,9 @@ These fields describe the current 1.0 command surface. Removed 0.1.x commands su
 
 **anchor show**: object with `sha`, `parents[]`, `timestamp`, `author.raw`, `subject`, `tools[]`, `tokens.{input,output,cache_read,cache_write,total}`, `attribution.{ai_lines,human_lines,ai_pct}`, `sessions[]`, `files_changed[]`.
 
-**search**: object containing `query`, `sources[]`, `total_hits`, and `hits[]` for local and/or remote session/anchor matches. Use `--local`, `--remote`, or `--both` to control sources.
+**search**: object containing `query`, `total_hits`, and `results[]` for code search matches. Each result has `file`, `lines`, `language`, `score`, `snippet`.
+
+**recall**: object containing `query`, `sources[]`, `total_hits`, and `hits[]` for local and/or remote session/anchor matches. Use `--local`, `--remote`, or `--both` to control sources.
 
 **bare `oobo` outside a repo**: object with `projects[]` and aggregate `stats`. Each project includes `id`, `name`, `path`, `remote`, `enabled`, `last_activity`, `anchors`, `tokens`, `ai_pct`.
 

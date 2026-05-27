@@ -304,7 +304,8 @@ EOF
     echo "  Quick reference:"
     echo "    oobo                    - open the memory feed"
     echo "    oobo anchor show <sha>  - drill into a commit"
-    echo "    oobo search \"query\"    - search local anchor memory"
+    echo "    oobo search \"query\"    - semantic code search"
+    echo "    oobo recall \"query\"    - search sessions and anchors"
     echo ""
 
     # Clean up tmpdir before exec (exec replaces the process so the

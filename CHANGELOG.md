@@ -59,7 +59,8 @@ etc.). This release strips it down to a focused, narrow surface:
 | `oobo` | Memory feed — scrollable TUI timeline of anchors |
 | `oobo anchor show <sha>` | Drill into a commit's AI context |
 | `oobo blame <file>` | `git blame` with AI attribution overlay |
-| `oobo search <query>` | Find past sessions (local + remote) |
+| `oobo search <query>` | Semantic code search (hybrid BM25 + vector) |
+| `oobo recall <query>` | Find past sessions (local + remote) |
 | `oobo delta` | Compare two anchors (requires API key) |
 | `oobo goto <id>` / `oobo back` | Time-travel between turns/commits |
 | `oobo enable` / `oobo disable` | Per-project tracking toggle |
@@ -108,7 +109,7 @@ Removed commands print a one-time hint pointing to their replacement
 | `oobo scan` | Automatic — happens on every commit |
 | `oobo ignore` / `oobo unignore` | `oobo disable` / `oobo enable` |
 | `oobo sync` / `oobo auth` | `oobo settings set key <API_KEY>` |
-| `oobo sessions` | `oobo search` or `oobo anchor show <sha>` |
+| `oobo sessions` | `oobo recall` or `oobo anchor show <sha>` |
 | `oobo share` / `oobo export` | `oobo anchor show <sha> --json` |
 | `oobo card` / `oobo dash` / `oobo stats` | Removed entirely |
 

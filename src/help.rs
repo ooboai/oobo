@@ -7,7 +7,8 @@ use crate::cli::OutputMode;
 
 pub const TOPICS: &[(&str, &str)] = &[
     ("anchors", "What are anchors and how do they work"),
-    ("search", "Search syntax, filters, and cloud vs local"),
+    ("search", "Semantic code search (hybrid BM25 + vector)"),
+    ("recall", "Session/anchor search — syntax, filters, cloud vs local"),
     ("blame", "Reading the AI attribution overlay"),
     ("hooks", "How git and agent hooks capture sessions"),
     ("config", "All settings explained"),
@@ -77,7 +78,8 @@ fn emit(topic: &str, content: &str, mode: OutputMode) {
 fn lookup(topic: &str) -> Option<&'static str> {
     match topic {
         "anchors" => Some(HELP_ANCHORS),
-        "search" => Some(HELP_SEARCH),
+        "search" => Some(HELP_CODE_SEARCH),
+        "recall" => Some(HELP_SEARCH),
         "blame" => Some(HELP_BLAME),
         "hooks" => Some(HELP_HOOKS),
         "config" => Some(HELP_CONFIG),
@@ -111,14 +113,14 @@ Commands:
 ";
 
 const HELP_SEARCH: &str = "\
-Search finds past sessions and anchors by matching your query against
+Recall finds past sessions and anchors by matching your query against
 commit messages, intents, and session content.
 
 Usage:
-  oobo search \"auth middleware\"     Search this project
-  oobo search \"query\" --json        Structured output
-  oobo search \"query\" --since 7d    Last 7 days only
-  oobo search \"query\" --tool cursor Scope to a tool
+  oobo recall \"auth middleware\"     Search this project
+  oobo recall \"query\" --json        Structured output
+  oobo recall \"query\" --since 7d    Last 7 days only
+  oobo recall \"query\" --tool cursor Scope to a tool
 
 Search sources:
   - Local: reads from the oobo/anchors/v1 branch in this repo
@@ -127,6 +129,22 @@ Search sources:
 
 Configure cloud search:
   oobo settings set key <your-api-key>
+";
+
+const HELP_CODE_SEARCH: &str = "\
+Semantic code search finds relevant code by meaning, not just keywords.
+Powered by sonar (hybrid BM25 + vector search).
+
+Usage:
+  oobo search \"auth middleware\"       Search this repo
+  oobo search \"parse config\" -k 10   Top 10 results
+  oobo search \"query\" --mode bm25    Keyword only (fastest)
+  oobo search \"query\" --mode semantic Vector only
+  oobo search \"query\" --content docs  Search docs instead of code
+  oobo search \"query\" --content all   Code + docs + config
+
+The index is built automatically on first search and cached.
+Re-indexing happens when files change.
 ";
 
 const HELP_BLAME: &str = "\

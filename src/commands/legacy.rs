@@ -37,7 +37,7 @@ const HINTS: &[Hint] = &[
     },
     Hint {
         legacy: "sessions",
-        message: "sessions are shown inside 'oobo anchor show <sha>' or 'oobo search'.",
+        message: "sessions are shown inside 'oobo anchor show <sha>' or 'oobo recall'.",
         mapped: Some(&[]),
     },
     Hint {

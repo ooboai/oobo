@@ -1,5 +1,5 @@
-//! Unified TUI — the single entry point for `oobo`, `oobo search`, and
-//! `oobo anchor show`.
+//! Unified TUI — the single entry point for `oobo`, `oobo recall`, `oobo search`,
+//! and `oobo anchor show`.
 //!
 //! Architecture: a single [`App`] owns all state (anchors, filter, time
 //! window, config) and a `Vec<View>` view-stack. The top of the stack is
@@ -342,9 +342,9 @@ pub(super) fn visible_anchor_count(rows: &[AnchorRow], filter: &str) -> usize {
 
 // ── Search entry point ────────────────────────────────────────────
 
-/// Opens the TUI with the remote search view. If a query is provided,
-/// fires the search immediately; otherwise opens the search input.
-pub fn run_search(cfg: &Config, query: &str) -> CmdResult {
+/// Opens the TUI with the recall (memory/session search) view. If a query is
+/// provided, fires the search immediately; otherwise opens the search input.
+pub fn run_recall(cfg: &Config, query: &str) -> CmdResult {
     use super::types::{SearchState, SearchStatus, View};
 
     let Some((mut terminal, mut app)) = bootstrap(cfg)? else {
@@ -365,6 +365,32 @@ pub fn run_search(cfg: &Config, query: &str) -> CmdResult {
         let ss = app.start_search(query.to_string());
         app.stack.push(View::Search(ss));
     }
+
+    run_tui(&mut terminal, &mut app)
+}
+
+/// Opens the TUI with code search results (powered by sonar).
+pub fn run_code_search(
+    cfg: &Config,
+    query: &str,
+    path: &str,
+    top_k: usize,
+    mode: &str,
+    content: &str,
+) -> CmdResult {
+    use super::types::View;
+
+    let Some((mut terminal, mut app)) = bootstrap(cfg)? else {
+        return Ok(0);
+    };
+
+    let results = crate::sonar::search_codebase(query, path, top_k, mode, content, None)
+        .unwrap_or_default();
+
+    app.stack.push(View::CodeSearch {
+        query: query.to_string(),
+        results,
+    });
 
     run_tui(&mut terminal, &mut app)
 }

@@ -24,7 +24,7 @@ Hints are the ONLY backward-compat surface. No shim commands, no auto-forward. T
 | `oobo alias [...]` | removed. oobo is standalone — no git alias needed. | (no mapped command) |
 | `oobo scan` | indexing is automatic now. for a forced reindex: `oobo setup --reindex` | `oobo setup --reindex` |
 | `oobo index` | indexing is automatic now. for a forced reindex: `oobo setup --reindex` | `oobo setup --reindex` |
-| `oobo sessions [...]` | sessions are shown inside `oobo anchor show <sha>` or `oobo search`. | `oobo` |
+| `oobo sessions [...]` | sessions are shown inside `oobo anchor show <sha>` or `oobo recall`. | `oobo` |
 | `oobo projects [...]` | manage projects via `oobo setup`; view them with `oobo` (outside a repo). | `oobo setup` |
 | `oobo ignore` | use `oobo disable` instead. | `oobo disable` |
 | `oobo unignore` | use `oobo enable` instead. | `oobo enable` |
@@ -179,7 +179,7 @@ On `y`, the trailing args (`--force`) are DROPPED — they're not guaranteed to 
 **Example output (stderr):**
 ```
 oobo: 'sessions' was removed in 1.0.
-      sessions are shown inside 'oobo anchor show <sha>' or 'oobo search'.
+      sessions are shown inside 'oobo anchor show <sha>' or 'oobo recall'.
       (this hint will be removed in 1.1.0)
 
 run 'oobo' now? [Y/n]:

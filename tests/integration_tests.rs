@@ -1363,19 +1363,19 @@ fn test_e2e_remote_search_uses_default_server_remote() {
     );
 
     let search = Command::new(oobo_binary())
-        .args(["search", "remote", "--remote", "--json"])
+        .args(["recall", "remote", "--remote", "--json"])
         .env("OOBO_HOME", oobo_home.path())
         .current_dir(tmp.path())
         .output()
         .unwrap();
     assert!(
         search.status.success(),
-        "remote search failed: {}\nstdout:\n{}",
+        "remote recall failed: {}\nstdout:\n{}",
         String::from_utf8_lossy(&search.stderr),
         String::from_utf8_lossy(&search.stdout)
     );
     let value: serde_json::Value =
-        serde_json::from_slice(&search.stdout).expect("search should emit JSON");
+        serde_json::from_slice(&search.stdout).expect("recall should emit JSON");
     assert_eq!(value["hits"][0]["project"]["name"], "remote-project");
     assert_eq!(value["hits"][0]["snippet"], "from configured server");
 }

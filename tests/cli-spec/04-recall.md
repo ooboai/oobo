@@ -1,4 +1,4 @@
-# `oobo search`
+# `oobo recall`
 
 Find any past session across all projects. Search is local-first and reads the local anchor DB. When an API key is configured, remote results are fetched from the backend and merged by score.
 
@@ -19,7 +19,7 @@ Flags:
 ## Basic search — TTY / pretty
 
 ### Invocation
-`oobo search "auth middleware"`
+`oobo recall "auth middleware"`
 
 **Behavior:** Colored, paged hit list. Each hit shows: project, tool, relative time, short intent, and a snippet with the query term highlighted.
 
@@ -41,7 +41,7 @@ oobo-cli · cursor · 3h     extract payment adapter
 ## Agent mode
 
 ### Invocation
-`oobo search "auth middleware" --agent`
+`oobo recall "auth middleware" --agent`
 
 **Behavior:** One line per hit. Columns:
 
@@ -72,7 +72,7 @@ my-app    d4e5f6g gemini 31k 4h   add rate limiter: per-endpoint limits for /api
 ## JSON mode
 
 ### Invocation
-`oobo search "auth middleware" --json`
+`oobo recall "auth middleware" --json`
 
 **Example output:**
 ```json
@@ -105,27 +105,27 @@ my-app    d4e5f6g gemini 31k 4h   add rate limiter: per-endpoint limits for /api
 ## Local-only / remote-only / both
 
 ### Default with no API key
-`oobo search "foo"`
+`oobo recall "foo"`
 
 **Behavior:** Implicit `--local`. `sources` in JSON = `["local"]`.
 
 ### Default with API key
-`oobo search "foo"` (after `oobo settings set key sk_...`)
+`oobo recall "foo"` (after `oobo settings set key sk_...`)
 
 **Behavior:** Implicit `--both`. Local hits and remote hits are merged by descending `score`. `sources = ["local", "remote"]` when the remote call succeeds.
 
 ### Explicit local only
-`oobo search "foo" --local`
+`oobo recall "foo" --local`
 
 **Behavior:** Skip the remote call even if an API key is configured.
 
 ### Explicit remote only
-`oobo search "foo" --remote`
+`oobo recall "foo" --remote`
 
 **Behavior:** Skip local search. If no API key is configured → exit `2` with `error: --remote requires an API key. run: oobo settings set key <...>`.
 
 ### `--both` without an API key
-`oobo search "foo" --both`
+`oobo recall "foo" --both`
 
 **Behavior:** Exit `2` with `error: --both requires an API key. run: oobo settings set key <...>`.
 
@@ -134,25 +134,25 @@ my-app    d4e5f6g gemini 31k 4h   add rate limiter: per-endpoint limits for /api
 ## Filters
 
 ### `--project <name>`
-`oobo search "foo" --project oobo-cli --agent`
+`oobo recall "foo" --project oobo-cli --agent`
 
 **Behavior:** Restrict hits to that project. Resolution: exact name, then fuzzy match (Levenshtein ≤ 2). Ambiguous match → exit `2` with listing.
 
 ### `--tool <name>`
-`oobo search "foo" --tool claude --agent`
+`oobo recall "foo" --tool claude --agent`
 
 ### `--since 7d`
-`oobo search "foo" --since 7d --agent`
+`oobo recall "foo" --since 7d --agent`
 
 ### `--limit N`
-`oobo search "foo" --limit 5 --agent`
+`oobo recall "foo" --limit 5 --agent`
 
 ---
 
 ## Empty / no-result cases
 
 ### Zero hits
-`oobo search "completely nonexistent phrase" --agent`
+`oobo recall "completely nonexistent phrase" --agent`
 
 **Behavior:** Emit nothing to stdout, exit `0`.
 
@@ -163,7 +163,7 @@ my-app    d4e5f6g gemini 31k 4h   add rate limiter: per-endpoint limits for /api
 (empty, with a final newline)
 
 ### Zero hits, pretty mode
-`oobo search "completely nonexistent phrase"`
+`oobo recall "completely nonexistent phrase"`
 
 **Example output:**
 ```
@@ -182,7 +182,7 @@ no results for "completely nonexistent phrase"
 ## Error cases
 
 ### Remote failure with `--both`
-`oobo search "foo" --both` (API key set, but remote returns 5xx or times out)
+`oobo recall "foo" --both` (API key set, but remote returns 5xx or times out)
 
 **Behavior:** Emit local results with a warning prefix; never fail the whole command on remote failure.
 
@@ -195,7 +195,7 @@ stdout: [local hits...]
 **Exit code:** `0`.
 
 ### Remote failure with `--remote` only
-`oobo search "foo" --remote`
+`oobo recall "foo" --remote`
 
 **Behavior:** Hard fail.
 
@@ -206,7 +206,7 @@ error: remote search failed: request: operation timed out
 **Exit code:** `1`.
 
 ### Empty query
-`oobo search ""`
+`oobo recall ""`
 
 **Example output (stderr):**
 ```
@@ -215,7 +215,7 @@ error: query cannot be empty
 **Exit code:** `2`.
 
 ### Missing query
-`oobo search`
+`oobo recall`
 
 **Behavior:** Clap's required-arg error.
 
@@ -224,7 +224,7 @@ error: query cannot be empty
 error: the following required arguments were not provided:
   <query>
 
-Usage: oobo search <query> [OPTIONS]
+Usage: oobo recall <query> [OPTIONS]
 ```
 **Exit code:** `2`.
 

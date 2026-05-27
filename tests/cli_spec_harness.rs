@@ -11,7 +11,7 @@ const SPECS: &[(&str, &str)] = &[
     ("01-bare.md", include_str!("cli-spec/01-bare.md")),
     ("02-anchors.md", include_str!("cli-spec/02-anchors.md")),
     ("03-blame.md", include_str!("cli-spec/03-blame.md")),
-    ("04-search.md", include_str!("cli-spec/04-search.md")),
+    ("04-recall.md", include_str!("cli-spec/04-recall.md")),
     (
         "05-enable-disable.md",
         include_str!("cli-spec/05-enable-disable.md"),
@@ -34,15 +34,21 @@ const SPECS: &[(&str, &str)] = &[
         "14-turns-from.md",
         include_str!("cli-spec/14-turns-from.md"),
     ),
+    ("15-delta.md", include_str!("cli-spec/15-delta.md")),
+    ("16-help.md", include_str!("cli-spec/16-help.md")),
+    (
+        "17-code-search.md",
+        include_str!("cli-spec/17-code-search.md"),
+    ),
 ];
 
 const RESERVED_COMMANDS: &[&str] = &[
-    "anchor", "anchors", "search", "enable", "disable", "setup", "settings", "update", "hooks",
+    "anchor", "anchors", "search", "recall", "enable", "disable", "setup", "settings", "update", "hooks",
     "goto", "back",
 ];
 
 const PUBLIC_HELP_COMMANDS: &[&str] = &[
-    "anchors", "anchor", "delta", "goto", "back", "blame", "search", "settings", "enable",
+    "anchors", "anchor", "delta", "goto", "back", "blame", "search", "recall", "settings", "enable",
     "disable", "setup", "help", "update",
 ];
 
@@ -151,23 +157,23 @@ fn top_level_help_keeps_public_command_footprint_small() {
 }
 
 #[test]
-fn search_help_exposes_real_remote_flags() {
+fn recall_help_exposes_real_remote_flags() {
     let oobo_home = TempDir::new().unwrap();
     let output = Command::new(oobo_binary())
-        .args(["search", "--help"])
+        .args(["recall", "--help"])
         .env("OOBO_HOME", oobo_home.path())
         .output()
-        .expect("run oobo search --help");
-    assert!(output.status.success(), "oobo search --help should succeed");
+        .expect("run oobo recall --help");
+    assert!(output.status.success(), "oobo recall --help should succeed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("--remote"),
-        "search help should expose remote search"
+        "recall help should expose remote search"
     );
     assert!(
         stdout.contains("--both"),
-        "search help should expose local+remote search"
+        "recall help should expose local+remote search"
     );
 }
 
@@ -582,7 +588,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "oobo search auth --agent",
+            command: "oobo recall auth --agent",
             expected_code: 0,
             json_shape: None,
             assert_agent_plain: true,
@@ -591,7 +597,7 @@ fn safe_cli_spec_cases() -> Vec<CliCase> {
             compare_to_git: None,
         },
         CliCase {
-            command: "oobo search auth --json",
+            command: "oobo recall auth --json",
             expected_code: 0,
             json_shape: Some(JsonShape::Composite),
             assert_agent_plain: false,

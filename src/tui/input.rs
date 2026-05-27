@@ -57,6 +57,7 @@ pub(super) fn handle_key(
     match app.stack.last_mut() {
         Some(View::Feed(_)) => handle_feed_key(terminal, app, key),
         Some(View::Search(_)) => Ok(handle_search_key(app, key)),
+        Some(View::CodeSearch { .. }) => Ok(handle_code_search_key(app, key)),
         Some(View::Transcript(_)) => Ok(handle_transcript_key(app, key)),
         Some(View::Diff(_)) => Ok(handle_diff_key(app, key)),
         Some(View::Picker(_)) => handle_picker_key(terminal, app, key),
@@ -333,6 +334,19 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> bool {
         }
     }
     false
+}
+
+// ── Code search view keys ─────────────────────────────────────────────────
+
+fn handle_code_search_key(app: &mut App, key: KeyEvent) -> bool {
+    use crossterm::event::KeyCode;
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.stack.pop();
+            true
+        }
+        _ => false,
+    }
 }
 
 // ── Transcript view keys ──────────────────────────────────────────────

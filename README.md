@@ -60,10 +60,11 @@ oobo anchor show <sha>          # drill into one anchor (sessions, tokens, attri
 oobo goto <turn-or-sha>         # time-travel to a turn or commit (auto-stashes)
 oobo back                       # return to where you were
 oobo blame src/main.rs          # git blame + per-line AI attribution
-oobo search "auth bug"          # search sessions + anchors
+oobo search "auth middleware"   # semantic code search (hybrid BM25 + vector)
+oobo recall "auth bug"          # search sessions + anchors
 ```
 
-**Optionally**, add an [oobo.ai](https://oobo.ai) API key for **remote search** (and other authenticated API calls). Anchor metadata still syncs through Git by default.
+**Optionally**, add an [oobo.ai](https://oobo.ai) API key for **remote recall** (and other authenticated API calls). Anchor metadata still syncs through Git by default.
 
 ```bash
 oobo settings set key <your_key>
@@ -147,7 +148,8 @@ Every command has three mutually exclusive output modes:
 oobo --agent                         # token-efficient commit feed
 oobo --json                          # flat JSON array of anchors
 oobo blame src/main.rs --json        # per-line AI attribution as JSON
-oobo search "auth" --agent           # compact search results
+oobo search "auth" --agent           # compact code search results
+oobo recall "auth" --agent           # compact session search results
 ```
 
 ### Skill file
@@ -200,12 +202,21 @@ oobo blame src/main.rs --json                # per-line AI attribution as JSON
 
 Every `git blame` flag (`-L`, `-w`, `--porcelain`, etc.) is forwarded; machine-output formats (`--porcelain`, `--line-porcelain`, `--incremental`) bypass the AI column automatically.
 
-### Search — find sessions + anchors
+### Search - semantic code search
 
 ```bash
-oobo search "auth bug"                       # full-text search
-oobo search "auth" --since 7d --tool claude --project myapp
-oobo search "auth" --json                    # structured results
+oobo search "auth middleware"                # hybrid BM25 + vector
+oobo search "parse config" -k 10             # top 10 results
+oobo search "deployment" --content docs      # search docs only
+oobo search "auth" --mode bm25              # keyword only (fastest)
+```
+
+### Recall - find sessions + anchors
+
+```bash
+oobo recall "auth bug"                       # full-text search
+oobo recall "auth" --since 7d --tool claude --project myapp
+oobo recall "auth" --json                    # structured results
 ```
 
 ### Delta — compare two anchors
@@ -312,7 +323,7 @@ By default, oobo points at **`api.oobo.ai`** — our free hosted backend. Create
 oobo settings set key <your_key>
 ```
 
-That stores the key for authenticated API use (e.g. `oobo search --remote`). Team sync is Git-first — anchors live on the orphan branch and push with your code. Run `oobo settings unset key` to clear the key.
+That stores the key for authenticated API use (e.g. `oobo recall --remote`). Team sync is Git-first - anchors live on the orphan branch and push with your code. Run `oobo settings unset key` to clear the key.
 
 To run your own server:
 

@@ -109,6 +109,10 @@ impl TimeWindow {
 pub(super) enum View {
     Feed(FeedState),
     Search(SearchState),
+    CodeSearch {
+        query: String,
+        results: Vec<sonar_core::types::SearchResult>,
+    },
     Transcript(TranscriptState),
     Diff(DiffState),
     Picker(PickerState),

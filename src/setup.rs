@@ -185,7 +185,7 @@ pub fn run_setup(non_interactive: bool) -> Result<(), CliError> {
     println!("  You're all set! Try:");
     println!("    oobo               -- see your memory feed");
     println!("    oobo anchor show <sha>  -- drill into a commit");
-    println!("    oobo search <q>    -- find any past session");
+    println!("    oobo recall <q>    -- find any past session");
     println!("    oobo enable        -- enable the current repo later");
     println!("    oobo disable       -- make oobo stay quiet in this repo");
     println!();

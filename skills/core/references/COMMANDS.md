@@ -39,16 +39,27 @@ oobo back                                          # Return to where you were
 `goto` auto-stashes dirty changes, loads the target tree, and records a return
 point. `back` restores the original HEAD and pops the stash.
 
-## Search
+## Search - semantic code search
 
 ```bash
-oobo search "auth bug" --agent                     # Search current project
-oobo search "auth bug" --global --agent            # Search all projects
-oobo search "auth" --since 7d --tool claude        # Filter by time/tool
-oobo search "auth" --project oobo-cli --json       # Explicit project scope
+oobo search "auth middleware" --agent               # Code search in current repo
+oobo search "parse config" -k 10 --agent            # Top 10 results
+oobo search "deployment" --content docs --agent     # Search docs only
+oobo search "auth" --mode bm25 --agent              # Keyword only (fastest)
 ```
 
-Search is local-first. With an API key, default search merges local and remote results; use `--local`, `--remote`, or `--both` to force a source.
+Search uses hybrid BM25 + vector search. The index is built and cached automatically on first run.
+
+## Recall - find sessions and anchors
+
+```bash
+oobo recall "auth bug" --agent                     # Search current project
+oobo recall "auth bug" --global --agent            # Search all projects
+oobo recall "auth" --since 7d --tool claude        # Filter by time/tool
+oobo recall "auth" --project oobo-cli --json       # Explicit project scope
+```
+
+Recall is local-first. With an API key, default recall merges local and remote results; use `--local`, `--remote`, or `--both` to force a source.
 
 ## Delta - compare two anchors
 
@@ -100,14 +111,15 @@ oobo settings project set remote oobo              # Push anchor branch to speci
 
 Valid keys: `key`, `api_url`, `remote`, `transparency`, `tools.experimental`, `setup.scan_roots`.
 
-A non-empty default API key is used for remote search and delta. `oobo settings unset key` removes the persisted key. `OOBO_SECRET_KEY` overrides the persisted key for the current process only. There is no cloud upload pipeline; team sync is Git-first via the orphan branch.
+A non-empty default API key is used for remote recall and delta. `oobo settings unset key` removes the persisted key. `OOBO_SECRET_KEY` overrides the persisted key for the current process only. There is no cloud upload pipeline; team sync is Git-first via the orphan branch.
 
 ## Help
 
 ```bash
 oobo help                                          # List all help topics
 oobo help anchors                                  # What anchors are and how they work
-oobo help search                                   # Search syntax and cloud configuration
+oobo help search                                   # Code search usage
+oobo help recall                                   # Recall syntax and cloud configuration
 oobo help blame                                    # Reading the AI attribution overlay
 oobo help hooks                                    # Git and agent hooks explained
 oobo help config                                   # All settings explained

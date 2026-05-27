@@ -8,7 +8,7 @@ Oobo is open-source software published by [NoCode Inc](https://nocode.inc).
 | Security policy | [SECURITY.md](https://github.com/ooboai/oobo/blob/main/SECURITY.md) - responsible disclosure, safe harbor |
 | Privacy policy | [oobo.ai/privacy](https://oobo.ai/privacy) |
 | Read-only data access | Never modifies AI tool conversation history or databases. Reads session metadata (timestamps, model names, token counts). Writes hook configuration files during `oobo setup`. |
-| Local-first | All data stays on the local orphan branch (`oobo/anchors/v1`). Anchor metadata is pushed only to your existing git remote (alongside your code) via the pre-push hook. The optional remote API (search, delta) requires a separate API key. |
+| Local-first | All data stays on the local orphan branch (`oobo/anchors/v1`). Anchor metadata is pushed only to your existing git remote (alongside your code) via the pre-push hook. The optional remote API (recall, delta) requires a separate API key. |
 | No telemetry | Does not phone home or collect usage data |
 | No credentials | Never accesses API keys, browsing history, or file contents outside of AI tool storage |
 | Secret redaction | Sessions scrubbed with [gitleaks](https://github.com/gitleaks/gitleaks) patterns before any sharing |
@@ -30,6 +30,6 @@ Agents should operate with **transparency on** - this is the recommended default
 | Setting | Value | Why |
 |---------|-------|-----|
 | `transparency` | `on` | Metadata + redacted transcripts sync |
-| `key` | *(optional)* | For remote search and delta only; no cloud upload pipeline exists |
+| `key` | *(optional)* | For remote recall and delta only; no cloud upload pipeline exists |
 | `--agent` flag | Always use | Compact output, low token cost |
 | `--json` flag | When needed | Full structured data for parsing |

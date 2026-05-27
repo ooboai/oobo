@@ -1,4 +1,4 @@
-//! `oobo search` — local-first search across sessions, anchors, and commit
+//! `oobo recall` — local-first search across sessions, anchors, and commit
 //! subjects. When an API key is configured, remote results are merged in.
 
 use crate::cli::OutputMode;
@@ -139,8 +139,8 @@ fn resolve_source(api_key: &str, explicit: Option<Source>) -> Source {
     }
 }
 
-/// Public entry used by the TUI's in-app search. Runs the same ranking as
-/// `oobo search` (local only) and returns raw hits.
+/// Public entry used by the TUI's in-app recall. Runs the same ranking as
+/// `oobo recall` (local only) and returns raw hits.
 pub fn collect_local(cfg: &Config, query: &str, opts: &Options) -> Result<Vec<Hit>, CliError> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
@@ -419,7 +419,7 @@ fn emit_agent(hits: &[Hit], _sources: &[&str], has_key: bool, answer: Option<&st
         println!();
         println!("commands:");
         println!("  oobo anchor show <sha>       # details for any result above");
-        println!("  oobo search \"query\" --json   # structured output");
+        println!("  oobo recall \"query\" --json   # structured output");
     }
 }
 

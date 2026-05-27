@@ -221,7 +221,7 @@ fn emit_list_agent(rows: &[FeedRow], project_name: &str, in_repo: bool) {
         println!("commands:");
         println!("  oobo anchor show <sha>   # details for any anchor above");
         println!("  oobo blame <file> [sha]  # per-line AI/human attribution");
-        println!("  oobo search \"query\"      # search sessions");
+        println!("  oobo recall \"query\"      # search sessions");
     }
 }
 
@@ -358,7 +358,7 @@ fn emit_list_json(_cfg: &Config, rows: &[FeedRow], project_name: &str, in_repo: 
         "actions": [
             { "command": "oobo anchor show <sha>", "description": "show anchor details" },
             { "command": "oobo blame <file> [sha]", "description": "line attribution" },
-            { "command": "oobo search \"query\"", "description": "search sessions" },
+            { "command": "oobo recall \"query\"", "description": "search sessions" },
         ],
     });
     crate::utils::print_json(&json);

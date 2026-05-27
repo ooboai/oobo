@@ -29,7 +29,8 @@ Commands (require a git repository):
   goto         Travel to a turn or commit (auto-stashes)
   back         Return to where you were before goto
   blame        Per-line AI/human attribution
-  search       Find past sessions and anchors
+  search       Semantic code search (hybrid BM25 + vector)
+  recall       Find past sessions and anchors
   enable       Start tracking this project
   disable      Stop tracking this project
 
@@ -162,18 +163,48 @@ pub enum Command {
         args: Vec<String>,
     },
 
-    /// Search sessions and anchors (this project by default; --global for all)
+    /// Semantic code search (hybrid BM25 + vector, powered by sonar)
     #[command(
         display_order = 7,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
-                       oobo search \"auth middleware\"      This project (inside a repo)\n  \
-                       oobo search foo --global            Across all projects\n  \
-                       oobo search foo --since 7d          Last 7 days\n  \
-                       oobo search foo --project oobo-cli  Explicit project scope\n  \
-                       oobo search foo --tool cursor       Scope to a tool\n  \
+                       oobo search \"auth middleware\"       Search this repo\n  \
+                       oobo search \"parse config\" -k 5    Top 5 results\n  \
+                       oobo search foo --mode bm25         Keyword only\n  \
+                       oobo search foo --content docs      Search docs only\n  \
                        oobo search foo --agent             Compact output"
     )]
     Search {
+        /// Natural language or code query
+        query: Vec<String>,
+        /// Path to directory or git URL to search [default: repo root or .]
+        #[arg(short, long)]
+        path: Option<String>,
+        /// Branch or tag to clone (only used with git URLs)
+        #[arg(long, name = "ref")]
+        git_ref: Option<String>,
+        /// Number of results to return
+        #[arg(short = 'k', long = "top-k", default_value_t = 5)]
+        top_k: usize,
+        /// Search mode: hybrid, semantic, or bm25
+        #[arg(short, long, default_value = "hybrid")]
+        mode: String,
+        /// Content types to search: code, docs, config, or all
+        #[arg(long, default_value = "code")]
+        content: String,
+    },
+
+    /// Search past sessions and anchors (memory recall)
+    #[command(
+        display_order = 8,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo recall \"auth middleware\"      This project (inside a repo)\n  \
+                       oobo recall foo --global            Across all projects\n  \
+                       oobo recall foo --since 7d          Last 7 days\n  \
+                       oobo recall foo --project oobo-cli  Explicit project scope\n  \
+                       oobo recall foo --tool cursor       Scope to a tool\n  \
+                       oobo recall foo --agent             Compact output"
+    )]
+    Recall {
         /// Free-text query (quote multi-word queries)
         query: Vec<String>,
         /// Search across all projects (default is the current project when in a repo)
@@ -311,6 +342,7 @@ pub enum AnchorAction {
         args: Vec<String>,
     },
 }
+
 
 #[derive(Subcommand, Debug)]
 pub enum HookAction {
@@ -520,6 +552,44 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
         Some(Command::Blame { args }) => dispatch_blame(cfg, args, mode),
         Some(Command::Search {
             query,
+            path,
+            git_ref,
+            top_k,
+            mode: search_mode,
+            content,
+        }) => {
+            let q = query.join(" ");
+            if q.trim().is_empty() {
+                eprintln!("error: query cannot be empty");
+                return Ok(2);
+            }
+            let project_root = git::proxy::project_root(cfg);
+            let root = path
+                .or(project_root)
+                .unwrap_or_else(|| ".".to_string());
+            if mode == OutputMode::Tui {
+                return crate::tui::app::run_code_search(cfg, &q, &root, top_k, &search_mode, &content);
+            }
+            match crate::sonar::search_codebase(
+                &q,
+                &root,
+                top_k,
+                &search_mode,
+                &content,
+                git_ref.as_deref(),
+            ) {
+                Ok(results) => {
+                    emit_sonar_results(&results, &q, mode);
+                    Ok(0)
+                }
+                Err(e) => {
+                    eprintln!("search: {e}");
+                    Ok(1)
+                }
+            }
+        }
+        Some(Command::Recall {
+            query,
             global,
             local,
             remote,
@@ -530,38 +600,38 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
             limit,
         }) => {
             let source = if local {
-                Some(crate::commands::search::Source::Local)
+                Some(crate::commands::recall::Source::Local)
             } else if remote {
-                Some(crate::commands::search::Source::Remote)
+                Some(crate::commands::recall::Source::Remote)
             } else if both {
-                Some(crate::commands::search::Source::Both)
+                Some(crate::commands::recall::Source::Both)
             } else {
                 None
             };
 
             let scope = if let Some(name) = project {
-                crate::commands::search::Scope::Project(name)
+                crate::commands::recall::Scope::Project(name)
             } else if global {
-                crate::commands::search::Scope::Global
+                crate::commands::recall::Scope::Global
             } else {
                 match crate::git::proxy::project_root(cfg) {
-                    Some(root) => crate::commands::search::Scope::CurrentRepo(root),
-                    None => crate::commands::search::Scope::Global,
+                    Some(root) => crate::commands::recall::Scope::CurrentRepo(root),
+                    None => crate::commands::recall::Scope::Global,
                 }
             };
 
             let q = query.join(" ");
             if mode == OutputMode::Tui {
-                return crate::tui::app::run_search(cfg, &q);
+                return crate::tui::app::run_recall(cfg, &q);
             }
-            let opts = crate::commands::search::Options {
+            let opts = crate::commands::recall::Options {
                 source,
                 since,
                 scope,
                 tool,
                 limit,
             };
-            let code = crate::commands::search::run(cfg, &q, &opts, mode).await?;
+            let code = crate::commands::recall::run(cfg, &q, &opts, mode).await?;
             Ok(code)
         }
         Some(Command::Settings { args }) => {
@@ -734,4 +804,76 @@ fn dispatch_blame(cfg: &Config, mut args: Vec<String>, mode: OutputMode) -> CmdR
     }
     let code = crate::commands::blame::run(cfg, &args, mode)?;
     Ok(code)
+}
+
+// ── sonar output ───────────────────────────────────────────────────────────
+
+fn emit_sonar_results(results: &[sonar_core::types::SearchResult], query: &str, mode: OutputMode) {
+    match mode {
+        OutputMode::Json => {
+            let arr: Vec<serde_json::Value> = results
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "file": r.chunk.file_path,
+                        "lines": [r.chunk.start_line, r.chunk.end_line],
+                        "language": r.chunk.language,
+                        "score": r.score,
+                        "snippet": truncate(&r.chunk.content, 200),
+                    })
+                })
+                .collect();
+            let json = serde_json::json!({
+                "query": query,
+                "total_hits": results.len(),
+                "results": arr,
+            });
+            crate::utils::print_json(&json);
+        }
+        OutputMode::Agent => {
+            if results.is_empty() {
+                println!("no results for \"{query}\"");
+                return;
+            }
+            for r in results {
+                println!(
+                    "{} L{}-{} ({:.2}) {}",
+                    r.chunk.file_path,
+                    r.chunk.start_line,
+                    r.chunk.end_line,
+                    r.score,
+                    truncate(&r.chunk.content.replace('\n', " "), 80),
+                );
+            }
+        }
+        OutputMode::Tui => {
+            if results.is_empty() {
+                println!("no code results for \"{query}\"");
+                return;
+            }
+            for r in results {
+                let lang = r.chunk.language.as_deref().unwrap_or("?");
+                println!(
+                    "\x1b[1m{}\x1b[0m:{}-{} \x1b[2m[{lang}]\x1b[0m  score {:.3}",
+                    r.chunk.file_path, r.chunk.start_line, r.chunk.end_line, r.score,
+                );
+                for line in r.chunk.content.lines().take(4) {
+                    println!("  {line}");
+                }
+                println!();
+            }
+        }
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        let mut end = max;
+        while !s.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
+    }
 }

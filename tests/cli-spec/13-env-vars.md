@@ -78,7 +78,7 @@ Provide the API key for this process without writing it to disk.
 
 Example:
 ```bash
-OOBO_SECRET_KEY=sk_... oobo search "auth" --remote
+OOBO_SECRET_KEY=sk_... oobo recall "auth" --remote
 ```
 
 Invariants:

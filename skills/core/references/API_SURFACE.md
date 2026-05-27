@@ -1,6 +1,6 @@
 # Remote API Surface
 
-Remotes implement endpoints under `/anchors`. The CLI calls search and delta (both authenticated). There is no cloud upload/ingest pipeline; team sync is Git-first via the orphan branch.
+Remotes implement endpoints under `/anchors`. The CLI calls recall and delta (both authenticated). There is no cloud upload/ingest pipeline; team sync is Git-first via the orphan branch.
 
 | Endpoint | Method | Auth | Required | Purpose |
 |----------|--------|------|----------|---------|

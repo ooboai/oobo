@@ -38,7 +38,8 @@ Three mutually exclusive modes:
 | Anchors in the last 24h | `oobo --since 24h` |
 | Filter by tool | `oobo --tool cursor` |
 | Per-line AI blame | `oobo blame src/main.rs` |
-| Search sessions + anchors | `oobo search "query"` |
+| Semantic code search | `oobo search "query"` |
+| Search sessions + anchors | `oobo recall "query"` |
 | Compare two anchors | `oobo delta` |
 | Travel to a turn or commit | `oobo goto <id>` |
 | Return to where you were | `oobo back` |
@@ -59,7 +60,7 @@ oobo setup                      # interactive (asks before modifying git)
 oobo setup --non-interactive    # for agents / scripts
 ```
 
-Data is **local-first**. Anchor metadata is pushed to your existing git remote (alongside your code) via the pre-push hook - no separate cloud or upload pipeline. A key (`oobo settings set key` / `OOBO_SECRET_KEY`) is only needed for the optional remote search/delta API.
+Data is **local-first**. Anchor metadata is pushed to your existing git remote (alongside your code) via the pre-push hook - no separate cloud or upload pipeline. A key (`oobo settings set key` / `OOBO_SECRET_KEY`) is only needed for the optional remote recall/delta API.
 
 Capture is real-time: git hooks (post-commit, pre-push, post-merge, post-rewrite) fire automatically and write anchors to the orphan branch. No background scanning or indexing needed.
 

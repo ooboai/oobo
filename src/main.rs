@@ -21,6 +21,7 @@ mod redact;
 mod remote;
 mod session;
 mod setup;
+mod sonar;
 mod taps;
 mod tools;
 mod trace;

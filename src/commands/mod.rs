@@ -5,7 +5,7 @@ pub mod blame;
 pub mod delta;
 pub mod goto;
 pub mod legacy;
-pub mod search;
+pub mod recall;
 pub mod settings;
 pub mod sync;
 pub mod toggle;
