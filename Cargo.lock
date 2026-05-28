@@ -2866,7 +2866,8 @@ dependencies = [
 [[package]]
 name = "sonar-core"
 version = "0.3.0"
-source = "git+https://github.com/ooboai/sonar?tag=v0.3.0#0135ddadb1fc832c52790d3110b33b889e1f665a"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d134f14bc2cdd39b1b758711495bf1bffa43bcf031c933e2e8ced5c1f01fb869"
 dependencies = [
  "anyhow",
  "blake3",
