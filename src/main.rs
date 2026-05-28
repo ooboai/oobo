@@ -14,6 +14,7 @@ mod feed;
 mod git;
 mod help;
 mod hooks;
+mod mcp;
 mod paths;
 mod project;
 mod project_config;
@@ -49,6 +50,16 @@ fn main() {
     match rt.block_on(cli::route(&cfg)) {
         Ok(code) => process::exit(code),
         Err(e) => {
+            if let error::CliError::McpRun { api_key, api_url } = e {
+                drop(rt);
+                match mcp::run(api_key, &api_url) {
+                    Ok(()) => process::exit(0),
+                    Err(e) => {
+                        eprintln!("oobo: {e}");
+                        process::exit(1);
+                    }
+                }
+            }
             eprintln!("oobo: {e}");
             process::exit(e.exit_code());
         }

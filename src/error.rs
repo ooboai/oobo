@@ -60,6 +60,13 @@ pub enum CliError {
 
     #[error("{0}")]
     Remote(String),
+
+    /// Sentinel: signals main() to run the MCP server outside the tokio runtime.
+    #[error("mcp")]
+    McpRun {
+        api_key: Option<String>,
+        api_url: String,
+    },
 }
 
 impl CliError {
@@ -69,6 +76,7 @@ impl CliError {
             Self::NotARepo | Self::Io { .. } | Self::Git(_) | Self::Config(_) | Self::Remote(_) => {
                 1
             }
+            Self::McpRun { .. } => 0,
         }
     }
 }

@@ -31,16 +31,17 @@ const SPECS: &[(&str, &str)] = &[
         "17-code-search.md",
         include_str!("cli-spec/17-code-search.md"),
     ),
+    ("18-mcp.md", include_str!("cli-spec/18-mcp.md")),
 ];
 
 const RESERVED_COMMANDS: &[&str] = &[
     "anchor", "anchors", "search", "recall", "enable", "disable", "setup", "settings", "update", "hooks",
-    "goto", "back",
+    "goto", "back", "mcp",
 ];
 
 const PUBLIC_HELP_COMMANDS: &[&str] = &[
     "anchors", "anchor", "delta", "goto", "back", "blame", "search", "recall", "settings", "enable",
-    "disable", "setup", "help", "update",
+    "disable", "setup", "mcp", "help", "update",
 ];
 
 const FORBIDDEN_COMMANDS: &[&str] = &[

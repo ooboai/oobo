@@ -33,6 +33,7 @@ pub mod feed;
 pub mod git;
 pub mod help;
 pub mod hooks;
+pub mod mcp;
 pub mod paths;
 pub mod project;
 pub mod project_config;

@@ -283,6 +283,43 @@ pub struct DeltaErrorResponse {
     pub message: Option<String>,
 }
 
+// ── Context (MCP get_context) ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    pub budget_tokens: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ContextResponse {
+    #[serde(default)]
+    pub context: Vec<ContextItem>,
+    #[serde(default)]
+    pub total_tokens_used: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ContextItem {
+    #[serde(default, rename = "type")]
+    pub item_type: Option<String>,
+    #[serde(default)]
+    pub relevance: Option<f64>,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub anchor_sha: Option<String>,
+    #[serde(default)]
+    pub timestamp: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
