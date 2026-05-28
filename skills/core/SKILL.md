@@ -1,6 +1,6 @@
 ---
 name: oobo
-description: Context beyond the diff - captures AI sessions, tokens, code attribution, and enables semantic code search. Use when the user asks about commit history with AI context, session history, code attribution, token usage, or code search.
+description: Context beyond the diff - captures AI sessions, tokens, code attribution, semantic code search, and engineering memory via MCP. Use when the user asks about commit history with AI context, session history, code attribution, token usage, code search, or engineering memory.
 metadata:
   author: oobo
   version: "1.1.0"
@@ -13,7 +13,7 @@ compatibility: Requires git. Works with Cursor, Claude Code, Gemini CLI, Codex, 
 
 # Oobo - Context beyond the diff
 
-Enriches every commit with AI context: which sessions contributed, token counts, code attribution (AI vs human lines), and model used. Includes semantic code search (hybrid BM25 + vector). Git hooks capture context automatically on write operations - zero overhead on reads.
+Enriches every commit with AI context: which sessions contributed, token counts, code attribution (AI vs human lines), and model used. Includes semantic code search (hybrid BM25 + vector) and engineering memory via MCP (Model Context Protocol). Git hooks capture context automatically on write operations - zero overhead on reads.
 
 If `oobo` is not installed, direct the user to https://github.com/ooboai/oobo/releases.
 
@@ -40,6 +40,8 @@ Three mutually exclusive modes:
 | Per-line AI blame | `oobo blame src/main.rs` |
 | Semantic code search | `oobo search "query"` |
 | Search sessions + anchors | `oobo recall "query"` |
+| Start MCP server (stdio) | `oobo mcp` |
+| Configure AI tools for MCP | `oobo mcp install` |
 | Compare two anchors | `oobo delta` |
 | Travel to a turn or commit | `oobo goto <id>` |
 | Return to where you were | `oobo back` |
@@ -71,6 +73,29 @@ Capture is real-time: git hooks (post-commit, pre-push, post-merge, post-rewrite
 - `oobo update` self-updates and runs migrations automatically
 - Data lives on a git orphan branch (`oobo/anchors/v1`) - git-native, no external database
 - `oobo blame` is a strict superset of `git blame` - every flag is forwarded; machine-output formats (`--porcelain`, `--line-porcelain`, `--incremental`) bypass the AI overlay automatically.
+
+## MCP (Model Context Protocol)
+
+Oobo exposes engineering memory to AI agents via MCP. One command configures your tools:
+
+```bash
+oobo mcp install              # auto-detect Cursor/Claude/Copilot and configure
+oobo mcp install cursor       # configure a specific tool
+oobo mcp install --hosted     # cloud-only mode (no local binary needed by the tool)
+oobo mcp install --remove     # uninstall MCP configuration
+```
+
+### Tools exposed
+
+| Tool | Description |
+|------|-------------|
+| `search` | Semantic code search (local, via sonar) |
+| `find_related` | Find code related to a query across the indexed codebase |
+| `recall` | Search engineering memory (sessions, decisions, patterns) |
+| `get_context` | Token-budgeted, file-scoped context from engineering history |
+| `ask` | Natural language questions against the team's engineering memory |
+
+The local server (`oobo mcp`) runs as a stdio child process managed by the AI tool. Cloud tools (`recall`, `get_context`, `ask`) require an API key (`oobo settings set key <key>`).
 
 ## Legacy commands
 
