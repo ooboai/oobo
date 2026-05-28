@@ -1,6 +1,15 @@
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # paste is unmaintained (archived by dtolnay) but still functional.
+    # Transitive dep via sonar-core → tokenizers → macro_rules_attribute.
+    "RUSTSEC-2024-0436",
+    # instant is unmaintained; transitive dep via sonar-core.
+    "RUSTSEC-2024-0384",
+    # number_prefix is unmaintained; transitive dep via sonar-core → indicatif.
+    "RUSTSEC-2025-0119",
+]
 
 [licenses]
 version = 2
@@ -8,6 +17,7 @@ allow = [
     "Apache-2.0",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "CC0-1.0",
     "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
