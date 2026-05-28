@@ -5,16 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] - 2026-05-27
+## [1.1.0] - 2026-05-28
 
 ### Added
 
+- **`oobo mcp`** -- local stdio JSON-RPC server implementing the Model Context Protocol. Exposes engineering memory tools (`search`, `find_related`, `recall`, `get_context`, `ask`) to any MCP-compatible AI agent. Runs as a child process managed by the AI tool.
+- **`oobo mcp install`** -- auto-configures Cursor, Claude Code, or Copilot to use the oobo MCP server. Detects installed tools or accepts an explicit target (`oobo mcp install cursor`). Supports `--hosted` for cloud-only mode (no local binary needed) and `--remove` to uninstall.
+- **Cloud MCP tools** -- `recall` (semantic memory search), `get_context` (token-budgeted file-scoped context), and `ask` (natural language queries against engineering history) are available via both the local server and the hosted endpoint at `agentic.oobo.ai/mcp`.
 - **`oobo search`** -- semantic code search powered by sonar (hybrid BM25 + vector). Indexes locally, no cloud needed. Supports `--mode` (hybrid/bm25/semantic), `--content` (code/docs/config/all), and all standard output modes.
 
 ### Changed
 
 - **`oobo recall`** -- renamed from `oobo search`. Memory/session/anchor search is now `oobo recall` to avoid confusion with code search.
 - **Branding** -- updated from "git decorator" to "Context beyond the diff" to reflect the broader scope (capture, search, recall).
+- **Project-level config resolution** -- the `mcp` command now reads `api_key` and `api_url` from the project's `.oobo/config` file, falling back to global config. This ensures per-project API keys work correctly.
 
 ### Removed
 
@@ -427,6 +431,7 @@ Historical entries below describe 0.1.x behavior.
 - **CI/CD pipeline**: multi-platform testing (Ubuntu, macOS, Debian, Alpine) and 6-target release builds
 - **Dual license**: Apache 2.0 and MIT
 
+[1.1.0]: https://github.com/ooboai/oobo/compare/v1.0.3...v1.1.0
 [1.0.0]: https://github.com/ooboai/oobo/compare/v0.1.15...v1.0.0
 [0.1.15]: https://github.com/ooboai/oobo/compare/v0.1.14...v0.1.15
 [0.1.14]: https://github.com/ooboai/oobo/compare/v0.1.13...v0.1.14

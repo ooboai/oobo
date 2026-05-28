@@ -146,6 +146,29 @@ pub async fn post_delta(
     Err(map_server_error(status, resp).await)
 }
 
+pub async fn get_context_with_timeout(
+    request: &payload::ContextRequest,
+    api_key: &str,
+    base_url: &str,
+    timeout: std::time::Duration,
+) -> RemoteResult<payload::ContextResponse> {
+    let resp = authenticated_post(base_url, "memory/context", api_key, request, timeout).await?;
+    let status = resp.status();
+
+    if status.is_success() {
+        return resp
+            .json::<payload::ContextResponse>()
+            .await
+            .map_err(|e| RemoteError::Parse(e.to_string()));
+    }
+
+    if let Some(e) = map_common_errors(status) {
+        return Err(e);
+    }
+
+    Err(map_server_error(status, resp).await)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

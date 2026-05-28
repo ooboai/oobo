@@ -1018,7 +1018,7 @@ fn draw_code_search(
 
     let header = Paragraph::new(Line::from(vec![
         Span::styled("search ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::raw(format!("\"{}\" ", query)),
+        Span::raw(format!("\"{query}\" ")),
         Span::styled(
             format!("({} results)", results.len()),
             Style::default().fg(Color::DarkGray),

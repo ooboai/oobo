@@ -39,6 +39,7 @@ Or grab a binary from [Releases](https://github.com/ooboai/oobo/releases).
 - **Semantic Code Search** -- Hybrid BM25 + vector search (powered by sonar) finds code by meaning, not just keywords. Indexes locally, no cloud needed.
 - **15 Tools Supported** -- Cursor, Claude Code, Gemini CLI, OpenCode, Codex, Aider, GitHub Copilot, Windsurf, Zed, Trae, Amp, Continue, Factory Droid, Junie, and Kiro.
 - **Code Attribution** -- Know exactly which lines were AI-generated vs human-written, per commit.
+- **Engineering Memory via MCP** -- Expose your team's engineering history to AI agents via Model Context Protocol. One command (`oobo mcp install`) configures Cursor, Claude Code, or Copilot. Agents gain access to `recall`, `get_context`, and `ask` tools -- retrieving relevant decisions, patterns, and context from past work.
 - **Agent-Native** -- Three output modes (pretty / `--agent` token-efficient plain text / `--json` structured). `--agent` auto-activates when stdout isn't a TTY or inside a coding agent.
 - **Local-First, Private by Default** -- Anchors live in your git repo (orphan branch), with a lightweight local cache in `~/.oobo/`. Anchor metadata travels only where your code already goes (your git remote, via `git push`). No telemetry. Secrets are redacted before sharing.
 - **Anchor System** -- Extends git commits with structured AI metadata that travels with the repo via a git orphan branch. No external dependencies.
@@ -65,11 +66,21 @@ oobo search "auth middleware"   # semantic code search (hybrid BM25 + vector)
 oobo recall "auth bug"          # search sessions + anchors
 ```
 
-**Optionally**, add an [oobo.ai](https://oobo.ai) API key for **remote recall** (and other authenticated API calls). Anchor metadata still syncs through Git by default.
+**Optionally**, add an [oobo.ai](https://oobo.ai) API key for **remote recall** and **MCP engineering memory**:
 
 ```bash
 oobo settings set key <your_key>
 ```
+
+### MCP -- Give your AI tools engineering memory
+
+```bash
+oobo mcp install              # auto-detect and configure Cursor/Claude/Copilot
+oobo mcp install cursor       # configure a specific tool
+oobo mcp install --hosted     # cloud-only (no local binary needed by the AI tool)
+```
+
+Once configured, your AI agent gains access to tools like `recall` (search engineering memory), `get_context` (token-budgeted relevant context), and `ask` (natural language queries against your team's history).
 
 ---
 

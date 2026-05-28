@@ -37,6 +37,7 @@ Commands (require a git repository):
 Commands (work anywhere):
   setup        Onboarding wizard  --  install hooks, configure tools
   settings     Show / set / unset configuration
+  mcp          MCP server for AI tool integration (code search + memory)
   help         Built-in documentation (oobo help <topic>)
   update       Self-update to the latest version
 
@@ -311,6 +312,20 @@ pub enum Command {
         post_update: bool,
     },
 
+    /// Start the MCP server (stdio JSON-RPC for AI tool integration)
+    #[command(
+        display_order = 12,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo mcp                     Start MCP server (stdio)\n  \
+                       oobo mcp install             Configure AI tools to use oobo MCP\n  \
+                       oobo mcp install cursor      Configure Cursor only\n  \
+                       oobo mcp install --remove    Remove oobo MCP config"
+    )]
+    Mcp {
+        #[command(subcommand)]
+        action: Option<McpAction>,
+    },
+
     /// Internal hook plumbing (called by agent tools, not typed by users)
     #[command(hide = true)]
     Hooks {
@@ -343,6 +358,21 @@ pub enum AnchorAction {
     },
 }
 
+
+#[derive(Subcommand, Debug)]
+pub enum McpAction {
+    /// Configure AI tools to use oobo MCP
+    Install {
+        /// Specific tool to configure (cursor, claude, copilot). Omit to auto-detect.
+        tool: Option<String>,
+        /// Use hosted MCP (agentic.oobo.ai) instead of local binary
+        #[arg(long)]
+        hosted: bool,
+        /// Remove oobo MCP configuration
+        #[arg(long)]
+        remove: bool,
+    },
+}
 
 #[derive(Subcommand, Debug)]
 pub enum HookAction {
@@ -642,6 +672,35 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                 crate::commands::update::run(check).await?;
             }
             Ok(0)
+        }
+        Some(Command::Mcp { action }) => {
+            match action {
+                None => {
+                    let resolved = crate::commands::sync::resolve(
+                        cfg,
+                        crate::git::proxy::project_root(cfg).as_deref(),
+                    );
+                    let api_key = std::env::var("OOBO_API_KEY")
+                        .ok()
+                        .filter(|k| !k.is_empty())
+                        .or_else(|| {
+                            if resolved.api_key.is_empty() { None } else { Some(resolved.api_key.clone()) }
+                        });
+                    let api_url = if resolved.api_url.is_empty() {
+                        crate::config::DEFAULT_SERVER_URL.to_string()
+                    } else {
+                        resolved.api_url.clone()
+                    };
+                    // MCP server creates its own tokio runtime internally for
+                    // cloud tool calls. We must NOT be inside a runtime here.
+                    // Signal the caller to run MCP outside the async context.
+                    return Err(crate::error::CliError::McpRun { api_key, api_url });
+                }
+                Some(McpAction::Install { tool, hosted, remove }) => {
+                    crate::commands::mcp_install::run(cfg, tool.as_deref(), hosted, remove)?;
+                    Ok(0)
+                }
+            }
         }
         Some(Command::Hooks { action }) => {
             match action {
