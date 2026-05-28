@@ -1943,7 +1943,7 @@ fn test_oobo_blame_json_output() {
         assert_eq!(val["file"], "src.rs");
         assert!(val["lines"].is_array());
     }
-    // If blame fails (no anchor yet for this commit), that's ok  -- 
+    // If blame fails (no anchor yet for this commit), that's ok  --
     // the commit might not have generated line-level data without
     // a proper before-submit-prompt snapshot. The test at minimum
     // verifies the command doesn't crash.

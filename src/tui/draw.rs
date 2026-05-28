@@ -1017,7 +1017,12 @@ fn draw_code_search(
         .split(area);
 
     let header = Paragraph::new(Line::from(vec![
-        Span::styled("search ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "search ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(format!("\"{query}\" ")),
         Span::styled(
             format!("({} results)", results.len()),
@@ -1028,8 +1033,10 @@ fn draw_code_search(
     frame.render_widget(header, chunks[0]);
 
     if results.is_empty() {
-        let empty = Paragraph::new("No results found. Try a different query or run `oobo search --content all`.")
-            .style(Style::default().fg(Color::DarkGray));
+        let empty = Paragraph::new(
+            "No results found. Try a different query or run `oobo search --content all`.",
+        )
+        .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(empty, chunks[1]);
         return;
     }
@@ -1046,7 +1053,9 @@ fn draw_code_search(
                 ),
                 Span::styled(
                     &r.chunk.file_path,
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(format!(":{}-{}", r.chunk.start_line, r.chunk.end_line)),
                 Span::styled(format!(" [{lang}]"), Style::default().fg(Color::Blue)),
@@ -1065,10 +1074,7 @@ fn draw_code_search(
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            let snippet_line = Line::from(Span::styled(
-                snippet,
-                Style::default().fg(Color::White),
-            ));
+            let snippet_line = Line::from(Span::styled(snippet, Style::default().fg(Color::White)));
 
             ListItem::new(vec![header_line, snippet_line, Line::raw("")])
         })

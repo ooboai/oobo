@@ -35,13 +35,13 @@ const SPECS: &[(&str, &str)] = &[
 ];
 
 const RESERVED_COMMANDS: &[&str] = &[
-    "anchor", "anchors", "search", "recall", "enable", "disable", "setup", "settings", "update", "hooks",
-    "goto", "back", "mcp",
+    "anchor", "anchors", "search", "recall", "enable", "disable", "setup", "settings", "update",
+    "hooks", "goto", "back", "mcp",
 ];
 
 const PUBLIC_HELP_COMMANDS: &[&str] = &[
-    "anchors", "anchor", "delta", "goto", "back", "blame", "search", "recall", "settings", "enable",
-    "disable", "setup", "mcp", "help", "update",
+    "anchors", "anchor", "delta", "goto", "back", "blame", "search", "recall", "settings",
+    "enable", "disable", "setup", "mcp", "help", "update",
 ];
 
 const FORBIDDEN_COMMANDS: &[&str] = &[

@@ -24,7 +24,9 @@ fn mcp_session(requests: &[serde_json::Value]) -> Vec<serde_json::Value> {
     }
     drop(child.stdin.take());
 
-    let output = child.wait_with_output().expect("Failed to wait for process");
+    let output = child
+        .wait_with_output()
+        .expect("Failed to wait for process");
     assert!(output.status.success(), "oobo mcp exited with error");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -63,8 +65,14 @@ fn mcp_tools_list() {
     assert_eq!(responses.len(), 1);
     let tools = responses[0]["result"]["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert!(names.contains(&"search"), "Should expose search tool (in git repo)");
-    assert!(names.contains(&"find_related"), "Should expose find_related tool");
+    assert!(
+        names.contains(&"search"),
+        "Should expose search tool (in git repo)"
+    );
+    assert!(
+        names.contains(&"find_related"),
+        "Should expose find_related tool"
+    );
 }
 
 #[test]
@@ -119,7 +127,10 @@ fn mcp_recall_without_key_returns_error() {
     let result = &responses[0]["result"];
     assert_eq!(result["isError"], true);
     let text = result["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("OOBO_API_KEY"), "Should mention how to configure key");
+    assert!(
+        text.contains("OOBO_API_KEY"),
+        "Should mention how to configure key"
+    );
 }
 
 #[test]
@@ -196,7 +207,10 @@ fn mcp_notification_returns_nothing() {
 
     let output = child.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.trim().is_empty(), "Notifications should produce no output");
+    assert!(
+        stdout.trim().is_empty(),
+        "Notifications should produce no output"
+    );
 }
 
 #[test]
@@ -254,7 +268,10 @@ fn mcp_tools_list_includes_get_context_with_key() {
     let resp: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     let tools = resp["result"]["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert!(names.contains(&"get_context"), "get_context should appear when key is set");
+    assert!(
+        names.contains(&"get_context"),
+        "get_context should appear when key is set"
+    );
     assert!(names.contains(&"recall"));
     assert!(names.contains(&"ask"));
 }

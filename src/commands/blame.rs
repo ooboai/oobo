@@ -160,7 +160,7 @@ fn lookup_attribution(
             }
         }
     }
-    // Line exists in the file change but has no explicit attribution  -- 
+    // Line exists in the file change but has no explicit attribution  --
     // fall back to the file-level attribution if present.
     (fc.attribution.clone(), fc.agent.clone())
 }

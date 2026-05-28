@@ -1,6 +1,6 @@
 //! MCP server dispatch -- handles initialize, tools/list, tools/call.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use super::protocol::JsonRpcResponse;
 use super::tools::{self, ToolContext};
@@ -21,12 +21,13 @@ impl Server {
         api_key: Option<String>,
         api_url: String,
         project_root: Option<String>,
-        branch: Option<String>,
+        branch: Option<&str>,
     ) -> Self {
         let has_api_key = api_key.as_ref().is_some_and(|k| !k.is_empty());
         let has_repo = project_root.is_some();
 
-        let instructions = build_instructions(has_api_key, has_repo, &project_root, &branch);
+        let instructions =
+            build_instructions(has_api_key, has_repo, project_root.as_deref(), branch);
 
         let ctx = ToolContext::new(project_root, api_key, api_url);
 
@@ -91,10 +92,7 @@ impl Server {
             }
         };
 
-        let tool_name = params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
         let arguments = params
             .get("arguments")
@@ -109,8 +107,8 @@ impl Server {
 fn build_instructions(
     has_api_key: bool,
     has_repo: bool,
-    project_root: &Option<String>,
-    branch: &Option<String>,
+    project_root: Option<&str>,
+    branch: Option<&str>,
 ) -> String {
     let mut parts = Vec::new();
 
@@ -119,7 +117,7 @@ fn build_instructions(
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
-        let branch_str = branch.as_deref().unwrap_or("unknown");
+        let branch_str = branch.unwrap_or("unknown");
         parts.push(format!("Project: {project_name} (branch: {branch_str})."));
     }
 
@@ -171,8 +169,15 @@ mod tests {
 
     #[test]
     fn tools_list_varies_by_capabilities() {
-        let server_no_key = Server::new(None, "https://api.oobo.ai".into(), Some("/tmp".into()), None);
-        let resp = server_no_key.handle("tools/list", Some(json!(2)), None).unwrap();
+        let server_no_key = Server::new(
+            None,
+            "https://api.oobo.ai".into(),
+            Some("/tmp".into()),
+            None,
+        );
+        let resp = server_no_key
+            .handle("tools/list", Some(json!(2)), None)
+            .unwrap();
         let tools = resp.result.unwrap()["tools"].as_array().unwrap().clone();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"search"));
@@ -184,9 +189,11 @@ mod tests {
             Some("sk_test".into()),
             "https://api.oobo.ai".into(),
             Some("/tmp".into()),
-            Some("main".into()),
+            Some("main"),
         );
-        let resp = server_full.handle("tools/list", Some(json!(3)), None).unwrap();
+        let resp = server_full
+            .handle("tools/list", Some(json!(3)), None)
+            .unwrap();
         let tools = resp.result.unwrap()["tools"].as_array().unwrap().clone();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"search"));
@@ -206,7 +213,9 @@ mod tests {
     #[test]
     fn unknown_method_returns_error() {
         let server = Server::new(None, "https://api.oobo.ai".into(), None, None);
-        let resp = server.handle("unknown/method", Some(json!(5)), None).unwrap();
+        let resp = server
+            .handle("unknown/method", Some(json!(5)), None)
+            .unwrap();
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
     }
@@ -220,7 +229,12 @@ mod tests {
 
     #[test]
     fn cloud_tools_without_key_returns_error() {
-        let server = Server::new(None, "https://api.oobo.ai".into(), Some("/tmp".into()), None);
+        let server = Server::new(
+            None,
+            "https://api.oobo.ai".into(),
+            Some("/tmp".into()),
+            None,
+        );
         let resp = server
             .handle(
                 "tools/call",

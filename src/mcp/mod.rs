@@ -26,7 +26,7 @@ pub fn run(api_key: Option<String>, api_url: &str) -> Result<(), String> {
     }
 
     let project_root = detect_project_root();
-    let branch = detect_branch(&project_root);
+    let branch = detect_branch(project_root.as_deref());
 
     let has_key = api_key.as_ref().is_some_and(|k| !k.is_empty());
     if !has_key {
@@ -35,15 +35,24 @@ pub fn run(api_key: Option<String>, api_url: &str) -> Result<(), String> {
     }
 
     if let Some(root) = &project_root {
-        eprintln!("oobo-mcp: serving {} (branch: {})",
-            std::path::Path::new(root).file_name().and_then(|n| n.to_str()).unwrap_or("unknown"),
+        eprintln!(
+            "oobo-mcp: serving {} (branch: {})",
+            std::path::Path::new(root)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown"),
             branch.as_deref().unwrap_or("detached"),
         );
     } else {
         eprintln!("oobo-mcp: no git repository detected (search, find_related unavailable)");
     }
 
-    let server = Server::new(api_key, api_url.to_string(), project_root, branch);
+    let server = Server::new(
+        api_key,
+        api_url.to_string(),
+        project_root,
+        branch.as_deref(),
+    );
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();
@@ -102,8 +111,7 @@ fn detect_project_root() -> Option<String> {
     }
 }
 
-fn detect_branch(root: &Option<String>) -> Option<String> {
-    let _ = root;
+fn detect_branch(_root: Option<&str>) -> Option<String> {
     let output = std::process::Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()

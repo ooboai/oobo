@@ -358,7 +358,6 @@ pub enum AnchorAction {
     },
 }
 
-
 #[derive(Subcommand, Debug)]
 pub enum McpAction {
     /// Configure AI tools to use oobo MCP
@@ -468,7 +467,6 @@ pub async fn route(cfg: &Config) -> CmdResult {
         return Ok(0);
     }
 
-
     let cli = Cli::parse();
     let mode = resolve_output_mode(cli.json, cli.agent, cli.interactive);
 
@@ -565,11 +563,16 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                 return Ok(2);
             }
             let project_root = git::proxy::project_root(cfg);
-            let root = path
-                .or(project_root)
-                .unwrap_or_else(|| ".".to_string());
+            let root = path.or(project_root).unwrap_or_else(|| ".".to_string());
             if mode == OutputMode::Tui {
-                return crate::tui::app::run_code_search(cfg, &q, &root, top_k, &search_mode, &content);
+                return crate::tui::app::run_code_search(
+                    cfg,
+                    &q,
+                    &root,
+                    top_k,
+                    &search_mode,
+                    &content,
+                );
             }
             match crate::sonar::search_codebase(
                 &q,
@@ -684,7 +687,11 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                         .ok()
                         .filter(|k| !k.is_empty())
                         .or_else(|| {
-                            if resolved.api_key.is_empty() { None } else { Some(resolved.api_key.clone()) }
+                            if resolved.api_key.is_empty() {
+                                None
+                            } else {
+                                Some(resolved.api_key.clone())
+                            }
                         });
                     let api_url = if resolved.api_url.is_empty() {
                         crate::config::DEFAULT_SERVER_URL.to_string()
@@ -696,7 +703,11 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                     // Signal the caller to run MCP outside the async context.
                     return Err(crate::error::CliError::McpRun { api_key, api_url });
                 }
-                Some(McpAction::Install { tool, hosted, remove }) => {
+                Some(McpAction::Install {
+                    tool,
+                    hosted,
+                    remove,
+                }) => {
                     crate::commands::mcp_install::run(cfg, tool.as_deref(), hosted, remove)?;
                     Ok(0)
                 }

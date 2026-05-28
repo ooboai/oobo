@@ -384,8 +384,8 @@ pub fn run_code_search(
         return Ok(0);
     };
 
-    let results = crate::sonar::search_codebase(query, path, top_k, mode, content, None)
-        .unwrap_or_default();
+    let results =
+        crate::sonar::search_codebase(query, path, top_k, mode, content, None).unwrap_or_default();
 
     app.stack.push(View::CodeSearch {
         query: query.to_string(),

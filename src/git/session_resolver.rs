@@ -292,7 +292,7 @@ pub(super) fn filter_relevant_sessions(
             if has_overlap {
                 matched_by_files.push(session.clone());
             }
-            // If a Cursor session edited files but none overlap, skip it  -- 
+            // If a Cursor session edited files but none overlap, skip it  --
             // it was working on something else.
             // If it edited zero files (e.g. DB unavailable), fall through
             // to recency.

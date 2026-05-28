@@ -3,8 +3,8 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use sonar_core::index::{Mode, SonarIndex};
 use sonar_core::types::{ContentType, IndexStats, SearchResult};
@@ -55,8 +55,8 @@ pub fn index_codebase(path: &str, content: &str) -> Result<IndexStats, String> {
 }
 
 pub fn download_model(model: &str) -> Result<usize, String> {
-    let embedder = sonar_core::embed::Embedder::from_pretrained(model)
-        .map_err(|e| e.to_string())?;
+    let embedder =
+        sonar_core::embed::Embedder::from_pretrained(model).map_err(|e| e.to_string())?;
     Ok(embedder.dim())
 }
 
@@ -155,12 +155,10 @@ pub fn init_agent(agent: &str, force: bool) -> Result<String, String> {
     }
 
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create directory: {e}"))?;
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {e}"))?;
     }
 
-    fs::write(&path, AGENT_TEMPLATE)
-        .map_err(|e| format!("Failed to write agent file: {e}"))?;
+    fs::write(&path, AGENT_TEMPLATE).map_err(|e| format!("Failed to write agent file: {e}"))?;
 
     Ok(path.display().to_string())
 }

@@ -12,10 +12,10 @@ struct ToolTarget {
 
 pub fn run(cfg: &Config, tool: Option<&str>, hosted: bool, remove: bool) -> CmdResult {
     let targets = if let Some(name) = tool {
-        if let Some(t) = resolve_target(name) { vec![t] } else {
-            eprintln!(
-                "error: unknown tool '{name}'. Supported: cursor, claude, copilot"
-            );
+        if let Some(t) = resolve_target(name) {
+            vec![t]
+        } else {
+            eprintln!("error: unknown tool '{name}'. Supported: cursor, claude, copilot");
             return Ok(2);
         }
     } else {
@@ -39,11 +39,15 @@ pub fn run(cfg: &Config, tool: Option<&str>, hosted: bool, remove: bool) -> CmdR
 
     if !remove {
         let has_key = !cfg.server.api_key.is_empty()
-            || std::env::var("OOBO_API_KEY").map(|v| !v.is_empty()).unwrap_or(false);
+            || std::env::var("OOBO_API_KEY")
+                .map(|v| !v.is_empty())
+                .unwrap_or(false);
 
         eprintln!();
         if hosted && !has_key {
-            eprintln!("  Note: Set OOBO_API_KEY environment variable for the hosted MCP to authenticate.");
+            eprintln!(
+                "  Note: Set OOBO_API_KEY environment variable for the hosted MCP to authenticate."
+            );
             eprintln!("        Get your key at https://app.oobo.ai/settings/api-keys");
             eprintln!();
         } else if !has_key {
@@ -131,7 +135,10 @@ fn install_entry(_cfg: &Config, target: &ToolTarget, hosted: bool) -> CmdResult 
     write_mcp_config(&target.config_path, &config)?;
 
     let preserved = if other_count > 0 {
-        format!(" ({other_count} other server{} preserved)", if other_count == 1 { "" } else { "s" })
+        format!(
+            " ({other_count} other server{} preserved)",
+            if other_count == 1 { "" } else { "s" }
+        )
     } else {
         String::new()
     };
@@ -156,7 +163,11 @@ fn remove_entry(target: &ToolTarget) -> CmdResult {
     if let Some(servers) = config.get_mut("mcpServers").and_then(|v| v.as_object_mut()) {
         if servers.remove("oobo").is_some() {
             write_mcp_config(&target.config_path, &config)?;
-            eprintln!("  {:<8} removed \"oobo\" from {}", target.name, target.config_path.display());
+            eprintln!(
+                "  {:<8} removed \"oobo\" from {}",
+                target.name,
+                target.config_path.display()
+            );
         } else {
             eprintln!("  {:<8} \"oobo\" not found (skipped)", target.name);
         }
@@ -184,15 +195,11 @@ fn write_mcp_config(path: &Path, config: &serde_json::Value) -> CmdResult {
         })?;
     }
 
-    let json = serde_json::to_string_pretty(config).map_err(|e| {
-        crate::error::CliError::User(format!("Failed to serialize config: {e}"))
-    })?;
+    let json = serde_json::to_string_pretty(config)
+        .map_err(|e| crate::error::CliError::User(format!("Failed to serialize config: {e}")))?;
 
     fs::write(path, format!("{json}\n")).map_err(|e| {
-        crate::error::CliError::User(format!(
-            "Failed to write {}: {e}",
-            path.display()
-        ))
+        crate::error::CliError::User(format!("Failed to write {}: {e}", path.display()))
     })?;
 
     Ok(0)

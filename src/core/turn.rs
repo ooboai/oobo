@@ -1,6 +1,6 @@
 //! The atomic unit of AI capture.
 //!
-//! A [`Turn`] represents a single model invocation within a session  -- 
+//! A [`Turn`] represents a single model invocation within a session  --
 //! one user→assistant exchange plus any tool-call activity that
 //! happened in that exchange. Tokens recorded on a turn are **deltas**
 //! (exactly what the model API billed for this call), never cumulative.

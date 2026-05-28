@@ -1,9 +1,9 @@
 //! Tool schemas and handlers for the oobo MCP server.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
-use std::collections::HashMap;
 
 use sonar_core::index::SonarIndex;
 use sonar_core::types::ContentType;
@@ -153,7 +153,10 @@ fn handle_search(ctx: &ToolContext, params: &Value) -> Value {
         _ => return tool_error("Missing required parameter: query"),
     };
 
-    let top_k = params.get("top_k").and_then(serde_json::Value::as_u64).unwrap_or(5) as usize;
+    let top_k = params
+        .get("top_k")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(5) as usize;
     let content = params
         .get("content")
         .and_then(|v| v.as_str())
@@ -212,7 +215,10 @@ fn handle_find_related(ctx: &ToolContext, params: &Value) -> Value {
         None => return tool_error("Missing required parameter: line"),
     };
 
-    let top_k = params.get("top_k").and_then(serde_json::Value::as_u64).unwrap_or(5) as usize;
+    let top_k = params
+        .get("top_k")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(5) as usize;
 
     let repo = params
         .get("repo")
@@ -250,10 +256,8 @@ fn handle_find_related(ctx: &ToolContext, params: &Value) -> Value {
         return tool_result("No related code found.");
     }
 
-    let formatted = sonar_core::utils::format_results(
-        &format!("Code related to {file_path}:{line}"),
-        &results,
-    );
+    let formatted =
+        sonar_core::utils::format_results(&format!("Code related to {file_path}:{line}"), &results);
     let json_str = serde_json::to_string_pretty(&formatted).unwrap_or_default();
     tool_result(&json_str)
 }
@@ -278,12 +282,18 @@ fn handle_recall(ctx: &ToolContext, params: &Value) -> Value {
     let project_scope = params.get("project").and_then(|v| v.as_str());
     let since = params.get("since").and_then(|v| v.as_str());
     let tool = params.get("tool").and_then(|v| v.as_str());
-    let limit = params.get("limit").and_then(serde_json::Value::as_u64).unwrap_or(10) as usize;
+    let limit = params
+        .get("limit")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(10) as usize;
 
     let request = crate::remote::payload::SearchRequest {
         query,
         since: since.map(std::string::ToString::to_string),
-        project: Some(build_project_scope(project_scope, &ctx.default_repo)),
+        project: Some(build_project_scope(
+            project_scope,
+            ctx.default_repo.as_deref(),
+        )),
         tool: tool.map(std::string::ToString::to_string),
         limit,
     };
@@ -342,24 +352,29 @@ fn handle_get_context(ctx: &ToolContext, params: &Value) -> Value {
         }
     };
 
-    let files = params
-        .get("files")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
-                .collect::<Vec<_>>()
-        });
+    let files = params.get("files").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
+            .collect::<Vec<_>>()
+    });
 
-    let topic = params.get("topic").and_then(|v| v.as_str()).map(std::string::ToString::to_string);
-    let project_name = params.get("project").and_then(|v| v.as_str()).map(std::string::ToString::to_string);
+    let topic = params
+        .get("topic")
+        .and_then(|v| v.as_str())
+        .map(std::string::ToString::to_string);
+    let project_name = params
+        .get("project")
+        .and_then(|v| v.as_str())
+        .map(std::string::ToString::to_string);
     let budget_tokens = params
         .get("budget_tokens")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(4000) as usize;
 
     let project_id = if project_name.is_none() {
-        ctx.default_repo.as_ref().map(|r| crate::project::id_for_root(r))
+        ctx.default_repo
+            .as_ref()
+            .map(|r| crate::project::id_for_root(r))
     } else {
         None
     };
@@ -434,7 +449,10 @@ fn handle_ask(ctx: &ToolContext, params: &Value) -> Value {
     let request = crate::remote::payload::SearchRequest {
         query: question,
         since: None,
-        project: Some(build_project_scope(project_scope, &ctx.default_repo)),
+        project: Some(build_project_scope(
+            project_scope,
+            ctx.default_repo.as_deref(),
+        )),
         tool: None,
         limit: 5,
     };
@@ -494,7 +512,7 @@ fn handle_ask(ctx: &ToolContext, params: &Value) -> Value {
 
 fn build_project_scope(
     explicit_project: Option<&str>,
-    default_repo: &Option<String>,
+    default_repo: Option<&str>,
 ) -> crate::remote::payload::SearchProjectScope {
     if let Some(name) = explicit_project {
         crate::remote::payload::SearchProjectScope {

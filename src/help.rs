@@ -8,7 +8,10 @@ use crate::cli::OutputMode;
 pub const TOPICS: &[(&str, &str)] = &[
     ("anchors", "What are anchors and how do they work"),
     ("search", "Semantic code search (hybrid BM25 + vector)"),
-    ("recall", "Session/anchor search  --  syntax, filters, cloud vs local"),
+    (
+        "recall",
+        "Session/anchor search  --  syntax, filters, cloud vs local",
+    ),
     ("blame", "Reading the AI attribution overlay"),
     ("hooks", "How git and agent hooks capture sessions"),
     ("config", "All settings explained"),
