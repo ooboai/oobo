@@ -676,17 +676,20 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
         Some(Command::Mcp { action }) => {
             match action {
                 None => {
+                    let resolved = crate::commands::sync::resolve(
+                        cfg,
+                        crate::git::proxy::project_root(cfg).as_deref(),
+                    );
                     let api_key = std::env::var("OOBO_API_KEY")
                         .ok()
                         .filter(|k| !k.is_empty())
                         .or_else(|| {
-                            let k = cfg.server.api_key.clone();
-                            if k.is_empty() { None } else { Some(k) }
+                            if resolved.api_key.is_empty() { None } else { Some(resolved.api_key.clone()) }
                         });
-                    let api_url = if cfg.server.url.is_empty() {
+                    let api_url = if resolved.api_url.is_empty() {
                         crate::config::DEFAULT_SERVER_URL.to_string()
                     } else {
-                        cfg.server.url.clone()
+                        resolved.api_url.clone()
                     };
                     // MCP server creates its own tokio runtime internally for
                     // cloud tool calls. We must NOT be inside a runtime here.
