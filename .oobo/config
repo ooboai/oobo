@@ -4,6 +4,7 @@ schema_version = 1
 id = "r:github.com/ooboai/oobo"
 
 [anchors]
+remote = "git@github.com:ooboai/oobocli-anchors.git"
 
 [privacy]
 transparency = "off"
