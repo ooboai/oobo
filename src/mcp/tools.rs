@@ -412,7 +412,7 @@ fn handle_get_context(ctx: &ToolContext, params: &Value) -> Value {
             let context_entries: Vec<String> = response
                 .context
                 .iter()
-                .filter_map(|c| c.summary.as_ref().map(|s| s.clone()))
+                .filter_map(|c| c.summary.clone())
                 .collect();
 
             let formatted = format!(

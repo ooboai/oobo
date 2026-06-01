@@ -6,7 +6,7 @@
 
 ### Context beyond the diff.
 
-Capture, search, and recall AI context across every commit.<br/>Sessions, tokens, code attribution, and semantic code search -- across 15 AI coding tools.<br/>No workflow changes. No plugins. No cloud required.
+Capture, search, and recall AI context across every commit.<br/>Sessions, tokens, code attribution, semantic code search, and engineering memory via MCP.<br/>15 AI coding tools supported. Local-first. Optional cloud for team recall.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0%20%2F%20MIT-blue)](LICENSE-APACHE)
 [![CI](https://img.shields.io/github/actions/workflow/status/ooboai/oobo/ci.yml?label=CI)](https://github.com/ooboai/oobo/actions/workflows/ci.yml)
@@ -41,8 +41,8 @@ Or grab a binary from [Releases](https://github.com/ooboai/oobo/releases).
 - **Code Attribution** -- Know exactly which lines were AI-generated vs human-written, per commit.
 - **Engineering Memory via MCP** -- Expose your team's engineering history to AI agents via Model Context Protocol. One command (`oobo mcp install`) configures Cursor, Claude Code, or Copilot. Agents gain access to `recall`, `get_context`, and `ask` tools -- retrieving relevant decisions, patterns, and context from past work.
 - **Agent-Native** -- Three output modes (pretty / `--agent` token-efficient plain text / `--json` structured). `--agent` auto-activates when stdout isn't a TTY or inside a coding agent.
-- **Local-First, Private by Default** -- Anchors live in your git repo (orphan branch), with a lightweight local cache in `~/.oobo/`. Anchor metadata travels only where your code already goes (your git remote, via `git push`). No telemetry. Secrets are redacted before sharing.
-- **Anchor System** -- Extends git commits with structured AI metadata that travels with the repo via a git orphan branch. No external dependencies.
+- **Local-First, Private by Default** -- Anchors live on a git orphan branch, with a lightweight local cache in `~/.oobo/`. Anchor metadata travels only where your code already goes (your git remote, via `git push`), or to a separate private repo if configured. No telemetry. Secrets are redacted before sharing.
+- **Anchor System** -- Extends git commits with structured AI metadata that travels with the repo via a git orphan branch. Configurable remote target for teams that want anchors separate from source.
 
 ---
 

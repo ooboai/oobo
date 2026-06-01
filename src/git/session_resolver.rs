@@ -290,7 +290,7 @@ fn filter_tracked_files(
     let ignored: std::collections::HashSet<&str> = std::str::from_utf8(&output.stdout)
         .unwrap_or("")
         .lines()
-        .map(|l| l.trim())
+        .map(str::trim)
         .filter(|l| !l.is_empty())
         .collect();
 
