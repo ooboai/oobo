@@ -247,7 +247,57 @@ pub(super) fn collect_ai_files_touched(
         }
     }
 
-    result
+    filter_tracked_files(project_root, result)
+}
+
+/// Remove files that are gitignored or untracked from the results.
+/// Uses `git check-ignore` to respect the repo's .gitignore rules.
+fn filter_tracked_files(
+    project_root: &str,
+    files: Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    if files.is_empty() {
+        return files;
+    }
+
+    let paths: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
+    let input = paths.join("\n");
+
+    // Use git check-ignore --stdin to batch-check all paths at once.
+    // Paths that ARE ignored will appear in stdout.
+    let mut child = match std::process::Command::new("git")
+        .args(["-C", project_root, "check-ignore", "--stdin"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return files,
+    };
+
+    if let Some(ref mut stdin) = child.stdin {
+        use std::io::Write;
+        let _ = stdin.write_all(input.as_bytes());
+    }
+    child.stdin.take(); // close stdin so git can finish
+
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(_) => return files,
+    };
+
+    let ignored: std::collections::HashSet<&str> = std::str::from_utf8(&output.stdout)
+        .unwrap_or("")
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    files
+        .into_iter()
+        .filter(|(path, _)| !ignored.contains(path.as_str()))
+        .collect()
 }
 
 /// Filter active sessions to only those relevant to the current commit.

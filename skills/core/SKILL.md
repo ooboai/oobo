@@ -3,7 +3,7 @@ name: oobo
 description: Context beyond the diff - captures AI sessions, tokens, code attribution, semantic code search, and engineering memory via MCP. Use when the user asks about commit history with AI context, session history, code attribution, token usage, code search, or engineering memory.
 metadata:
   author: oobo
-  version: "1.1.1"
+  version: "1.1.2"
 install:
   check: command -v oobo
   url: https://github.com/ooboai/oobo/releases
