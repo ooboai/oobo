@@ -97,7 +97,7 @@ fn ask_schema() -> Value {
 fn get_context_schema() -> Value {
     json!({
         "name": "get_context",
-        "description": "Get relevant engineering context for the current session. Returns recent activity, past decisions, known pitfalls, and cross-project references for the files and topics you're working on. Call this at the start of a task or when you need background on unfamiliar code.",
+        "description": "Get relevant engineering context for your current task. Returns prior sessions, decisions, and known pitfalls for the files you're working on. The context shows which files/areas were previously affected and how — look in the same areas for similar patterns. Call this at the start of any non-trivial task.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -409,19 +409,20 @@ fn handle_get_context(ctx: &ToolContext, params: &Value) -> Value {
                 return tool_result("No relevant context found for this session.");
             }
 
-            let output = json!({
-                "context": response.context.iter().map(|c| {
-                    json!({
-                        "type": c.item_type,
-                        "relevance": c.relevance,
-                        "summary": c.summary,
-                        "anchor_sha": c.anchor_sha,
-                        "timestamp": c.timestamp,
-                    })
-                }).collect::<Vec<_>>(),
-                "total_tokens_used": response.total_tokens_used,
-            });
-            tool_result(&serde_json::to_string_pretty(&output).unwrap_or_default())
+            let context_entries: Vec<String> = response
+                .context
+                .iter()
+                .filter_map(|c| c.summary.as_ref().map(|s| s.clone()))
+                .collect();
+
+            let formatted = format!(
+                "ENGINEERING MEMORY — Prior sessions relevant to your current task:\n\
+                 The patterns below are SIMILAR but not identical to what you need now.\n\
+                 Look in the SAME files/areas for the current issue.\n\n{}",
+                context_entries.join("\n\n---\n\n")
+            );
+
+            tool_result(&formatted)
         }
         Err(e) => tool_error(&format!("Failed to get context: {e}")),
     }

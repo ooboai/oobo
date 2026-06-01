@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 const PROJECT_CONFIG_DIR: &str = ".oobo";
 const PROJECT_CONFIG_FILE: &str = "config";
+const PROJECT_SECRETS_FILE: &str = "secrets";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
@@ -106,9 +107,23 @@ impl ProjectConfig {
         let bytes =
             std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let text = strip_utf8_bom(&bytes);
-        toml::from_str(text)
-            .map(Some)
-            .map_err(|e| format!("invalid project config at {}: {e}", path.display()))
+        let mut cfg: Self = toml::from_str(text)
+            .map_err(|e| format!("invalid project config at {}: {e}", path.display()))?;
+
+        // Merge secrets from the gitignored secrets file
+        let secrets_path = secrets_path_for(project_root);
+        if secrets_path.exists() {
+            if let Ok(bytes) = std::fs::read(&secrets_path) {
+                let secrets_text = strip_utf8_bom(&bytes);
+                if let Ok(secrets) = toml::from_str::<ProjectSecrets>(secrets_text) {
+                    if !secrets.api_key.is_empty() {
+                        cfg.server.api_key = secrets.api_key;
+                    }
+                }
+            }
+        }
+
+        Ok(Some(cfg))
     }
 
     pub fn save(&self, project_root: &str) -> Result<(), String> {
@@ -121,7 +136,36 @@ impl ProjectConfig {
 
         ensure_gitignore(dir);
 
-        let content = toml::to_string_pretty(self)
+        // Write secrets (api_key) to a separate gitignored file
+        let secrets_path = secrets_path_for(project_root);
+        if !self.server.api_key.is_empty() {
+            let secrets = ProjectSecrets {
+                api_key: self.server.api_key.clone(),
+            };
+            let secrets_content = toml::to_string_pretty(&secrets)
+                .map_err(|e| format!("cannot serialize secrets: {e}"))?;
+            let tmp_secrets = secrets_path.with_extension("tmp");
+            std::fs::write(&tmp_secrets, &secrets_content)
+                .map_err(|e| format!("cannot write {}: {e}", tmp_secrets.display()))?;
+            std::fs::rename(&tmp_secrets, &secrets_path)
+                .map_err(|e| format!("cannot rename secrets: {e}"))?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ =
+                    std::fs::set_permissions(&secrets_path, std::fs::Permissions::from_mode(0o600));
+            }
+        } else if secrets_path.exists() {
+            // Key was unset — remove the secrets file
+            let _ = std::fs::remove_file(&secrets_path);
+        }
+
+        // Write config without the api_key
+        let mut saveable = self.clone();
+        saveable.server.api_key = String::new();
+
+        let content = toml::to_string_pretty(&saveable)
             .map_err(|e| format!("cannot serialize project config: {e}"))?;
         let tmp_path = path.with_extension("tmp");
         std::fs::write(&tmp_path, content)
@@ -136,6 +180,18 @@ pub fn path_for(project_root: &str) -> PathBuf {
     Path::new(project_root)
         .join(PROJECT_CONFIG_DIR)
         .join(PROJECT_CONFIG_FILE)
+}
+
+pub fn secrets_path_for(project_root: &str) -> PathBuf {
+    Path::new(project_root)
+        .join(PROJECT_CONFIG_DIR)
+        .join(PROJECT_SECRETS_FILE)
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ProjectSecrets {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    api_key: String,
 }
 
 pub fn exists(project_root: &str) -> bool {
@@ -227,17 +283,23 @@ fn strip_utf8_bom(data: &[u8]) -> &str {
 /// Everything else  --  caches, temp files  --  stays local.
 fn ensure_gitignore(oobo_dir: &Path) {
     let gi = oobo_dir.join(".gitignore");
-    if gi.exists() {
-        return;
-    }
-    let _ = std::fs::write(
-        gi,
-        "# Managed by oobo  --  do not edit.\n\
+    let content = "# Managed by oobo -- do not edit.\n\
          # Only config is intended to be committed.\n\
+         # Secrets (API keys) are never committed.\n\
          *\n\
          !.gitignore\n\
-         !config\n",
-    );
+         !config\n";
+    if gi.exists() {
+        // Migrate: ensure secrets is not allowed through
+        if let Ok(existing) = std::fs::read_to_string(&gi) {
+            if existing.contains("!secrets") {
+                let updated = existing.replace("!secrets", "");
+                let _ = std::fs::write(&gi, updated);
+            }
+        }
+        return;
+    }
+    let _ = std::fs::write(gi, content);
 }
 
 #[cfg(test)]
@@ -311,6 +373,63 @@ mod tests {
         );
         assert!(api_key(&root).is_none());
         assert!(api_url(&root).is_none());
+    }
+
+    #[test]
+    fn api_key_stored_in_secrets_not_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_string_lossy().to_string();
+
+        let mut cfg = ProjectConfig::for_project("test");
+        cfg.server.api_key = "sk_secret_test".to_string();
+        cfg.server.url = "https://api.oobo.ai".to_string();
+        cfg.save(&root).unwrap();
+
+        // Config file must NOT contain the key
+        let config_raw = std::fs::read_to_string(path_for(&root)).unwrap();
+        assert!(
+            !config_raw.contains("sk_secret_test"),
+            "api_key must not appear in config file"
+        );
+        // URL should still be in config
+        assert!(config_raw.contains("https://api.oobo.ai"));
+
+        // Secrets file must contain the key
+        let secrets_raw = std::fs::read_to_string(secrets_path_for(&root)).unwrap();
+        assert!(
+            secrets_raw.contains("sk_secret_test"),
+            "api_key must be in secrets file"
+        );
+
+        // Round-trip: load should merge them back
+        let loaded = ProjectConfig::load(&root).unwrap().unwrap();
+        assert_eq!(loaded.server.api_key, "sk_secret_test");
+        assert_eq!(loaded.server.url, "https://api.oobo.ai");
+    }
+
+    #[test]
+    fn unset_key_removes_secrets_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_string_lossy().to_string();
+
+        // Set a key
+        let mut cfg = ProjectConfig::for_project("test");
+        cfg.server.api_key = "sk_to_remove".to_string();
+        cfg.save(&root).unwrap();
+        assert!(secrets_path_for(&root).exists());
+
+        // Unset (clear) the key and save again
+        let mut cfg = ProjectConfig::load(&root).unwrap().unwrap();
+        cfg.server.api_key.clear();
+        cfg.save(&root).unwrap();
+
+        // Secrets file should be gone
+        assert!(
+            !secrets_path_for(&root).exists(),
+            "secrets file must be removed on unset"
+        );
+        // Load should return no key
+        assert!(api_key(&root).is_none());
     }
 
     #[test]

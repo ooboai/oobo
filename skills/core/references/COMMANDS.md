@@ -1,6 +1,6 @@
 # Commands
 
-Current command reference for `oobo` 1.0.0. Commands support global `--agent`, `--json`, and `--interactive` output-mode flags. Filter flags (`-n`, `--since`, `--tool`) are also global.
+Current command reference for `oobo` 1.1.1. Commands support global `--agent`, `--json`, and `--interactive` output-mode flags. Filter flags (`-n`, `--since`, `--tool`) are also global.
 
 ## Memory Feed (bare command)
 
@@ -100,8 +100,10 @@ Interactive setup discovers git repos and lets users choose which to enable.
 
 ```bash
 oobo settings                                      # Show effective settings
-oobo settings set key <api_key>                    # Store remote API key
+oobo settings set key <api_key>                    # Store remote API key (global)
+oobo settings project set key <api_key>            # Store API key for this project only
 oobo settings unset key                            # Remove persisted API key
+oobo settings project unset key                    # Remove project-level key
 oobo settings set api_url https://oobo.example.com # Point to self-hosted server
 oobo settings set transparency on                  # Enable transcript sync (default: on)
 oobo settings set tools.experimental on            # Enable experimental tool detection
@@ -111,7 +113,29 @@ oobo settings project set remote oobo              # Push anchor branch to speci
 
 Valid keys: `key`, `api_url`, `remote`, `transparency`, `tools.experimental`, `setup.scan_roots`.
 
-A non-empty default API key is used for remote recall and delta. `oobo settings unset key` removes the persisted key. `OOBO_SECRET_KEY` overrides the persisted key for the current process only. There is no cloud upload pipeline; team sync is Git-first via the orphan branch.
+**Secrets handling:** API keys are stored in `.oobo/secrets` (gitignored, 0600 permissions), never in `.oobo/config`. This prevents accidental exposure in committed project configs. The resolution order is: `OOBO_SECRET_KEY` env var > project `.oobo/secrets` > global `~/.oobo/config`.
+
+## MCP (Model Context Protocol)
+
+```bash
+oobo mcp                                           # Start stdio JSON-RPC server
+oobo mcp install                                   # Auto-detect and configure Cursor/Claude/Copilot
+oobo mcp install cursor                            # Configure a specific tool
+oobo mcp install --hosted                          # Cloud-only mode (no local binary needed)
+oobo mcp install --remove                          # Uninstall MCP configuration
+```
+
+The MCP server exposes these tools to AI agents:
+
+| Tool | Description |
+|------|-------------|
+| `search` | Semantic code search (local, hybrid BM25 + vector) |
+| `find_related` | Find code related to a query across the indexed codebase |
+| `recall` | Search engineering memory (sessions, decisions, patterns) |
+| `get_context` | File-scoped context from engineering history (plain-text guidance) |
+| `ask` | Natural language questions against the team's engineering memory |
+
+The server reads the project API key from `.oobo/secrets` automatically. For per-project keys in multi-project setups, use `oobo settings project set key <key>` in each project root.
 
 ## Help
 

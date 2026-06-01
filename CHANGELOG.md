@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-06-01
+
+### Added
+
+- **Secrets file split** -- project API keys are now stored in `.oobo/secrets` (gitignored, 0600 permissions) instead of `.oobo/config`. Prevents accidental key exposure in committed project configs. Backwards compatible: existing keys in `config` still load and migrate on next save.
+
+### Changed
+
+- **`get_context` MCP response** -- returns actionable plain-text guidance instead of raw JSON, improving how agents interpret and use retrieved memory context.
+- **Session detection window** -- recently-ended sessions (within 30s) are now detected by the post-commit hook, fixing a race condition where Claude Code's session-end fires just before the commit hook.
+- **Session resolver** -- non-Cursor sessions (Claude, Gemini, etc.) now use file-overlap matching to correctly attribute commits even when session timing is ambiguous.
+- **Commit author classification** -- "automated" commits are upgraded to "agent" when AI session evidence is found via recency or file-overlap matching.
+
+### Fixed
+
+- **URL canonicalization** -- PAT-authenticated remote URLs (`https://x-access-token:ghp_abc@github.com/org/repo.git`) are now correctly normalized, fixing project ID derivation on CI servers and bench environments.
+
 ## [1.1.0] - 2026-05-28
 
 ### Added

@@ -3,7 +3,7 @@ name: oobo
 description: Context beyond the diff - captures AI sessions, tokens, code attribution, semantic code search, and engineering memory via MCP. Use when the user asks about commit history with AI context, session history, code attribution, token usage, code search, or engineering memory.
 metadata:
   author: oobo
-  version: "1.1.0"
+  version: "1.1.1"
 install:
   check: command -v oobo
   url: https://github.com/ooboai/oobo/releases
@@ -62,7 +62,13 @@ oobo setup                      # interactive (asks before modifying git)
 oobo setup --non-interactive    # for agents / scripts
 ```
 
-Data is **local-first**. Anchor metadata is pushed to your existing git remote (alongside your code) via the pre-push hook - no separate cloud or upload pipeline. A key (`oobo settings set key` / `OOBO_SECRET_KEY`) is only needed for the optional remote recall/delta API.
+Data is **local-first**. Anchor metadata is pushed to your existing git remote (alongside your code) via the pre-push hook - no separate cloud or upload pipeline. API keys are stored securely:
+
+- **Project-level:** `.oobo/secrets` (gitignored, 0600 permissions) - set with `oobo settings project set key <key>`
+- **Global:** `~/.oobo/config` - set with `oobo settings set key <key>`
+- **Env override:** `OOBO_SECRET_KEY` or `OOBO_API_KEY` for CI/scripts
+
+Keys are only needed for remote recall/delta/ask/get_context. Resolution order: env var > project secrets > global config.
 
 Capture is real-time: git hooks (post-commit, pre-push, post-merge, post-rewrite) fire automatically and write anchors to the orphan branch. No background scanning or indexing needed.
 
@@ -95,7 +101,9 @@ oobo mcp install --remove     # uninstall MCP configuration
 | `get_context` | Token-budgeted, file-scoped context from engineering history |
 | `ask` | Natural language questions against the team's engineering memory |
 
-The local server (`oobo mcp`) runs as a stdio child process managed by the AI tool. Cloud tools (`recall`, `get_context`, `ask`) require an API key (`oobo settings set key <key>`).
+**Agent best practice:** Call `get_context` at the start of any non-trivial task with the files you plan to modify. It returns plain-text guidance (not raw JSON) with relevant history, past decisions, and known pitfalls for those files.
+
+The local server (`oobo mcp`) runs as a stdio child process managed by the AI tool. Cloud tools (`recall`, `get_context`, `ask`) require an API key (`oobo settings project set key <key>`).
 
 ## Legacy commands
 

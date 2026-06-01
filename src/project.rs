@@ -24,22 +24,36 @@ pub fn canonicalize_remote(url: &str) -> String {
     let mut s = url.trim().to_string();
     s = s.trim_end_matches(".git").to_string();
 
-    // git@host:path → host/path
-    if let Some(at) = s.find('@') {
-        if let Some(colon) = s[at..].find(':') {
-            let host = &s[at + 1..at + colon];
-            let path = &s[at + colon + 1..];
-            s = format!("{host}/{path}");
-        }
-    }
-    // Strip scheme.
+    // Strip scheme first so we can uniformly handle userinfo.
     for scheme in ["https://", "http://", "ssh://", "git://"] {
         if let Some(rest) = s.strip_prefix(scheme) {
             s = rest.to_string();
             break;
         }
     }
-    // Drop user info (git@host/...).
+
+    // git@host:path → host/path (SSH shorthand)
+    if let Some(at) = s.find('@') {
+        let after_at = &s[at + 1..];
+        if let Some(colon) = after_at.find(':') {
+            // Only treat as SSH shorthand if the colon is NOT followed by //
+            // and no slash comes before it (i.e. host:path, not host/path:port).
+            let before_colon = &after_at[..colon];
+            if !before_colon.contains('/') && !after_at[colon..].starts_with("://") {
+                let host = before_colon;
+                let path = &after_at[colon + 1..];
+                s = format!("{host}/{path}");
+            } else {
+                // URL with userinfo (user:pass@host/path) — drop everything before @
+                s = after_at.to_string();
+            }
+        } else {
+            // user@host/path — drop userinfo
+            s = after_at.to_string();
+        }
+    }
+
+    // Drop residual user info (git@host/...) in case scheme-strip didn't cover it.
     if let Some(rest) = s.strip_prefix("git@") {
         s = rest.to_string();
     }
@@ -106,6 +120,20 @@ mod tests {
         assert_eq!(
             canonicalize_remote("https://GitHub.com/Acme/Widget"),
             "github.com/acme/widget"
+        );
+    }
+
+    #[test]
+    fn test_canonicalize_embedded_credentials() {
+        // PAT-authenticated URL (GitHub Actions, bench servers, etc.)
+        assert_eq!(
+            canonicalize_remote("https://x-access-token:ghp_abc123@github.com/oobobench/hono.git"),
+            "github.com/oobobench/hono"
+        );
+        // Basic auth style
+        assert_eq!(
+            canonicalize_remote("https://user:password@github.com/org/repo.git"),
+            "github.com/org/repo"
         );
     }
 

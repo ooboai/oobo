@@ -1,12 +1,20 @@
 # Remote API Surface
 
-Remotes implement endpoints under `/anchors`. The CLI calls recall and delta (both authenticated). There is no cloud upload/ingest pipeline; team sync is Git-first via the orphan branch.
+Remotes implement endpoints under `/anchors`. The CLI calls recall, delta, get_context, and ask (all authenticated). There is no cloud upload/ingest pipeline; team sync is Git-first via the orphan branch.
 
 | Endpoint | Method | Auth | Required | Purpose |
 |----------|--------|------|----------|---------|
-| `/anchors/search` | POST | Bearer | **Yes** | Search anchors/sessions |
+| `/anchors/search` | POST | Bearer | **Yes** | Search anchors/sessions (recall) |
 | `/anchors/delta` | POST | Bearer | **Yes** | Compare two anchors |
+| `/anchors/context` | POST | Bearer | **Yes** | File-scoped engineering context (get_context) |
+| `/anchors/ask` | POST | Bearer | **Yes** | Natural language Q&A over engineering memory |
 | `/anchors/health` | GET | None | No | Connectivity check |
+
+## MCP Server
+
+The `oobo mcp` command starts a local stdio JSON-RPC server (MCP protocol version `2024-11-05`). It wraps the above endpoints as MCP tools and adds local-only tools (`search`, `find_related`).
+
+Authentication: reads API key from `.oobo/secrets` (project) > `~/.oobo/config` (global) > `OOBO_SECRET_KEY` / `OOBO_API_KEY` env vars.
 
 ## Agent Lifecycle Hooks
 

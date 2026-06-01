@@ -300,7 +300,23 @@ pub(super) fn filter_relevant_sessions(
                 unresolved.push(session);
             }
         } else {
-            unresolved.push(session);
+            // For non-Cursor sessions (Claude, etc.), check edited_files from
+            // hook-buffer for file-overlap matching — same logic as Cursor but
+            // sourced from session state rather than a native DB.
+            let edited: Vec<String> = session
+                .edited_files
+                .as_ref()
+                .map(|s| s.iter().cloned().collect())
+                .unwrap_or_default();
+            let has_overlap = edited.iter().any(|f| committed_set.contains(f.as_str()));
+            if has_overlap {
+                matched_by_files.push(session.clone());
+            } else if edited.is_empty() {
+                unresolved.push(session);
+            } else {
+                // Session edited files that don't overlap this commit — skip it,
+                // it was working on something else.
+            }
         }
     }
 

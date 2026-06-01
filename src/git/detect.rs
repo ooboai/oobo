@@ -72,10 +72,24 @@ pub fn detect(project_root: &str) -> CommitAuthor {
 /// and filters sessions to the current worktree.
 fn check_active_sessions(project_root: &str) -> Option<CommitAuthor> {
     let sessions = crate::hooks::state::active_sessions_for_worktree(project_root);
-    let first = sessions.into_iter().find(|s| s.ended_at.is_none())?;
+    // Prefer truly active sessions (ended_at is None).
+    if let Some(active) = sessions.iter().find(|s| s.ended_at.is_none()) {
+        return Some(CommitAuthor::Agent {
+            tool: active.agent.clone(),
+            session_id: Some(active.session_id.clone()),
+        });
+    }
+    // Fallback: include sessions that ended very recently (within 30s).
+    // This handles the race where Claude's SessionEnd hook fires just before
+    // or concurrently with the post-commit hook for the same git commit.
+    let now = chrono::Utc::now().timestamp();
+    let recent = sessions
+        .into_iter()
+        .filter(|s| s.ended_at.is_some_and(|e| now - e < 30))
+        .max_by_key(|s| s.updated_at)?;
     Some(CommitAuthor::Agent {
-        tool: first.agent,
-        session_id: Some(first.session_id),
+        tool: recent.agent,
+        session_id: Some(recent.session_id),
     })
 }
 
@@ -432,13 +446,14 @@ mod tests {
         fs::create_dir_all(&sessions_dir).unwrap();
 
         let now = chrono::Utc::now().timestamp();
+        // Session ended more than 30s ago — should be skipped
         let ended_session = serde_json::json!({
             "session_id": "ended-sess",
             "agent": "claude",
             "worktree": root.to_str().unwrap(),
-            "started_at": now - 60,
-            "updated_at": now,
-            "ended_at": now,
+            "started_at": now - 120,
+            "updated_at": now - 60,
+            "ended_at": now - 60,
         });
         fs::write(
             sessions_dir.join("ended.json"),
@@ -449,7 +464,7 @@ mod tests {
         let result = check_active_sessions(root.to_str().unwrap());
         assert_eq!(
             result, None,
-            "ended session should not be detected as active"
+            "session ended >30s ago should not be detected"
         );
     }
 

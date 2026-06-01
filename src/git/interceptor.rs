@@ -31,6 +31,9 @@ impl CommitEvidence {
             // Upgrade: detect said human (e.g. ended session was skipped, no env
             // vars) but file-overlap matching found a relevant session.
             AuthorType::Human if has_ai_evidence => AuthorType::Assisted,
+            // Upgrade: detect said automated (non-interactive, no active session at
+            // check time) but session evidence was found via recency/file overlap.
+            AuthorType::Automated if has_ai_evidence => AuthorType::Agent,
             other => other.clone(),
         }
     }
