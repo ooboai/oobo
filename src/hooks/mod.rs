@@ -477,6 +477,10 @@ pub fn handle_event(
                 );
                 state::touch_session(&project_root, sid, transcript_path)?;
 
+                // Check BEFORE finishing the turn: does HEAD's anchor
+                // reference this session with zero turns (= mid-turn
+                // commit drained before the turn snapshot existed)?
+                let needs_backfill = head_anchor_needs_backfill(&project_root, agent, sid);
                 if !project_root.is_empty() {
                     let files = if is_cursor_agent(agent) {
                         let db_files = crate::tools::cursor::composer_data::files_edited_in_session(
@@ -500,19 +504,35 @@ pub fn handle_event(
                     if !files.is_empty() {
                         let _ = state::snapshot_session_files(&project_root, sid, &files);
                     }
-                    let _ = state::finish_turn(
+                    let finished = state::finish_turn(
                         &project_root,
                         sid,
                         agent,
                         event.model.as_deref(),
                         transcript_path,
-                    );
+                    )
+                    .ok()
+                    .flatten();
+                    // Agents commit MID-turn: the commit's drain ran before
+                    // this turn finalized, so its anchor claimed the session
+                    // but has zero turns. Re-spool + drain (async,
+                    // idempotent) so the worker fills in provenance +
+                    // conversation turns now that the snapshot exists.
+                    if finished.is_some() && needs_backfill {
+                        respool_after_turn(&project_root);
+                    }
                 }
                 // Foreign-repo turns are finished regardless of whether the
-                // origin is a git repo  --  their provenance lives in the
-                // edited repos themselves.
-                let _ =
-                    state::finish_foreign_turns(&project_root, sid, agent, event.model.as_deref());
+                // origin is a git repo — their provenance lives in the
+                // edited repos themselves. Same mid-turn-commit rule per repo.
+                let foreign =
+                    state::finish_foreign_turns(&project_root, sid, agent, event.model.as_deref())
+                        .unwrap_or_default();
+                for (repo_root, _) in &foreign {
+                    if head_anchor_needs_backfill(repo_root, agent, sid) {
+                        respool_after_turn(repo_root);
+                    }
+                }
             }
         }
         "subagent-stop" => {
@@ -771,6 +791,70 @@ pub fn read_tool_liveness() -> Vec<ToolLiveness> {
 /// session-start self-heal: if this enabled repo lost its git hooks
 /// (hook file deleted, `core.hooksPath` reset, fresh clone), reinstall
 /// them. Cheap fast-path: skip when post-commit already mentions oobo.
+/// True when HEAD's v2 anchor already references this session but has no
+/// turns for it — the exact signature of a MID-turn commit: the drain ran
+/// at commit time, content-claimed the session's live edits, but the turn
+/// snapshot didn't exist yet. Content-based and clock-free.
+fn head_anchor_needs_backfill(repo_root: &str, agent: &str, session_id: &str) -> bool {
+    if repo_root.is_empty() {
+        return false;
+    }
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+    let Ok(out) = std::process::Command::new(git)
+        .args(["rev-parse", "--verify", "--quiet", "HEAD"])
+        .current_dir(repo_root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let canon = std::fs::canonicalize(repo_root).map_or_else(
+        |_| repo_root.to_string(),
+        |p| p.to_string_lossy().to_string(),
+    );
+    let repo_id = crate::project::id_for_root(&canon);
+    let suid = crate::core::identity::session_uid(agent, session_id);
+    let Some(anchor) = crate::git::orphan::v2::read_anchor(repo_root, &repo_id, &sha) else {
+        return false;
+    };
+    anchor
+        .session_refs
+        .iter()
+        .any(|r| r.session_uid == suid && r.turn_uids.is_empty())
+}
+
+/// Re-spool a repo's HEAD after a turn finalizes, then kick the worker.
+///
+/// The dominant agentic pattern is committing MID-turn: the agent's Bash
+/// tool runs `git commit`, post-commit spools and drains immediately —
+/// but the turn snapshot (edits, transcript, tool calls) is only written
+/// when `stop` fires, after the drain already ran. Without this re-drain
+/// the anchor exists but carries zero provenance/conversation turns.
+/// Everything downstream is idempotent, so re-draining an already
+/// complete commit is a no-op.
+fn respool_after_turn(repo_root: &str) {
+    if repo_root.is_empty() || !crate::project_config::is_enabled(repo_root) {
+        return;
+    }
+    if crate::git::spool::append_commit(repo_root).is_err() {
+        return; // not a git repo / unreadable HEAD — nothing to re-drain
+    }
+    if std::env::var("OOBO_WORKER_SYNC").as_deref() == Ok("1") {
+        let cfg = crate::config::Config::load_or_default();
+        if let Err(e) = crate::worker::drain(&cfg, repo_root) {
+            tracing::warn!(%e, "post-turn sync drain failed");
+        }
+    } else {
+        crate::worker::spawn_drain(repo_root);
+    }
+}
+
 fn self_heal_project_hooks(project_root: &str) {
     if !crate::project_config::is_enabled(project_root) {
         return;

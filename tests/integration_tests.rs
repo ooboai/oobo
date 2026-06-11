@@ -81,6 +81,10 @@ fn run_oobo_with_stdin(
     Command::new(oobo_binary())
         .args(args)
         .env("OOBO_HOME", oobo_home)
+        // Deterministic tests: any drain a hook triggers (e.g. the
+        // post-turn respool on `stop`) runs synchronously instead of
+        // spawning a detached worker that would race assertions.
+        .env("OOBO_WORKER_SYNC", "1")
         .current_dir(repo)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -3426,6 +3430,104 @@ fn test_session_start_self_heals_missing_git_hooks() {
             .unwrap_or(false),
         "session-start must reinstall the missing hook"
     );
+}
+
+/// The dominant real-world agentic pattern: the agent COMMITS MID-TURN
+/// (its Bash tool runs `git commit`), so the post-commit drain runs
+/// before the turn snapshot exists — the anchor lands with zero turn
+/// data. The `stop` hook must re-spool + re-drain to fill in provenance
+/// and conversation turns. Found by live dogfooding on the test server.
+#[test]
+#[cfg_attr(windows, ignore = "pre_blob capture uses Unix path normalization")]
+fn test_mid_turn_commit_backfills_turns_on_stop() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+    init_git_repo(tmp.path());
+    enable_anchor_for_repo(tmp.path(), oobo_home.path());
+    let root = tmp.path().to_str().unwrap();
+
+    fs::write(tmp.path().join("app.py"), "v1\n").unwrap();
+    git_ok(tmp.path(), &["add", "."]);
+    git_ok(tmp.path(), &["commit", "-m", "base"]);
+
+    let sid = "mid-turn-session";
+    let hook = |event: &str, payload: serde_json::Value| {
+        let out = run_oobo_with_stdin(
+            tmp.path(),
+            oobo_home.path(),
+            &["hooks", "agent", event, "--tool", "claude"],
+            &payload,
+        );
+        assert!(out.status.success(), "{event} failed");
+    };
+
+    // Agent edits the file...
+    let abs = tmp.path().join("app.py").to_string_lossy().to_string();
+    hook(
+        "session-start",
+        serde_json::json!({"session_id": sid, "agent": "claude"}),
+    );
+    hook(
+        "pre-tool-use",
+        serde_json::json!({"session_id": sid, "tool_name": "Write", "file_path": abs}),
+    );
+    fs::write(tmp.path().join("app.py"), "v1\nagent line\n").unwrap();
+    hook(
+        "after-tool-use",
+        serde_json::json!({"session_id": sid, "tool_name": "Write", "file_path": abs}),
+    );
+
+    // ...and commits MID-TURN (before `stop`): the drain at commit time
+    // sees no finished turn snapshot.
+    git_ok(tmp.path(), &["add", "."]);
+    anchor_commit_ok(tmp.path(), oobo_home.path(), "mid-turn commit");
+    let sha = git_stdout(tmp.path(), &["rev-parse", "HEAD"]);
+
+    let canon_root = fs::canonicalize(root).unwrap();
+    let repo_id = oobo::project::id_for_root(canon_root.to_str().unwrap());
+    let suid = oobo::core::identity::session_uid("claude", sid);
+    assert!(
+        oobo::git::orphan::v2::list_provenance_turns(root, &repo_id, &suid).is_empty(),
+        "drain at commit time runs before the turn exists — no turns yet"
+    );
+
+    // Turn ends. The stop hook must finish the turn, re-spool HEAD and
+    // re-drain (synchronously under OOBO_WORKER_SYNC=1).
+    let stop_payload = serde_json::json!({"session_id": sid});
+    let stop = Command::new(oobo_binary())
+        .args(["hooks", "agent", "stop", "--tool", "claude"])
+        .env("OOBO_HOME", oobo_home.path())
+        .env("OOBO_WORKER_SYNC", "1")
+        .current_dir(tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(stop_payload.to_string().as_bytes())
+                .unwrap();
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert!(stop.status.success(), "stop failed");
+
+    let turns = oobo::git::orphan::v2::list_provenance_turns(root, &repo_id, &suid);
+    assert!(
+        !turns.is_empty(),
+        "stop must backfill provenance turns for the mid-turn commit"
+    );
+    let conv = oobo::git::orphan::v2::list_conversation_turn_indices(root, &suid);
+    assert!(
+        !conv.is_empty(),
+        "stop must backfill conversation turns at home"
+    );
+    // Anchor still resolves and now references the session.
+    let v2 = oobo::git::orphan::v2::read_anchor(root, &repo_id, &sha).expect("v2 anchor");
+    assert!(v2.session_refs.iter().any(|r| r.session_uid == suid));
 }
 
 /// Session lineage from explicit signals: a parent's `subagent-start`

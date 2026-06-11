@@ -213,15 +213,46 @@ fn load_sessions(project_root: &str, commit_hash: &str) -> Vec<SessionInfo> {
 // ------------------------------------------------------------------
 
 fn resolve_sha(project_root: &str, prefix: &str) -> Vec<(String, String)> {
+    // Accept git revs (HEAD, HEAD~2, branch names, tags) in addition to
+    // sha prefixes — `oobo anchor show HEAD` should just work.
+    let prefix = if prefix.chars().all(|c| c.is_ascii_hexdigit()) {
+        prefix.to_string()
+    } else {
+        rev_parse(project_root, prefix).unwrap_or_else(|| prefix.to_string())
+    };
     let hashes = crate::git::orphan::list_anchor_hashes(project_root);
     hashes
         .into_iter()
-        .filter(|h| h.starts_with(prefix))
+        .filter(|h| h.starts_with(&prefix))
         .filter_map(|h| {
             let anchor = crate::git::orphan::read_anchor(project_root, &h)?;
             Some((h, anchor.message))
         })
         .collect()
+}
+
+fn rev_parse(project_root: &str, rev: &str) -> Option<String> {
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+    let out = std::process::Command::new(git)
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{rev}^{{commit}}"),
+        ])
+        .current_dir(project_root)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if sha.is_empty() {
+        None
+    } else {
+        Some(sha)
+    }
 }
 
 // ------------------------------------------------------------------
