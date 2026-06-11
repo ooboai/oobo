@@ -62,7 +62,9 @@ pub(in crate::git) fn build_anchor(input: AnchorBuildInput<'_>) -> Anchor {
         author: git_context.author.clone(),
         author_type,
         contributors,
-        committed_at: chrono::Utc::now().timestamp(),
+        // The commit's own committer timestamp: deterministic across
+        // async-worker replays, honest when enrichment runs late.
+        committed_at: git_context.committed_at,
         message: git_context.commit_message.clone(),
         files_changed,
         added: git_context.insertions,
@@ -97,6 +99,7 @@ mod tests {
             commit_hash: "abc123".to_string(),
             commit_message: "test commit".to_string(),
             author: "Human <h@example.com>".to_string(),
+            committed_at: 1_700_000_000,
             files_changed: 1,
             insertions: 3,
             deletions: 1,

@@ -42,6 +42,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
 sonar-core = "0.3"
 ctrlc = "3"
+uuid = { version = "1.23.3", features = ["v5"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

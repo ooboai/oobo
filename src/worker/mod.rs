@@ -1,0 +1,365 @@
+//! Detached enrichment worker.
+//!
+//! The git write path appends commits to the spool ([`crate::git::spool`])
+//! and spawns this worker. The worker drains the spool: for each pending
+//! commit it runs the full enrichment pipeline (anchor build + v1 orphan
+//! write), then layers the v2 work on top — content claims, provenance
+//! sessions/turns, the v2 anchor record, and a best-effort orphan push.
+//!
+//! Invariants:
+//! - **Singleton per repo** via [`WorkerLock`] (stale locks stolen).
+//! - **Idempotent**: a spool entry survives until durably processed;
+//!   replays are no-ops (v2 turns are immutable, anchor writes converge,
+//!   the attribution cursor only moves forward).
+//! - **Crash-safe**: killed mid-claim, the work file remains; the next
+//!   drain reprocesses it to an identical end state.
+
+use std::collections::HashMap;
+use std::path::Path;
+
+use crate::attribution::claim;
+use crate::config::Config;
+use crate::core::identity;
+use crate::error::CliError;
+use crate::git::orphan::v2;
+use crate::git::spool::{self, SpoolEntry, WorkerLock};
+
+/// Kick the worker after spooling: detached spawn in production;
+/// synchronous drain when `OOBO_WORKER_SYNC=1` (tests and debugging need
+/// deterministic completion).
+pub fn kick(cfg: &Config, project_root: &str) {
+    if std::env::var("OOBO_WORKER_SYNC").as_deref() == Ok("1") {
+        if let Err(e) = drain(cfg, project_root) {
+            tracing::warn!(%e, "sync drain failed");
+        }
+        return;
+    }
+    spawn_drain(project_root);
+}
+
+/// Spawn a detached `oobo worker drain` for this repo, if there is
+/// pending work and no live worker. Never blocks, never fails loudly.
+pub fn spawn_drain(project_root: &str) {
+    if !spool::has_pending(project_root) {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let _ = std::process::Command::new(exe)
+        .args(["worker", "drain", "--root", project_root])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// Drain the spool for a repo. Returns the number of commits enriched.
+pub fn drain(cfg: &Config, project_root: &str) -> Result<u32, CliError> {
+    let Some(lock) = WorkerLock::acquire(project_root) else {
+        // Another worker is live; it will see our entries.
+        return Ok(0);
+    };
+
+    let mut processed = 0u32;
+    let mut attempted: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+
+    loop {
+        let work = spool::take_work(project_root);
+        let mut saw_new = false;
+
+        for file in &work {
+            let entries = spool::read_entries(file);
+            let mut failed: Vec<SpoolEntry> = Vec::new();
+            for entry in entries {
+                let key = (entry.root.clone(), entry.sha.clone());
+                if !attempted.insert(key) {
+                    // Already failed this run; keep for the next drain.
+                    failed.push(entry);
+                    continue;
+                }
+                saw_new = true;
+                lock.heartbeat();
+                if process_entry(cfg, &entry) {
+                    processed += 1;
+                } else {
+                    tracing::debug!(sha = %entry.sha, "spool entry dropped (commit gone or repo disabled)");
+                }
+            }
+            spool::complete_work(file, &failed);
+        }
+
+        // Re-loop only when new entries appeared during processing.
+        if !saw_new {
+            break;
+        }
+    }
+
+    if processed > 0 {
+        crate::hooks::state::cleanup_stale(project_root, 86400);
+        // Best-effort v2 push; offline/no-remote is fine (pre-push retries).
+        if v2::branch_exists(project_root) {
+            if let Err(e) = v2::push(project_root) {
+                tracing::debug!(%e, "v2 push deferred");
+            }
+        }
+    }
+
+    Ok(processed)
+}
+
+/// Process one spooled commit. `false` = dropped on purpose
+/// (repo/commit no longer addressable). Every fallible sub-step inside
+/// logs and degrades instead of failing the whole entry.
+fn process_entry(cfg: &Config, entry: &SpoolEntry) -> bool {
+    // Canonicalize before deriving any identity from the path: the spool
+    // may record /var/... while readers resolve /private/var/... (macOS),
+    // and repo ids must be stable across both spellings.
+    let root = canon(&entry.root);
+    let root = root.as_str();
+    if !Path::new(root).exists() || cfg.is_ignored(root) || !crate::project_config::is_enabled(root)
+    {
+        return false;
+    }
+
+    // Keep the machine-local registry fresh: pointer resolution uses it
+    // to find home repos checked out on this machine.
+    crate::project::registry_note(root);
+
+    // The commit may have been rewritten away before we got to it
+    // (rebase between spool and drain). Anchors for already-enriched
+    // commits are rekeyed by the post-rewrite hook; an unprocessed
+    // vanished sha has nothing to attach to.
+    let probe = format!("{}^{{commit}}", entry.sha);
+    if crate::git::proxy::run_git_capture_in(
+        cfg,
+        &["rev-parse", "--verify", "--quiet", &probe],
+        Some(root),
+    )
+    .is_err()
+    {
+        return false;
+    }
+
+    let Some(outcome) =
+        crate::git::interceptor::enrich_commit_for(cfg, root, &entry.branch, &entry.sha)
+    else {
+        return false;
+    };
+
+    write_v2(root, entry, &outcome);
+    true
+}
+
+/// Layer the v2 store writes on top of the enrichment outcome:
+/// content claims, provenance sessions + turns, and the anchor record.
+fn write_v2(root: &str, entry: &SpoolEntry, outcome: &crate::git::interceptor::EnrichOutcome) {
+    let repo_id = crate::project::id_for_root(root);
+    let canon_root = canon(root);
+
+    // Claim by content against ALL edit evidence for this repo: live
+    // session chains (incl. foreign-origin sessions routed here) and
+    // turn-snapshot edits from finished turns.
+    let sessions = crate::hooks::store::list_for_project(root);
+    let pending = claim::pending_for_repo(root);
+    let claim_result = claim::claim_commit(root, &entry.sha, &pending);
+
+    // Relevant sessions = content-claimed ∪ evidence-linked.
+    let mut relevant: HashMap<String, String> = HashMap::new(); // session_id → agent
+    for c in &claim_result.claims {
+        relevant.insert(c.session_id.clone(), c.agent.clone());
+    }
+    for link in &outcome.session_links {
+        relevant
+            .entry(link.session_id.clone())
+            .or_insert_with(|| link.agent.clone());
+    }
+    if relevant.is_empty() && claim_result.unclaimed_paths.is_empty() {
+        // Nothing changed content-wise (e.g. empty merge); still write
+        // the anchor record below for completeness.
+    }
+
+    let snapshots = crate::git::turns::list_turn_snapshots(root);
+    let tap_turns = crate::attribution::turn_store::read_all_turns(root);
+    let now = chrono::Utc::now().timestamp();
+
+    let mut session_refs: Vec<v2::SessionRef> = Vec::new();
+    let mut coverage_tools: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut gap_files: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
+    let mut sorted: Vec<(&String, &String)> = relevant.iter().collect();
+    sorted.sort();
+    for (sid, agent) in sorted {
+        let tool = crate::core::tool::normalize_source(agent).to_string();
+        coverage_tools.insert(tool.clone());
+        let suid = identity::session_uid(agent, sid);
+        let state = sessions.iter().find(|s| &s.session_id == sid);
+
+        // Home: the session's ORIGIN repo. Foreign sessions get a stub
+        // with a pointer; origin sessions get the conversation layer here.
+        let origin_root = state.and_then(|s| s.worktree.clone());
+        let is_home = origin_root
+            .as_deref()
+            .is_none_or(|o| canon(o) == canon_root);
+        let home_location = if is_home {
+            None
+        } else {
+            origin_root.as_deref().map(v2::home_location_for)
+        };
+
+        // Lineage from explicit signals only: a tool-reported resume id at
+        // session-start, or a parent whose subagent-start hook named this
+        // session as the spawned child. Never inferred.
+        let lineage = crate::core::identity::SessionLineage {
+            resumed_from: state
+                .and_then(|s| s.resumed_from.as_deref())
+                .map(|prior| identity::session_uid(agent, prior)),
+            compacted_from: None,
+            parent_session_uid: sessions.iter().find_map(|p| {
+                if &p.session_id == sid {
+                    return None;
+                }
+                p.subagent_runs
+                    .as_ref()?
+                    .iter()
+                    .find(|r| &r.agent_id == sid)
+                    .map(|_| identity::session_uid(&p.agent, &p.session_id))
+            }),
+        };
+
+        let record = v2::SessionRecord {
+            schema_version: v2::V2_SCHEMA_VERSION,
+            session_uid: suid.clone(),
+            native_session_ids: vec![sid.clone()],
+            tool,
+            model: state.and_then(|s| s.model.clone()),
+            home_location: home_location.clone(),
+            origin_repo_id: origin_root.as_deref().map(crate::project::id_for_root),
+            repos_touched: vec![repo_id.clone()],
+            lineage,
+            turn_count: state.and_then(|s| s.turn_count).map_or(0, i64::from),
+            title: None,
+            started_at: state.map_or(0, |s| s.started_at),
+            updated_at: state.map_or(now, |s| s.updated_at),
+            ended_at: state.and_then(|s| s.ended_at),
+        };
+        if let Err(e) = v2::write_provenance_session(root, &repo_id, &record) {
+            tracing::warn!(%e, "v2 provenance session write failed");
+        }
+        if is_home {
+            if let Err(e) = v2::write_conversation_session(root, &record) {
+                tracing::warn!(%e, "v2 conversation session write failed");
+            }
+        }
+
+        // Provenance turns: join git-backed turn snapshots (edit
+        // evidence) with tap turns (token deltas) by turn index.
+        let mut turn_uids = Vec::new();
+        for snap in snapshots.iter().filter(|t| &t.session_id == sid) {
+            let tuid = identity::turn_uid(&suid, sid, snap.turn_index);
+            let tap = tap_turns.iter().find(|t| {
+                &t.session_id == sid
+                    && t.turn_index == snap.turn_index
+                    && t.role == crate::core::turn::TurnRole::Assistant
+            });
+            let trigger = tap_turns
+                .iter()
+                .filter(|t| {
+                    &t.session_id == sid
+                        && t.role == crate::core::turn::TurnRole::User
+                        && t.turn_index <= snap.turn_index
+                })
+                .max_by_key(|t| t.turn_index)
+                .and_then(|t| t.message_preview.clone());
+            let capture_gap = snap.files.iter().any(|f| f.capture_gap);
+            for f in snap.files.iter().filter(|f| f.capture_gap) {
+                gap_files.insert(f.path.clone());
+            }
+
+            let turn = v2::TurnRecord {
+                schema_version: v2::V2_SCHEMA_VERSION,
+                turn_uid: tuid.clone(),
+                session_uid: suid.clone(),
+                turn_index: snap.turn_index,
+                native_turn_index: Some(snap.turn_index),
+                source: snap.source.clone(),
+                model: tap.and_then(|t| t.model.clone()),
+                trigger,
+                started_at: snap.started_at,
+                ended_at: snap.ended_at,
+                tokens: tap.map(|t| t.tokens).unwrap_or_default(),
+                tool_names: tap
+                    .and_then(|t| t.tool_names.clone())
+                    .map(|names| names.split(',').map(str::to_string).collect())
+                    .unwrap_or_default(),
+                capture_gap,
+            };
+            let edits = v2::TurnEdits {
+                files: snap.files.clone(),
+            };
+            if let Err(e) = v2::write_provenance_turn(root, &repo_id, &turn, &edits) {
+                tracing::warn!(%e, "v2 provenance turn write failed");
+            }
+
+            // Conversation layer: full turn memory (transcript slice +
+            // tool calls) written ONCE, at the session's home repo only,
+            // gated behind transparency mode like v1 transcripts.
+            // `write_conversation_turn` is content-addressed-idempotent:
+            // an already-stored turn index is never overwritten.
+            if is_home
+                && outcome.anchor.transparency_mode == crate::core::anchor::TransparencyMode::On
+                && (snap.memory.transcript.is_some() || !snap.memory.tool_calls.is_empty())
+            {
+                let transcript_json = serde_json::json!({
+                    "schema_version": v2::V2_SCHEMA_VERSION,
+                    "turn_uid": tuid,
+                    "session_uid": suid,
+                    "turn_index": snap.turn_index,
+                    "native_transcript_path": snap.memory.transcript_path,
+                    "transcript": snap.memory.transcript,
+                })
+                .to_string();
+                let tool_calls_json =
+                    serde_json::to_string(&snap.memory.tool_calls).unwrap_or_else(|_| "[]".into());
+                if let Err(e) = v2::write_conversation_turn(
+                    root,
+                    &suid,
+                    snap.turn_index,
+                    &transcript_json,
+                    &tool_calls_json,
+                ) {
+                    tracing::warn!(%e, "v2 conversation turn write failed");
+                }
+            }
+            turn_uids.push(tuid);
+        }
+
+        session_refs.push(v2::SessionRef {
+            session_uid: suid,
+            home_location,
+            turn_uids,
+        });
+    }
+
+    let coverage = v2::CoverageManifest {
+        tools: coverage_tools.into_iter().collect(),
+        hook_events_seen: Vec::new(),
+        capture_gap_files: gap_files.into_iter().collect(),
+        recorded_at: now,
+    };
+
+    let record = v2::AnchorRecord {
+        anchor: outcome.anchor.clone(),
+        session_refs,
+        coverage: Some(coverage),
+    };
+    if let Err(e) = v2::write_anchor(root, &repo_id, &record, None) {
+        tracing::warn!(%e, "v2 anchor write failed");
+    }
+}
+
+fn canon(path: &str) -> String {
+    std::fs::canonicalize(path)
+        .map_or_else(|_| path.to_string(), |p| p.to_string_lossy().to_string())
+}

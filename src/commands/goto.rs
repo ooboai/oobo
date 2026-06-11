@@ -124,8 +124,31 @@ pub fn run(cfg: &Config, target: &str, no_stash: bool, mode: OutputMode) -> CmdR
         None
     };
 
+    // goto is STRICTLY repo-local: we restored only this repo's slice.
+    // If the turn's session also edited other repos, say so — those
+    // worktrees are informational context, never a goto target.
+    if let GotoKind::Turn(ref turn) = kind {
+        for foreign in foreign_repos_of_session(&project_root, &turn.session_id) {
+            eprintln!(
+                "note: this session also edited {foreign} — \
+                 goto is repo-local, that worktree is untouched."
+            );
+        }
+    }
+
     emit_success(&label, stash_ref.is_some(), memory_path.as_deref(), mode);
     Ok(0)
+}
+
+/// Other repos this session's live capture state has touched (empty when
+/// the session is gone — the note is best-effort context, not data).
+fn foreign_repos_of_session(project_root: &str, session_id: &str) -> Vec<String> {
+    crate::hooks::store::list_for_project(project_root)
+        .iter()
+        .find(|s| s.session_id == session_id)
+        .and_then(|s| s.foreign_repos.as_ref())
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default()
 }
 
 /// `oobo back`  --  pop one level from the navigation stack.

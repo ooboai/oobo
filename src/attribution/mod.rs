@@ -42,6 +42,7 @@
 //!   `is_subagent` / `parent_session_id` from the `sessions` table;
 //!   that's M4's job.
 
+pub mod claim;
 #[cfg(test)]
 pub mod inference;
 pub mod turn_store;

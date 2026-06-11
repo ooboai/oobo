@@ -86,6 +86,9 @@ pub fn auto_hydrate(project_root: &str) {
     if !crate::git::orphan::branch_exists(project_root) {
         let _ = crate::git::orphan::fetch_and_reconcile(project_root);
     }
+    if !crate::git::orphan::v2::branch_exists(project_root) {
+        let _ = crate::git::orphan::v2::fetch_and_reconcile(project_root);
+    }
 }
 
 #[cfg(test)]

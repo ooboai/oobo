@@ -252,10 +252,7 @@ pub(super) fn collect_ai_files_touched(
 
 /// Remove files that are gitignored or untracked from the results.
 /// Uses `git check-ignore` to respect the repo's .gitignore rules.
-fn filter_tracked_files(
-    project_root: &str,
-    files: Vec<(String, String)>,
-) -> Vec<(String, String)> {
+fn filter_tracked_files(project_root: &str, files: Vec<(String, String)>) -> Vec<(String, String)> {
     if files.is_empty() {
         return files;
     }
@@ -449,6 +446,7 @@ pub(super) fn discover_sessions_from_tools(
                 tool_failures: None,
                 bash_commands: None,
                 subagent_runs: None,
+                resumed_from: None,
                 thinking_duration_ms: None,
                 compact_count: None,
                 turn_count: None,
@@ -461,6 +459,8 @@ pub(super) fn discover_sessions_from_tools(
                 last_turn_snapshot_id: None,
                 pre_edit_pending: None,
                 file_edit_chain: None,
+                foreign_repos: None,
+                event_seq: 0,
                 started_at: created_secs,
                 updated_at: updated_secs,
                 ended_at: None,
@@ -833,6 +833,7 @@ mod tests {
             tool_failures: None,
             bash_commands: None,
             subagent_runs: None,
+            resumed_from: None,
             thinking_duration_ms: None,
             compact_count: None,
             turn_count: None,
@@ -845,6 +846,8 @@ mod tests {
             last_turn_snapshot_id: None,
             pre_edit_pending: None,
             file_edit_chain: None,
+            foreign_repos: None,
+            event_seq: 0,
             started_at: now,
             updated_at: now,
             ended_at: None,

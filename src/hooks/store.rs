@@ -115,10 +115,17 @@ pub fn list_for_project(project_root: &str) -> Vec<ActiveSession> {
             }
             if let Ok(content) = fs::read_to_string(&path) {
                 if let Ok(state) = serde_json::from_str::<ActiveSession>(&content) {
+                    // A session belongs to a project if it originated there
+                    // OR routed foreign edits into it (cross-repo capture).
                     let matches_root = state
                         .worktree
                         .as_deref()
-                        .is_some_and(|wt| worktree_matches(wt, project_root));
+                        .is_some_and(|wt| worktree_matches(wt, project_root))
+                        || state.foreign_repos.as_ref().is_some_and(|repos| {
+                            repos
+                                .keys()
+                                .any(|root| worktree_matches(root, project_root))
+                        });
                     if matches_root && seen.insert(state.session_id.clone()) {
                         out.push(state);
                     }
@@ -221,6 +228,7 @@ mod tests {
             tool_failures: None,
             bash_commands: None,
             subagent_runs: None,
+            resumed_from: None,
             thinking_duration_ms: None,
             compact_count: None,
             turn_count: None,
@@ -233,6 +241,8 @@ mod tests {
             last_turn_snapshot_id: None,
             pre_edit_pending: None,
             file_edit_chain: None,
+            foreign_repos: None,
+            event_seq: 0,
             started_at: 1,
             updated_at: 1,
             ended_at: None,

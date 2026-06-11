@@ -557,6 +557,8 @@ diff --git a/blob1 b/blob2
             post_blob: post_blob.clone(),
             tool_name: Some("Write".to_string()),
             timestamp: 1000,
+            seq: 1,
+            timestamp_us: 1_000_000_000,
         }];
 
         let result = compute_chain_line_attrs(&cfg, &chain, "", &post_blob, Some("cursor"));

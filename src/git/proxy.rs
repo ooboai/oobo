@@ -186,6 +186,14 @@ fn post_clone(_cfg: &Config, args: &[&str]) {
         return;
     }
 
+    // v2 store: fetch independently of v1 — a v2-only repo must still
+    // hydrate (and vice versa during the transition window).
+    if crate::git::orphan::v2::remote_branch_exists(&root) {
+        if let Err(e) = crate::git::orphan::v2::fetch_and_reconcile(&root) {
+            eprintln!("oobo: could not fetch v2 anchor metadata: {e}");
+        }
+    }
+
     if !crate::git::orphan::remote_branch_exists(&root) {
         return;
     }

@@ -36,6 +36,55 @@ struct LineBlame {
     total_tokens: u64,
     committed_at: Option<i64>,
     message: Option<String>,
+    /// Provenance-engine drill-down: which edit (turn) of which session
+    /// last produced this line, and why that turn ran.
+    prov: Option<LineProv>,
+}
+
+/// Per-line provenance summary surfaced by `oobo blame`.
+struct LineProv {
+    session_id: String,
+    turn_index: Option<i64>,
+    /// `human_directed` / `subagent` / `agent_autonomous` / `unknown`
+    /// — or `uncaptured` for lines with no covering edit event.
+    trigger: &'static str,
+    prompt: Option<String>,
+    /// Causal chain was disconnected around this edit (ambiguity marker).
+    chain_gap: bool,
+}
+
+/// Map a provenance line origin to the output summary.
+fn line_prov_for(
+    provenance: &crate::provenance::FileProvenance,
+    orig_lineno: u32,
+) -> Option<LineProv> {
+    use crate::provenance::{LineOrigin, Trigger};
+    match provenance.origin_of(orig_lineno)? {
+        LineOrigin::Edit { step } => {
+            let s = provenance.steps.get(*step)?;
+            let (trigger, prompt) = match &s.edit.trigger {
+                Trigger::HumanDirected { prompt } => ("human_directed", prompt.clone()),
+                Trigger::Subagent { agent_type } => ("subagent", agent_type.clone()),
+                Trigger::AgentAutonomous => ("agent_autonomous", None),
+                Trigger::Unknown => ("unknown", None),
+            };
+            Some(LineProv {
+                session_id: s.edit.session_id.clone(),
+                turn_index: s.edit.turn_index,
+                trigger,
+                prompt,
+                chain_gap: !s.linked,
+            })
+        }
+        LineOrigin::Uncaptured { .. } => Some(LineProv {
+            session_id: String::new(),
+            turn_index: None,
+            trigger: "uncaptured",
+            prompt: None,
+            chain_gap: true,
+        }),
+        LineOrigin::Baseline => None,
+    }
 }
 
 /// Entry point.
@@ -200,9 +249,20 @@ fn build_full_blame(
     let anchor_cache = load_anchors(&root, &unique_shas);
 
     let mut session_cache: HashMap<String, (Vec<String>, u64)> = HashMap::new();
+    // Provenance per (origin sha, filename-at-that-commit). Disk-cached
+    // per commit, so only the first query pays the reconstruction.
+    let mut prov_cache: HashMap<(String, String), Option<crate::provenance::FileProvenance>> =
+        HashMap::new();
 
     let mut result = Vec::with_capacity(porcelain.len());
     for pl in &porcelain {
+        let prov = prov_cache
+            .entry((pl.orig_sha.clone(), pl.filename.clone()))
+            .or_insert_with(|| {
+                crate::provenance::gather::file_provenance(&root, &pl.orig_sha, &pl.filename)
+            })
+            .as_ref()
+            .and_then(|p| line_prov_for(p, pl.orig_lineno));
         let (attribution, agent, session_ids, total_tokens, committed_at, message) =
             match anchor_cache.get(&pl.orig_sha).and_then(|a| a.as_ref()) {
                 Some(anchor) => {
@@ -237,6 +297,7 @@ fn build_full_blame(
             total_tokens,
             committed_at,
             message,
+            prov,
         });
     }
 
@@ -335,16 +396,48 @@ fn emit_json(cfg: &Config, file: &str, commit: Option<&str>, args: &[String]) ->
             if let Some(msg) = &lb.message {
                 entry["message"] = serde_json::json!(msg);
             }
+            if let Some(p) = &lb.prov {
+                let mut prov = serde_json::json!({ "trigger": p.trigger });
+                if !p.session_id.is_empty() {
+                    prov["session_id"] = serde_json::json!(p.session_id);
+                }
+                if let Some(t) = p.turn_index {
+                    prov["turn"] = serde_json::json!(t);
+                }
+                if let Some(prompt) = &p.prompt {
+                    prov["prompt"] = serde_json::json!(prompt);
+                }
+                if p.chain_gap {
+                    prov["chain_gap"] = serde_json::json!(true);
+                }
+                entry["provenance"] = prov;
+            }
 
             entry
         })
         .collect();
 
-    let json = serde_json::json!({
+    let mut json = serde_json::json!({
         "file": normalized,
         "commit": commit.unwrap_or("HEAD"),
         "lines": line_entries,
     });
+
+    // Coverage confidence from the v2 anchor of the queried commit:
+    // which tools had live capture, which files had gaps.
+    if let Some(root) = proxy::project_root(cfg) {
+        let repo_id = crate::project::id_for_root(&root);
+        if let Ok(sha) = resolve_commit(cfg, commit) {
+            if let Some(record) = crate::git::orphan::v2::read_anchor(&root, &repo_id, &sha) {
+                if let Some(cov) = &record.coverage {
+                    json["coverage"] = serde_json::json!({
+                        "tools": cov.tools,
+                        "capture_gap_files": cov.capture_gap_files,
+                    });
+                }
+            }
+        }
+    }
     crate::utils::print_json(&json);
     Ok(0)
 }
@@ -367,9 +460,28 @@ fn emit_agent(cfg: &Config, file: &str, commit: Option<&str>, args: &[String]) -
             Some(FileAttribution::Human) => "human".into(),
             None => "-".into(),
         };
-        println!("{sha7} {attr:<7} {:>4}  {}", lb.final_lineno, lb.content);
+        // Chain column: `s:<session>#<turn>@trigger` for proven lines,
+        // `uncaptured` for gap lines, blank when no provenance applies.
+        let chain = match &lb.prov {
+            Some(p) if p.trigger == "uncaptured" => " uncaptured".to_string(),
+            Some(p) => {
+                let turn = p.turn_index.map_or(String::new(), |t| format!("#{t}"));
+                let gap = if p.chain_gap { "!" } else { "" };
+                format!(" s:{}{turn}@{}{gap}", short_sid(&p.session_id), p.trigger)
+            }
+            None => String::new(),
+        };
+        println!(
+            "{sha7} {attr:<7} {:>4}  {}{chain}",
+            lb.final_lineno, lb.content
+        );
     }
     Ok(0)
+}
+
+/// Session ids can be long UUIDs; 8 chars is plenty for display.
+fn short_sid(sid: &str) -> &str {
+    &sid[..8.min(sid.len())]
 }
 
 // ------------------------------------------------------------------
@@ -397,11 +509,20 @@ fn emit_overlay(cfg: &Config, file: &str, commit: Option<&str>, args: &[String])
 
     for raw_line in raw.lines() {
         let n = parse_blame_line_number(raw_line);
-        let attr_str = n.and_then(|n| attr_map.get(&n)).map_or_else(
+        let lb = n.and_then(|n| attr_map.get(&n));
+        let attr_str = lb.map_or_else(
             || "\x1b[90m-\x1b[0m       ".to_string(),
             |lb| format_attr_colored(lb),
         );
-        println!("{attr_str} {raw_line}");
+        // Provenance glyph: · proven via captured edit chain,
+        // ? uncaptured window, ! chain gap around the producing edit.
+        let glyph = match lb.and_then(|lb| lb.prov.as_ref()) {
+            Some(p) if p.trigger == "uncaptured" => "\x1b[33m?\x1b[0m",
+            Some(p) if p.chain_gap => "\x1b[33m!\x1b[0m",
+            Some(_) => "\x1b[32m·\x1b[0m",
+            None => " ",
+        };
+        println!("{attr_str}{glyph} {raw_line}");
     }
     Ok(0)
 }
@@ -594,6 +715,7 @@ filename src/main.rs\n\
             total_tokens: 0,
             committed_at: None,
             message: None,
+            prov: None,
         };
         let s = format_attr_colored(&lb);
         assert!(s.contains("cursor"));

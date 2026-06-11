@@ -326,11 +326,79 @@ pub enum Command {
         action: Option<McpAction>,
     },
 
+    /// List sessions known to this repo (local and foreign-home)
+    #[command(
+        display_order = 8,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo sessions                 Sessions referenced by this repo\n  \
+                       oobo sessions --json          Full JSON with pointer resolution\n  \
+                       oobo sessions --resolve       Hydrate foreign conversations now"
+    )]
+    Sessions {
+        /// Follow pointers and hydrate foreign-home conversations.
+        #[arg(long)]
+        resolve: bool,
+    },
+
+    /// Operate on a single session (show, share)
+    #[command(
+        display_order = 9,
+        after_help = "\x1b[1mExamples:\x1b[0m\n  \
+                       oobo session show <uid>             Resolve one session's conversation\n  \
+                       oobo session share <uid> --to ../y  Copy a conversation into another repo"
+    )]
+    Session {
+        #[command(subcommand)]
+        action: SessionAction,
+    },
+
+    /// Diagnose capture health: hooks installed AND firing, spool, stores
+    #[command(display_order = 10)]
+    Doctor {},
+
     /// Internal hook plumbing (called by agent tools, not typed by users)
     #[command(hide = true)]
     Hooks {
         #[command(subcommand)]
         action: HookAction,
+    },
+
+    /// Internal async enrichment worker (spawned by hooks, not typed by users)
+    #[command(hide = true)]
+    Worker {
+        #[command(subcommand)]
+        action: WorkerAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SessionAction {
+    /// Resolve and display one session (conversation if accessible)
+    Show {
+        /// Session uid (or native session id / unambiguous prefix)
+        uid: String,
+    },
+    /// Deliberately re-home a copy of a session's conversation into
+    /// another repo's v2 store (consent-based copy, original untouched)
+    Share {
+        /// Session uid (or native session id / unambiguous prefix)
+        uid: String,
+        /// Target repo worktree root
+        #[arg(long)]
+        to: String,
+    },
+    /// Re-point provenance stubs after the home remote changed
+    /// (`oobo anchors migrate` equivalent for sessions homed here)
+    Migrate {},
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WorkerAction {
+    /// Drain the commit spool for a repo.
+    Drain {
+        /// Repo worktree root (defaults to the current repo).
+        #[arg(long)]
+        root: Option<String>,
     },
 }
 
@@ -544,6 +612,28 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
             let code = crate::commands::goto::run(cfg, &target, no_stash, mode)?;
             Ok(code)
         }
+        Some(Command::Sessions { resolve }) => {
+            let code = crate::commands::sessions::run(cfg, resolve, mode)?;
+            Ok(code)
+        }
+        Some(Command::Session { action }) => match action {
+            SessionAction::Show { uid } => {
+                let code = crate::commands::sessions::run_show(cfg, &uid, mode)?;
+                Ok(code)
+            }
+            SessionAction::Share { uid, to } => {
+                let code = crate::commands::sessions::run_share(cfg, &uid, &to, mode)?;
+                Ok(code)
+            }
+            SessionAction::Migrate {} => {
+                let code = crate::commands::sessions::run_migrate(cfg, mode)?;
+                Ok(code)
+            }
+        },
+        Some(Command::Doctor {}) => {
+            let code = crate::commands::doctor::run(cfg, mode)?;
+            Ok(code)
+        }
         Some(Command::Back {}) => {
             let code = crate::commands::goto::run_back(cfg, mode)?;
             Ok(code)
@@ -740,16 +830,18 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                         .map_err(|e| e.to_string())?;
                 }
                 HookAction::PostCommit { .. } => {
+                    // Spool-only: the commit path costs an O_APPEND write.
+                    // All enrichment happens in the detached worker.
                     if let Some(root) = git::proxy::project_root(cfg) {
                         if !crate::project_config::is_enabled(&root) {
                             return Ok(0);
                         }
                         if std::env::var("OOBO_INTERCEPTED").is_err() {
-                            if let Err(e) = crate::git::interceptor::on_write_op(cfg, &["commit"]) {
-                                eprintln!("oobo: warning: {e}");
+                            match crate::git::spool::append_commit(&root) {
+                                Ok(_) => crate::worker::kick(cfg, &root),
+                                Err(e) => eprintln!("oobo: warning: could not spool commit: {e}"),
                             }
                         }
-                        crate::hooks::state::cleanup_stale(&root, 86400);
                     }
                 }
                 HookAction::PrePush { .. } => {
@@ -757,9 +849,19 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                         if !crate::project_config::is_enabled(&root) {
                             return Ok(0);
                         }
+                        // Drain any pending enrichment before metadata leaves
+                        // the machine, so the push carries complete anchors.
+                        if crate::git::spool::has_pending(&root) {
+                            let _ = crate::worker::drain(cfg, &root);
+                        }
                         if crate::git::orphan::branch_exists(&root) {
                             if let Err(e) = crate::git::orphan::push(&root) {
                                 eprintln!("oobo: warning: could not push anchors: {e}");
+                            }
+                        }
+                        if crate::git::orphan::v2::branch_exists(&root) {
+                            if let Err(e) = crate::git::orphan::v2::push(&root) {
+                                eprintln!("oobo: warning: could not push anchors/v2: {e}");
                             }
                         }
                     }
@@ -789,6 +891,30 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                         {
                             eprintln!("oobo: warning: could not update rewritten anchors: {e}");
                         }
+                        // Canonicalize like the worker does, so path-derived
+                        // repo ids match the ones the v2 store was written
+                        // under (/var vs /private/var on macOS).
+                        let canon_root = std::fs::canonicalize(&root)
+                            .map_or_else(|_| root.clone(), |p| p.to_string_lossy().to_string());
+                        let repo_id = crate::project::id_for_root(&canon_root);
+                        if let Err(e) = crate::git::orphan::v2::rekey_anchors_from_pairs(
+                            &root, &repo_id, &pairs,
+                        ) {
+                            eprintln!("oobo: warning: could not rekey v2 anchors: {e}");
+                        }
+                    }
+                }
+            }
+            Ok(0)
+        }
+        Some(Command::Worker { action }) => {
+            match action {
+                WorkerAction::Drain { root } => {
+                    let root = root.or_else(|| git::proxy::project_root(cfg));
+                    if let Some(root) = root {
+                        if let Err(e) = crate::worker::drain(cfg, &root) {
+                            tracing::warn!(%e, "worker drain failed");
+                        }
                     }
                 }
             }
@@ -796,6 +922,10 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
         }
         None => {
             // Bare `oobo` = same as `oobo anchors` (the memory feed).
+            // Opportunistically drain pending enrichment (detached).
+            if let Some(root) = git::proxy::project_root(cfg) {
+                crate::worker::spawn_drain(&root);
+            }
             run_anchors_feed(cfg, &cli, mode)
         }
     };

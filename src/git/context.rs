@@ -7,24 +7,42 @@ pub(in crate::git) struct GitContext {
     pub commit_hash: String,
     pub commit_message: String,
     pub author: String,
+    /// Committer timestamp (epoch seconds) from the commit itself —
+    /// NOT wall-clock at enrichment time. The async worker may process
+    /// a commit long after it was made; replays must be deterministic.
+    pub committed_at: i64,
     pub files_changed: u32,
     pub insertions: u32,
     pub deletions: u32,
 }
 
-pub(in crate::git) fn collect_git_context(cfg: &Config, op: &str) -> GitContext {
+/// Collect commit context for a specific sha in a specific repo —
+/// independent of the caller's cwd and of where HEAD has moved since
+/// (the async worker may process a commit long after it was made).
+pub(in crate::git) fn collect_git_context_at(
+    cfg: &Config,
+    project_root: &str,
+    sha: &str,
+) -> GitContext {
     let mut ctx = GitContext::default();
+    let root = Some(project_root);
 
-    if op == "commit" || op == "merge" || op == "cherry-pick" || op == "revert" {
-        ctx.commit_hash = proxy::run_git_capture(cfg, &["rev-parse", "HEAD"]).unwrap_or_default();
-        ctx.commit_message =
-            proxy::run_git_capture(cfg, &["log", "-1", "--format=%s"]).unwrap_or_default();
-        ctx.author =
-            proxy::run_git_capture(cfg, &["log", "-1", "--format=%an <%ae>"]).unwrap_or_default();
+    ctx.commit_hash = proxy::run_git_capture_in(cfg, &["rev-parse", sha], root).unwrap_or_default();
+    if ctx.commit_hash.is_empty() {
+        return ctx;
+    }
+    ctx.commit_message = proxy::run_git_capture_in(cfg, &["log", "-1", "--format=%s", sha], root)
+        .unwrap_or_default();
+    ctx.author = proxy::run_git_capture_in(cfg, &["log", "-1", "--format=%an <%ae>", sha], root)
+        .unwrap_or_default();
+    ctx.committed_at = proxy::run_git_capture_in(cfg, &["log", "-1", "--format=%ct", sha], root)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or_else(|| chrono::Utc::now().timestamp());
 
-        if let Ok(stat) = proxy::run_git_capture(cfg, &["diff", "--shortstat", "HEAD~1", "HEAD"]) {
-            parse_shortstat(&stat, &mut ctx);
-        }
+    let range = format!("{sha}~1..{sha}");
+    if let Ok(stat) = proxy::run_git_capture_in(cfg, &["diff", "--shortstat", &range], root) {
+        parse_shortstat(&stat, &mut ctx);
     }
 
     ctx

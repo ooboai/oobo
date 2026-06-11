@@ -18,6 +18,7 @@ mod mcp;
 mod paths;
 mod project;
 mod project_config;
+mod provenance;
 mod redact;
 mod remote;
 mod session;
@@ -28,6 +29,7 @@ mod tools;
 mod trace;
 mod tui;
 mod utils;
+mod worker;
 
 use std::process;
 

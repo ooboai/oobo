@@ -99,6 +99,79 @@ pub fn id_for_root(root: &str) -> String {
     derive_id(remote.as_deref(), root)
 }
 
+// ── Machine-local repo registry ─────────────────────────────────────────
+//
+// project_id → last-known root on THIS machine. Written opportunistically
+// (worker drain, session-start), read by the pointer-resolution chain so
+// a session homed in repo X resolves locally when X is checked out here —
+// no network, no backend. Never synced; purely a local hint.
+
+fn registry_path() -> std::path::PathBuf {
+    crate::paths::oobo_home()
+        .join("state")
+        .join("repo-registry.json")
+}
+
+type Registry = std::collections::HashMap<String, RegistryEntry>;
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct RegistryEntry {
+    pub root: String,
+    pub updated_at: i64,
+}
+
+fn load_registry() -> Registry {
+    std::fs::read_to_string(registry_path())
+        .ok()
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_default()
+}
+
+/// Record (or refresh) the current root for this repo's project id.
+/// Cheap no-op when the entry is already current.
+pub fn registry_note(root: &str) {
+    let canon = std::fs::canonicalize(root)
+        .map_or_else(|_| root.to_string(), |p| p.to_string_lossy().to_string());
+    let id = id_for_root(&canon);
+
+    let mut reg = load_registry();
+    if reg.get(&id).is_some_and(|e| e.root == canon) {
+        return;
+    }
+    reg.insert(
+        id,
+        RegistryEntry {
+            root: canon,
+            updated_at: chrono::Utc::now().timestamp(),
+        },
+    );
+
+    let path = registry_path();
+    let Some(parent) = path.parent() else { return };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&reg) {
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+}
+
+/// Last-known local root for a project id, verified to still be a git
+/// repo. Stale entries (moved/deleted checkouts) resolve to `None`.
+pub fn registry_lookup(project_id: &str) -> Option<String> {
+    let reg = load_registry();
+    let entry = reg.get(project_id)?;
+    let git_marker = std::path::Path::new(&entry.root).join(".git");
+    if git_marker.exists() {
+        Some(entry.root.clone())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

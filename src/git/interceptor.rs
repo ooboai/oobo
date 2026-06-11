@@ -5,7 +5,7 @@ use crate::hooks;
 
 use super::anchor_builder::{build_anchor, AnchorBuildInput};
 use super::anchor_persist::{persist_anchor_local, persist_anchor_portable};
-use super::context::{collect_git_context, GitContext};
+use super::context::{collect_git_context_at, GitContext};
 use super::file_attribution::{resolve_file_attribution, FileStat};
 use super::session_evidence::is_agent_tool_match;
 use super::session_resolver::{
@@ -39,8 +39,18 @@ impl CommitEvidence {
     }
 }
 
-/// Called after a write operation succeeds.
-/// Logs event locally and creates anchor metadata on the orphan branch.
+/// Everything the enrichment pipeline produced for one commit, returned
+/// so the async worker can layer v2 store writes and content claims on
+/// top without re-deriving evidence.
+pub struct EnrichOutcome {
+    pub anchor: crate::core::anchor::Anchor,
+    pub session_links: Vec<crate::core::anchor::SessionLink>,
+    pub active_sessions: Vec<hooks::state::ActiveSession>,
+}
+
+/// Called after a write operation succeeds. The git write path must cost
+/// nothing: commits are appended to the spool and a detached worker is
+/// spawned to do the heavy enrichment asynchronously.
 #[tracing::instrument(skip_all, fields(op))]
 pub fn on_write_op(cfg: &Config, args: &[&str]) -> Result<(), String> {
     let op = commands::subcommand_name(args)
@@ -58,32 +68,40 @@ pub fn on_write_op(cfg: &Config, args: &[&str]) -> Result<(), String> {
 
     super::first_use::check_first_use(cfg, &project_root);
 
-    let branch = proxy::current_branch(cfg).unwrap_or_default();
-    let git_context = collect_git_context(cfg, &op);
-    let trace = crate::trace::Trace::new(&format!("git.{op}"));
-    trace.stage("collect_git_context");
-
     if op == "commit" || op == "merge" {
-        trace.stage("enrich_commit_start");
-        enrich_commit(cfg, &project_root, &branch, &git_context);
-        trace.stage("enrich_commit_done");
+        match crate::git::spool::append_commit(&project_root) {
+            Ok(_) => crate::worker::kick(cfg, &project_root),
+            Err(e) => tracing::warn!(%e, "could not spool commit"),
+        }
     }
 
     Ok(())
 }
 
-/// Create an Anchor (enriched commit primitive) and write to orphan branch.
+/// Create an Anchor (enriched commit primitive) for a specific sha and
+/// write it to the orphan branch. Runs inside the detached worker —
+/// never on the git write path.
+pub fn enrich_commit_for(
+    cfg: &Config,
+    project_root: &str,
+    branch: &str,
+    sha: &str,
+) -> Option<EnrichOutcome> {
+    let git_context = collect_git_context_at(cfg, project_root, sha);
+    enrich_commit(cfg, project_root, branch, &git_context)
+}
+
 fn enrich_commit(
     cfg: &Config,
     project_root: &str,
     branch: &str,
     git_context: &GitContext,
-) -> Option<()> {
+) -> Option<EnrichOutcome> {
     if git_context.commit_hash.is_empty() {
         return None;
     }
 
-    let evidence = load_commit_evidence(cfg, project_root);
+    let evidence = load_commit_evidence(cfg, project_root, &git_context.commit_hash);
     let trace = crate::trace::Trace::new("anchor.finalize");
     trace.detail(
         "load_commit_evidence",
@@ -98,6 +116,7 @@ fn enrich_commit(
     let active_sessions = &evidence.active_sessions;
     let ai_files_touched = &evidence.ai_files_touched;
     let per_file = &evidence.per_file;
+    let files_changed = evidence.files_changed.clone();
 
     let SessionResolution {
         mut session_links,
@@ -106,7 +125,7 @@ fn enrich_commit(
         project_root,
         active_sessions,
         ai_files_touched,
-        chrono::Utc::now().timestamp(),
+        git_context.committed_at,
     );
     trace.detail(
         "resolve_sessions",
@@ -140,7 +159,7 @@ fn enrich_commit(
         git_context,
         author_type,
         session_links: &session_links,
-        files_changed: evidence.files_changed,
+        files_changed,
         attribution,
         transparency,
         file_interactions,
@@ -154,7 +173,7 @@ fn enrich_commit(
     crate::attribution::runner::enrich_session_links(
         project_root,
         &git_context.commit_hash,
-        chrono::Utc::now().timestamp(),
+        git_context.committed_at,
         &mut session_links,
     );
     trace.stage("enrich_session_links");
@@ -170,10 +189,14 @@ fn enrich_commit(
     persist_anchor_portable(project_root, &anchor, &session_links, &transcripts);
     trace.stage("persist_anchor_portable");
 
-    Some(())
+    Some(EnrichOutcome {
+        anchor,
+        session_links,
+        active_sessions: evidence.active_sessions,
+    })
 }
 
-fn load_commit_evidence(cfg: &Config, project_root: &str) -> CommitEvidence {
+fn load_commit_evidence(cfg: &Config, project_root: &str, sha: &str) -> CommitEvidence {
     let author_info = detect::detect(project_root);
     let initial_author_type = match &author_info {
         detect::CommitAuthor::Agent { .. } => AuthorType::Agent,
@@ -181,9 +204,9 @@ fn load_commit_evidence(cfg: &Config, project_root: &str) -> CommitEvidence {
         detect::CommitAuthor::Human => AuthorType::Human,
         detect::CommitAuthor::Automated => AuthorType::Automated,
     };
-    let per_file = collect_per_file_stats(cfg);
+    let per_file = collect_per_file_stats(cfg, project_root, sha);
     let files_changed: Vec<String> = per_file.iter().map(|(p, _, _)| p.clone()).collect();
-    let parent_commit_epoch = parent_commit_timestamp(cfg);
+    let parent_commit_epoch = parent_commit_timestamp(cfg, project_root, sha);
 
     let all_sessions = hooks::state::active_sessions_for_worktree(project_root);
     let mut active_sessions = filter_relevant_sessions(
@@ -224,8 +247,13 @@ fn load_commit_evidence(cfg: &Config, project_root: &str) -> CommitEvidence {
 
 /// Get the parent commit's author timestamp (Unix epoch seconds).
 /// Returns 0 if there's no parent (initial commit).
-fn parent_commit_timestamp(cfg: &Config) -> i64 {
-    let output = proxy::run_git_capture(cfg, &["log", "-1", "--format=%at", "HEAD~1"]);
+fn parent_commit_timestamp(cfg: &Config, project_root: &str, sha: &str) -> i64 {
+    let parent = format!("{sha}~1");
+    let output = proxy::run_git_capture_in(
+        cfg,
+        &["log", "-1", "--format=%at", &parent],
+        Some(project_root),
+    );
     output
         .unwrap_or_default()
         .trim()
@@ -233,11 +261,19 @@ fn parent_commit_timestamp(cfg: &Config) -> i64 {
         .unwrap_or(0)
 }
 
-/// Collect per-file line stats from the most recent commit via `git diff-tree --numstat`.
-fn collect_per_file_stats(cfg: &Config) -> Vec<FileStat> {
-    let output = proxy::run_git_capture(
+/// Collect per-file line stats for a commit via `git diff-tree --numstat`.
+fn collect_per_file_stats(cfg: &Config, project_root: &str, sha: &str) -> Vec<FileStat> {
+    let output = proxy::run_git_capture_in(
         cfg,
-        &["diff-tree", "--no-commit-id", "--numstat", "-r", "HEAD"],
+        &[
+            "diff-tree",
+            "--no-commit-id",
+            "--numstat",
+            "-r",
+            "--root",
+            sha,
+        ],
+        Some(project_root),
     )
     .unwrap_or_default();
 
@@ -392,6 +428,7 @@ mod tests {
                 tool_failures: None,
                 bash_commands: None,
                 subagent_runs: None,
+                resumed_from: None,
                 thinking_duration_ms: None,
                 compact_count: None,
                 turn_count: None,
@@ -404,6 +441,8 @@ mod tests {
                 last_turn_snapshot_id: None,
                 pre_edit_pending: None,
                 file_edit_chain: None,
+                foreign_repos: None,
+                event_seq: 0,
                 started_at: now,
                 updated_at: now,
                 ended_at: None,

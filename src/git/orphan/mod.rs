@@ -1,5 +1,6 @@
 mod rekey;
 mod sync;
+pub mod v2;
 
 pub use rekey::{parse_rewrite_pairs, rekey_anchors, rekey_anchors_from_rewrite_pairs};
 pub use sync::{fetch_and_reconcile, push, remote_branch_exists};
@@ -246,7 +247,11 @@ pub fn read_session_links(project_root: &str, commit_hash: &str) -> Vec<SessionL
 }
 
 pub fn branch_exists(project_root: &str) -> bool {
-    git_in(project_root, &["rev-parse", "--verify", BRANCH]).is_ok()
+    branch_exists_named(project_root, BRANCH)
+}
+
+pub(super) fn branch_exists_named(project_root: &str, branch: &str) -> bool {
+    git_in(project_root, &["rev-parse", "--verify", branch]).is_ok()
 }
 
 /// Get the current tip commit hash of the orphan branch.
@@ -419,7 +424,11 @@ pub(super) fn shard_key(hash: &str) -> (&str, &str) {
 /// Create the orphan branch using plumbing commands only  --  never touches
 /// the working tree or index, so uncommitted changes are safe.
 fn ensure_branch(project_root: &str) -> Result<(), CliError> {
-    if branch_exists(project_root) {
+    ensure_branch_named(project_root, BRANCH)
+}
+
+pub(super) fn ensure_branch_named(project_root: &str, branch: &str) -> Result<(), CliError> {
+    if branch_exists_named(project_root, branch) {
         return Ok(());
     }
 
@@ -436,14 +445,14 @@ fn ensure_branch(project_root: &str) -> Result<(), CliError> {
     let commit = git_stdin_in(
         project_root,
         &["commit-tree", &tree],
-        "Initialize oobo/anchors/v1",
+        &format!("Initialize {branch}"),
     )?;
 
     git_in(
         project_root,
         &[
             "update-ref",
-            &format!("refs/heads/{BRANCH}"),
+            &format!("refs/heads/{branch}"),
             &commit,
             NULL_OID,
         ],
@@ -460,9 +469,17 @@ pub(super) fn write_to_branch(
     project_root: &str,
     entries: &[(String, String)],
 ) -> Result<(), CliError> {
+    write_to_branch_named(project_root, BRANCH, entries)
+}
+
+pub(super) fn write_to_branch_named(
+    project_root: &str,
+    branch: &str,
+    entries: &[(String, String)],
+) -> Result<(), CliError> {
     let mut last_err = String::new();
     for attempt in 0..MAX_WRITE_ATTEMPTS {
-        match try_write_to_branch(project_root, entries) {
+        match try_write_to_branch(project_root, branch, entries) {
             Ok(()) => return Ok(()),
             Err(ref e)
                 if attempt < MAX_WRITE_ATTEMPTS - 1 && {
@@ -542,8 +559,12 @@ pub(super) fn build_commit_on(
 }
 
 /// hash-object → update-index → write-tree → commit-tree → CAS update-ref.
-fn try_write_to_branch(project_root: &str, entries: &[(String, String)]) -> Result<(), CliError> {
-    let parent = git_in(project_root, &["rev-parse", BRANCH])?;
+fn try_write_to_branch(
+    project_root: &str,
+    branch: &str,
+    entries: &[(String, String)],
+) -> Result<(), CliError> {
+    let parent = git_in(project_root, &["rev-parse", branch])?;
     let new_commit = build_commit_on(
         project_root,
         &parent,
@@ -558,7 +579,7 @@ fn try_write_to_branch(project_root: &str, entries: &[(String, String)]) -> Resu
         project_root,
         &[
             "update-ref",
-            &format!("refs/heads/{BRANCH}"),
+            &format!("refs/heads/{branch}"),
             &new_commit,
             &parent,
         ],
@@ -568,7 +589,25 @@ fn try_write_to_branch(project_root: &str, entries: &[(String, String)]) -> Resu
 }
 
 pub(super) fn read_from_branch(project_root: &str, path: &str) -> Option<String> {
-    git_in(project_root, &["show", &format!("{BRANCH}:{path}")]).ok()
+    read_from_branch_named(project_root, BRANCH, path)
+}
+
+pub(super) fn read_from_branch_named(
+    project_root: &str,
+    branch: &str,
+    path: &str,
+) -> Option<String> {
+    // A fresh clone has the store only as a remote-tracking ref — the
+    // "clone only repo Y, attribution still works offline" contract.
+    // Local branch wins (it's what writers update); origin is fallback.
+    git_in(project_root, &["show", &format!("{branch}:{path}")])
+        .or_else(|_| {
+            git_in(
+                project_root,
+                &["show", &format!("refs/remotes/origin/{branch}:{path}")],
+            )
+        })
+        .ok()
 }
 
 /// Run a git command in a specific directory and capture stdout.
@@ -1123,7 +1162,7 @@ mod tests {
         .unwrap();
 
         // Replay: local (tip_a) has no files that tip_b doesn't have
-        replay_local_files(&repo, &tip_a, &tip_b).unwrap();
+        replay_local_files(&repo, &tip_a, &tip_b, BRANCH).unwrap();
 
         // Branch should now be at tip_b (advanced via CAS) with no
         // extra commits since there was nothing to replay
@@ -1170,7 +1209,7 @@ mod tests {
         )
         .unwrap();
 
-        replay_local_files(&repo, &local_tip, &remote_tip).unwrap();
+        replay_local_files(&repo, &local_tip, &remote_tip, BRANCH).unwrap();
 
         let tree = git_in(&repo, &["ls-tree", "-r", "--name-only", BRANCH]).unwrap();
         assert!(
@@ -1184,6 +1223,69 @@ mod tests {
         assert!(
             tree.contains("README.md"),
             "initial README should be present: {tree}"
+        );
+    }
+
+    #[test]
+    fn test_replay_union_merges_diverged_jsonl_indexes() {
+        // Two writers appended different entries to the same append-only
+        // index file before reconciling. Neither side's entries may be
+        // lost — "remote wins" would silently drop local index lines while
+        // their data files survive, leaving unreachable records.
+        let (tmp, repo) = match init_test_repo() {
+            Some(r) => r,
+            None => return,
+        };
+        let _ = tmp;
+
+        ensure_branch(&repo).unwrap();
+        let base = git_in(&repo, &["rev-parse", BRANCH]).unwrap();
+
+        let index = "repos/xx/index/anchors-by-time.jsonl";
+        write_to_branch(
+            &repo,
+            &[(index.into(), "100\tsha-base\n101\tsha-local\n".into())],
+        )
+        .unwrap();
+        let local_tip = git_in(&repo, &["rev-parse", BRANCH]).unwrap();
+
+        git_in(
+            &repo,
+            &["update-ref", &format!("refs/heads/{BRANCH}"), &base],
+        )
+        .unwrap();
+        write_to_branch(
+            &repo,
+            &[(index.into(), "100\tsha-base\n102\tsha-remote\n".into())],
+        )
+        .unwrap();
+        let remote_tip = git_in(&repo, &["rev-parse", BRANCH]).unwrap();
+
+        git_in(
+            &repo,
+            &["update-ref", &format!("refs/heads/{BRANCH}"), &local_tip],
+        )
+        .unwrap();
+
+        replay_local_files(&repo, &local_tip, &remote_tip, BRANCH).unwrap();
+
+        let merged = git_in(&repo, &["show", &format!("{BRANCH}:{index}")]).unwrap();
+        assert!(
+            merged.contains("sha-base"),
+            "shared line survives: {merged}"
+        );
+        assert!(
+            merged.contains("sha-local"),
+            "local-only index line survives: {merged}"
+        );
+        assert!(
+            merged.contains("sha-remote"),
+            "remote-only index line survives: {merged}"
+        );
+        assert_eq!(
+            merged.matches("sha-base").count(),
+            1,
+            "shared line is not duplicated: {merged}"
         );
     }
 
