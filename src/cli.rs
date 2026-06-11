@@ -352,10 +352,6 @@ pub enum Command {
         action: SessionAction,
     },
 
-    /// Diagnose capture health: hooks installed AND firing, spool, stores
-    #[command(display_order = 10)]
-    Doctor {},
-
     /// Internal hook plumbing (called by agent tools, not typed by users)
     #[command(hide = true)]
     Hooks {
@@ -581,8 +577,7 @@ fn payload_project_root(payload: &str) -> Option<String> {
     }
 }
 
-/// Dispatch a parsed `Cli`. Extracted so legacy-hint rewrites can re-enter
-/// the same code path after swapping argv.
+/// Dispatch a parsed `Cli` to its command implementation.
 async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult {
     let result = match cli.command {
         Some(Command::Anchors {}) => run_anchors_feed(cfg, &cli, mode),
@@ -630,10 +625,6 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                 Ok(code)
             }
         },
-        Some(Command::Doctor {}) => {
-            let code = crate::commands::doctor::run(cfg, mode)?;
-            Ok(code)
-        }
         Some(Command::Back {}) => {
             let code = crate::commands::goto::run_back(cfg, mode)?;
             Ok(code)

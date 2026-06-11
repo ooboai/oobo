@@ -37,7 +37,24 @@ oobo back                                          # Return to where you were
 ```
 
 `goto` auto-stashes dirty changes, loads the target tree, and records a return
-point. `back` restores the original HEAD and pops the stash.
+point. `back` restores the original HEAD and pops the stash. `goto` is strictly
+repo-local: it never touches another repo's worktree.
+
+## Sessions - cross-repo session listing and resolution
+
+```bash
+oobo sessions --agent                              # Sessions this repo knows about
+oobo sessions --json                               # Pointer + hydration per session
+oobo sessions --resolve                            # Follow pointers (may fetch)
+oobo session show <uid> --json                     # Resolve one session fully
+oobo session share <uid> --to <repo>               # Copy a conversation into another repo
+oobo session migrate                               # Re-point stubs after a remote change
+```
+
+A session's conversation is stored exactly once, in its home store. Repos it
+edited from elsewhere hold pointer stubs; `hydration` in the output says
+whether the conversation is readable from here (`local`, `local_repo`,
+`fetched`, `cached`, `stub_only`, or `live` for in-progress sessions).
 
 ## Search - semantic code search
 

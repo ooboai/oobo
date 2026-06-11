@@ -79,15 +79,6 @@ pub fn handle_event(
         .as_deref()
         .or(event.extra.get("conversation_id").and_then(|v| v.as_str()));
 
-    // Liveness marker for `oobo doctor`: proof this tool's hooks fire.
-    // Recorded on turn-boundary events only (cheap; not per tool call).
-    if matches!(
-        event_name,
-        "session-start" | "before-submit-prompt" | "stop" | "session-end"
-    ) {
-        record_tool_liveness(agent, event_name, &project_root);
-    }
-
     match event_name {
         "session-start" => {
             let session_id = session_id_field.ok_or(crate::error::OoboError::Config(
@@ -111,7 +102,7 @@ pub fn handle_event(
                 // Registry note (pointer resolution) + self-heal of any
                 // missing git hooks for this repo — a session that fires
                 // this event proves the tool side works; the repo side
-                // must match (doctor's "installed AND firing").
+                // must match.
                 crate::project::registry_note(&project_root);
                 self_heal_project_hooks(&project_root);
             }
@@ -743,54 +734,6 @@ fn record_no_repo_touch(session_id: &str, agent: &str, tool_name: &str, path: &s
     }
 }
 
-/// Liveness record for `oobo doctor`: which tool last fired which hook
-/// event, and where. One small JSON per tool under
-/// `$OOBO_HOME/state/last-event/`.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct ToolLiveness {
-    pub tool: String,
-    pub event: String,
-    pub project_root: String,
-    pub seen_at: i64,
-}
-
-fn liveness_dir() -> std::path::PathBuf {
-    crate::paths::oobo_home().join("state").join("last-event")
-}
-
-fn record_tool_liveness(agent: &str, event: &str, project_root: &str) {
-    let tool = crate::core::tool::normalize_source(agent).to_string();
-    let dir = liveness_dir();
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    let record = ToolLiveness {
-        tool: tool.clone(),
-        event: event.to_string(),
-        project_root: project_root.to_string(),
-        seen_at: chrono::Utc::now().timestamp(),
-    };
-    if let Ok(json) = serde_json::to_string(&record) {
-        let _ = std::fs::write(dir.join(format!("{tool}.json")), json);
-    }
-}
-
-/// All recorded tool-liveness markers (for `oobo doctor`).
-pub fn read_tool_liveness() -> Vec<ToolLiveness> {
-    let Ok(entries) = std::fs::read_dir(liveness_dir()) else {
-        return Vec::new();
-    };
-    let mut out: Vec<ToolLiveness> = entries
-        .filter_map(|e| std::fs::read_to_string(e.ok()?.path()).ok())
-        .filter_map(|c| serde_json::from_str(&c).ok())
-        .collect();
-    out.sort_by(|a, b| b.seen_at.cmp(&a.seen_at));
-    out
-}
-
-/// session-start self-heal: if this enabled repo lost its git hooks
-/// (hook file deleted, `core.hooksPath` reset, fresh clone), reinstall
-/// them. Cheap fast-path: skip when post-commit already mentions oobo.
 /// True when HEAD's v2 anchor already references this session but has no
 /// turns for it — the exact signature of a MID-turn commit: the drain ran
 /// at commit time, content-claimed the session's live edits, but the turn
@@ -855,6 +798,9 @@ fn respool_after_turn(repo_root: &str) {
     }
 }
 
+/// session-start self-heal: if this enabled repo lost its git hooks
+/// (hook file deleted, `core.hooksPath` reset, fresh clone), reinstall
+/// them. Cheap fast-path: skip when post-commit already mentions oobo.
 fn self_heal_project_hooks(project_root: &str) {
     if !crate::project_config::is_enabled(project_root) {
         return;

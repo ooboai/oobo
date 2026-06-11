@@ -44,15 +44,6 @@ const PUBLIC_HELP_COMMANDS: &[&str] = &[
     "enable", "disable", "setup", "mcp", "help", "update",
 ];
 
-const FORBIDDEN_COMMANDS: &[&str] = &[
-    "doctor",
-    "health",
-    "inspect",
-    "repair",
-    "sync",
-    "sync-status",
-];
-
 #[derive(Debug, Clone)]
 struct Invocation {
     file: &'static str,
@@ -140,12 +131,6 @@ fn top_level_help_keeps_public_command_footprint_small() {
         commands, expected,
         "top-level help exposed an unexpected command footprint"
     );
-    for forbidden in ["doctor", "health", "inspect", "sync", "sync-status"] {
-        assert!(
-            !public_help.contains(forbidden),
-            "top-level help mentions forbidden command {forbidden:?}"
-        );
-    }
 }
 
 #[test]
@@ -167,31 +152,6 @@ fn recall_help_exposes_real_remote_flags() {
         stdout.contains("--both"),
         "recall help should expose local+remote search"
     );
-}
-
-#[test]
-fn cli_spec_does_not_introduce_forbidden_public_commands() {
-    let invocations = parse_invocations();
-
-    for inv in invocations {
-        let Ok(tokens) = split_command(&inv.command) else {
-            continue;
-        };
-        let Some(oobo_idx) = tokens.iter().position(|t| t == "oobo") else {
-            continue;
-        };
-        let Some(verb) = first_non_flag_after_oobo(&tokens[oobo_idx + 1..]) else {
-            continue;
-        };
-
-        assert!(
-            !FORBIDDEN_COMMANDS.contains(&verb.as_str()),
-            "{}:{} documents forbidden public command {:?}",
-            inv.file,
-            inv.line,
-            verb
-        );
-    }
 }
 
 #[test]

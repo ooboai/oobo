@@ -3,7 +3,6 @@ pub mod anchors;
 pub mod bare;
 pub mod blame;
 pub mod delta;
-pub mod doctor;
 pub mod goto;
 pub mod mcp_install;
 pub mod recall;

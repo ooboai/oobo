@@ -45,6 +45,9 @@ Three mutually exclusive modes:
 | Compare two anchors | `oobo delta` |
 | Travel to a turn or commit | `oobo goto <id>` |
 | Return to where you were | `oobo back` |
+| List sessions (incl. cross-repo) | `oobo sessions` |
+| Resolve one session's conversation | `oobo session show <uid>` |
+| Copy a conversation to another repo | `oobo session share <uid> --to <repo>` |
 | Enable tracking in this repo | `oobo enable` |
 | Disable tracking | `oobo disable` |
 | Get a setting | `oobo settings key` |
@@ -77,8 +80,10 @@ Capture is real-time: git hooks (post-commit, pre-push, post-merge, post-rewrite
 - Commit SHA prefix matching for `oobo anchor show` (unambiguous prefixes only)
 - Token counts marked `is_estimated: true` are heuristic estimates; `false` means native counts from the tool
 - `oobo update` self-updates and runs migrations automatically
-- Data lives on a git orphan branch (`oobo/anchors/v1`) - git-native, no external database
-- `oobo blame` is a strict superset of `git blame` - every flag is forwarded; machine-output formats (`--porcelain`, `--line-porcelain`, `--incremental`) bypass the AI overlay automatically.
+- Data lives on git orphan branches (`oobo/anchors/v1`, `oobo/anchors/v2`) - git-native, no external database
+- `oobo blame` is a strict superset of `git blame` - every flag is forwarded; machine-output formats (`--porcelain`, `--line-porcelain`, `--incremental`) bypass the AI overlay automatically. `--json` includes per-line `provenance` (session, turn, trigger, prompt) when attribution-v2 data exists.
+- Sessions can span repos: a session in project X that edits project Y is recorded in both - Y holds a pointer stub, the conversation lives once in its home store. `oobo sessions` shows the pointer and whether the conversation is readable from here.
+- `oobo goto` is strictly repo-local - it never touches another repo's worktree, even when the turn's session edited multiple repos.
 
 ## MCP (Model Context Protocol)
 
