@@ -318,7 +318,9 @@ fn collect_anchor_turn_refs(
                 id: turn_id.to_string(),
                 session_id: session.session_id.clone(),
                 source: crate::core::tool::normalize_source(&session.agent).to_string(),
-                turn_index: session.current_turn_index,
+                // The index points at the in-flight turn; the last
+                // FINISHED snapshot (which `turn_id` names) is one back.
+                turn_index: (session.current_turn_index - 1).max(0),
                 tree_hash: None,
             });
         }

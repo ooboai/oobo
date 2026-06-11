@@ -114,6 +114,17 @@ fn enable_anchor_for_repo(repo: &Path, oobo_home: &Path) {
         "oobo enable failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    // Tests drive every oobo hook explicitly with the binary under test.
+    // Disable the freshly installed git hooks so plain `git commit` in a
+    // test repo can't invoke a machine-wide `oobo` from PATH, whose
+    // detached worker would race the test's synchronous drains (CI has
+    // no installed oobo — this makes local runs match CI).
+    let output = Command::new("git")
+        .args(["config", "core.hooksPath", "/dev/null"])
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "disabling test repo hooks failed");
 }
 
 fn serve_search_once() -> String {
@@ -2659,6 +2670,107 @@ fn test_pre_tool_use_creates_edit_chain() {
 }
 
 // ── attribution v2: spool → worker → claim → v2 store ──────────────────
+
+/// Resume contract: the same native session id returning (tool resume —
+/// e.g. `claude --resume` fires `session-start` again) is a CONTINUATION
+/// of one long session, never a reset. Turn bookkeeping must survive, so
+/// the resumed turn lands at index 1, not as a second "turn 0" whose
+/// provenance the store's turn immutability would silently drop.
+#[test]
+#[cfg_attr(windows, ignore = "pre_blob capture uses Unix path normalization")]
+fn test_session_resume_continues_turn_chain() {
+    let tmp = TempDir::new().unwrap();
+    let oobo_home = isolated_oobo_home();
+    init_git_repo(tmp.path());
+    enable_anchor_for_repo(tmp.path(), oobo_home.path());
+    let root = tmp.path().to_str().unwrap();
+
+    git_ok(tmp.path(), &["commit", "--allow-empty", "-m", "base"]);
+
+    let sid = "resume-chain-session";
+    let hook = |event: &str, payload: serde_json::Value| {
+        let out = run_oobo_with_stdin(
+            tmp.path(),
+            oobo_home.path(),
+            &["hooks", "agent", event, "--tool", "claude"],
+            &payload,
+        );
+        assert!(out.status.success(), "{event} failed");
+    };
+    let file_a = tmp.path().join("a.txt").to_string_lossy().to_string();
+    let file_b = tmp.path().join("b.txt").to_string_lossy().to_string();
+
+    // Turn 1: start → edit a.txt → stop.
+    hook(
+        "session-start",
+        serde_json::json!({"session_id": sid, "agent": "claude"}),
+    );
+    hook(
+        "pre-tool-use",
+        serde_json::json!({"session_id": sid, "tool_name": "Write", "file_path": file_a}),
+    );
+    fs::write(tmp.path().join("a.txt"), "turn one\n").unwrap();
+    hook(
+        "after-tool-use",
+        serde_json::json!({"session_id": sid, "tool_name": "Write", "file_path": file_a}),
+    );
+    hook("stop", serde_json::json!({"session_id": sid}));
+
+    // Resume: the SAME session id fires session-start again.
+    hook(
+        "session-start",
+        serde_json::json!({"session_id": sid, "agent": "claude"}),
+    );
+
+    // Turn 2: edit b.txt → stop.
+    hook(
+        "pre-tool-use",
+        serde_json::json!({"session_id": sid, "tool_name": "Write", "file_path": file_b}),
+    );
+    fs::write(tmp.path().join("b.txt"), "turn two\n").unwrap();
+    hook(
+        "after-tool-use",
+        serde_json::json!({"session_id": sid, "tool_name": "Write", "file_path": file_b}),
+    );
+    hook("stop", serde_json::json!({"session_id": sid}));
+
+    git_ok(tmp.path(), &["add", "."]);
+    anchor_commit_ok(tmp.path(), oobo_home.path(), "two turns, one session");
+    let sha = git_stdout(tmp.path(), &["rev-parse", "HEAD"]);
+
+    let canon_root = fs::canonicalize(root).unwrap();
+    let repo_id = oobo::project::id_for_root(canon_root.to_str().unwrap());
+    let suid = oobo::core::identity::session_uid("claude", sid);
+
+    let turns = oobo::git::orphan::v2::list_provenance_turns(root, &repo_id, &suid);
+    assert_eq!(
+        turns.len(),
+        2,
+        "both turns must persist with distinct indices (resume must not reset to turn 0): {:?}",
+        turns.iter().map(|(t, _)| t.turn_index).collect::<Vec<_>>()
+    );
+    assert_eq!(turns[0].0.turn_index, 0);
+    assert_eq!(turns[1].0.turn_index, 1);
+
+    let session = oobo::git::orphan::v2::read_provenance_session(root, &repo_id, &suid)
+        .expect("session record");
+    assert_eq!(session.turn_count, 2, "turn_count counts the whole chain");
+
+    let anchor =
+        oobo::git::orphan::v2::read_anchor(root, &repo_id, &sha).expect("v2 anchor record");
+    let turn_uids: Vec<_> = anchor
+        .session_refs
+        .iter()
+        .find(|r| r.session_uid == suid)
+        .map(|r| r.turn_uids.clone())
+        .unwrap_or_default();
+    assert_eq!(
+        turn_uids.len(),
+        2,
+        "anchor must reference both turns distinctly"
+    );
+    assert_ne!(turn_uids[0], turn_uids[1]);
+}
 
 /// Full async-commit pipeline: agent edits a file (hook-captured), the
 /// commit lands via the spool-only post-commit hook, the worker drains,

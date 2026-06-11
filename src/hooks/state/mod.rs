@@ -323,7 +323,12 @@ impl SessionBatch {
     }
 }
 
-/// Create a new active session.
+/// Start a session — or RESUME it when the same native session id comes
+/// back (tool resume, reopened window). A returning id is a continuation
+/// of one long session, never a reset: blind re-creation would wipe turn
+/// bookkeeping (`current_turn_index`, `last_turn_snapshot_id`, edit
+/// chains), making every later turn collide with turn 0 — and the v2
+/// store's turn immutability would then silently drop their provenance.
 #[tracing::instrument(skip_all, fields(session_id, agent))]
 pub fn write_session(
     project_root: &str,
@@ -331,6 +336,16 @@ pub fn write_session(
     agent: &str,
     model: Option<&str>,
 ) -> Result<()> {
+    if let Some(mut state) = store::read(project_root, session_id) {
+        tracing::info!(session_id, agent, "session resume (same native id)");
+        state.ended_at = None;
+        if model.is_some() {
+            state.model = model.map(std::string::ToString::to_string);
+        }
+        state.bump();
+        store::write(project_root, session_id, &state)?;
+        return Ok(());
+    }
     tracing::info!(session_id, agent, "session start");
     let worktree = snapshots::resolve_worktree(project_root);
     let state = ActiveSession::new(session_id, agent, model, worktree);
@@ -378,9 +393,9 @@ pub fn start_turn(project_root: &str, session_id: &str) -> Result<()> {
         if state.current_turn_started_at.is_some() {
             return;
         }
-        if state.last_turn_snapshot_id.is_some() {
-            state.current_turn_index += 1;
-        }
+        // The index is NOT advanced here: finishing a turn consumes its
+        // index (same invariant as foreign captures), so turns stay
+        // sequential even for tools that never fire a turn-start hook.
         state.current_turn_started_at = Some(chrono::Utc::now().timestamp());
         state.current_turn_hook_events = Some(Vec::new());
         state.current_turn_tool_calls = Some(Vec::new());

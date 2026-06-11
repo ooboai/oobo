@@ -81,6 +81,10 @@ pub fn finish_turn(
     crate::git::turns::write_turn_snapshot(project_root, snapshot)?;
 
     state.last_turn_snapshot_id = Some(snapshot_id.clone());
+    // Finishing a turn consumes its index (mirrors the foreign-capture
+    // path): the next turn is sequential regardless of whether the tool
+    // fires a turn-start hook before its first event.
+    state.current_turn_index += 1;
     state.current_turn_started_at = None;
     state.current_turn_hook_events = None;
     state.current_turn_tool_calls = None;
