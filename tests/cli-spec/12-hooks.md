@@ -228,10 +228,10 @@ Called by the `pre-push` git hook installed in each enabled repo.
 
 ### Behavior
 1. Locate project root.
-2. If the orphan branch `oobo/anchors/v1` exists → push it to `origin` (or configured remote).
+2. If the orphan branch `oobo/anchors/v2` exists → push it to `origin` (or configured remote). A legacy `oobo/anchors/v1` branch (read-only, pre-v2 data) is pushed too when present.
 3. Log outcome.
 
-**Side effects:** Network I/O: one `git push origin oobo/anchors/v1`.
+**Side effects:** Network I/O: one `git push origin oobo/anchors/v2` (plus the legacy v1 branch when it exists).
 
 **Exit code:** `0`. Failure to push anchors MUST NOT block the user's primary push.
 

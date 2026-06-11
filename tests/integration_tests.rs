@@ -2395,8 +2395,11 @@ fn init_git_repo(repo: &Path) {
 }
 
 fn anchor_commit_ok(repo: &Path, oobo_home: &Path, message: &str) {
+    // Hooks are invoked explicitly below with the binary under test;
+    // suppress the repo-installed ones so a machine-wide `oobo` on PATH
+    // can't contaminate the test repo (CI has no installed oobo).
     let output = Command::new("git")
-        .args(["commit", "-m", message])
+        .args(["-c", "core.hooksPath=/dev/null", "commit", "-m", message])
         .current_dir(repo)
         .output()
         .unwrap();
@@ -2447,7 +2450,10 @@ fn run_post_rewrite_hook(repo: &Path, oobo_home: &Path, rewrite_kind: &str, payl
 }
 
 fn git_ok(repo: &Path, args: &[&str]) {
+    // Tests drive oobo hooks explicitly with the binary under test;
+    // never let repo-installed hooks reach a machine-wide `oobo` on PATH.
     let output = Command::new("git")
+        .args(["-c", "core.hooksPath=/dev/null"])
         .args(args)
         .current_dir(repo)
         .output()
@@ -2721,9 +2727,14 @@ fn test_spool_worker_end_to_end_and_idempotent_redrain() {
         "worker must drain the spool"
     );
 
-    // v1 anchor exists (compatibility path).
-    let v1 = oobo::git::orphan::read_anchor(root, &sha).expect("v1 anchor written by worker");
-    assert_eq!(v1.message, "agent feature");
+    // v1 is read-only legacy: the worker must NOT create it anymore.
+    assert!(
+        !oobo::git::orphan::branch_exists(root),
+        "v2 is the store of record — no new v1 writes"
+    );
+    // The public reader resolves the anchor from v2.
+    let anchor = oobo::git::orphan::read_anchor(root, &sha).expect("anchor readable via v2");
+    assert_eq!(anchor.message, "agent feature");
 
     // v2 anchor exists, content-claimed to the hook session.
     // (The worker canonicalizes the root before deriving the repo id.)
@@ -2781,7 +2792,6 @@ fn test_spool_worker_end_to_end_and_idempotent_redrain() {
     assert_eq!(result.claims[0].session_id, sid);
 
     // ── Idempotency: crash-replay the same commit ──
-    let v1_tip_before = git_stdout(tmp.path(), &["rev-parse", "oobo/anchors/v1"]);
     let v2_anchor_before = serde_json::to_string(&v2.anchor).unwrap();
 
     let branch = git_stdout(tmp.path(), &["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -2804,8 +2814,7 @@ fn test_spool_worker_end_to_end_and_idempotent_redrain() {
     assert!(drain.status.success(), "re-drain must succeed");
     assert!(!oobo::git::spool::has_pending(root));
 
-    // Same logical end state: v2 anchor identical; v1 may rewrite the
-    // same content but the anchor payload must not change.
+    // Same logical end state: v2 anchor identical, still no v1 branch.
     let v2_after = oobo::git::orphan::v2::read_anchor(root, &repo_id, &sha).unwrap();
     assert_eq!(
         serde_json::to_string(&v2_after.anchor).unwrap(),
@@ -2817,9 +2826,10 @@ fn test_spool_worker_end_to_end_and_idempotent_redrain() {
         v2.session_refs.len(),
         "re-drain must not duplicate session refs"
     );
-    let v1_after = oobo::git::orphan::read_anchor(root, &sha).unwrap();
-    assert_eq!(v1_after.message, "agent feature");
-    let _ = v1_tip_before;
+    assert!(
+        !oobo::git::orphan::branch_exists(root),
+        "re-drain must not resurrect v1 writes"
+    );
 }
 
 /// P4 end-to-end: line-level provenance from captured edits.
@@ -3539,6 +3549,14 @@ fn test_mid_turn_commit_backfills_turns_on_stop() {
     assert!(
         !conv.is_empty(),
         "stop must backfill conversation turns at home"
+    );
+    // The session record must not undercount its own stored turns —
+    // mid-turn commits drain before hook state bumps the counter.
+    let session = oobo::git::orphan::v2::read_provenance_session(root, &repo_id, &suid)
+        .expect("v2 session record");
+    assert_eq!(
+        session.turn_count, 1,
+        "turn_count reflects persisted turns, not the stale hook counter"
     );
     // Anchor still resolves and now references the session.
     let v2 = oobo::git::orphan::v2::read_anchor(root, &repo_id, &sha).expect("v2 anchor");

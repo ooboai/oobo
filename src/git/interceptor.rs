@@ -4,7 +4,7 @@ use crate::git::{commands, detect, proxy};
 use crate::hooks;
 
 use super::anchor_builder::{build_anchor, AnchorBuildInput};
-use super::anchor_persist::{persist_anchor_local, persist_anchor_portable};
+use super::anchor_persist::persist_anchor_local;
 use super::context::{collect_git_context_at, GitContext};
 use super::file_attribution::{resolve_file_attribution, FileStat};
 use super::session_evidence::is_agent_tool_match;
@@ -12,7 +12,6 @@ use super::session_resolver::{
     collect_ai_files_touched, discover_sessions_from_tools, filter_relevant_sessions,
     resolve_sessions, SessionResolution,
 };
-use super::transcripts::collect_session_transcripts;
 
 struct CommitEvidence {
     initial_author_type: AuthorType,
@@ -180,14 +179,6 @@ fn enrich_commit(
 
     persist_anchor_local(project_root, &anchor, &session_links);
     trace.stage("persist_anchor_local");
-
-    let transcripts = if transparency == TransparencyMode::On {
-        collect_session_transcripts(active_sessions, project_root)
-    } else {
-        Vec::new()
-    };
-    persist_anchor_portable(project_root, &anchor, &session_links, &transcripts);
-    trace.stage("persist_anchor_portable");
 
     Some(EnrichOutcome {
         anchor,

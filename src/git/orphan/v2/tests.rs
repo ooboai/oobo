@@ -110,6 +110,7 @@ fn anchor_roundtrip_and_time_index() {
                 home_location: Some("r:github.com/acme/x".into()),
                 turn_uids: vec!["tuid-1".into()],
             }],
+            session_links: Vec::new(),
             coverage: Some(CoverageManifest {
                 tools: vec!["claude".into()],
                 hook_events_seen: vec!["stop".into()],
@@ -420,6 +421,7 @@ fn squash_to_tip_collapses_history_and_preserves_content() {
             &AnchorRecord {
                 anchor: make_anchor(&sha, 1000 + i),
                 session_refs: Vec::new(),
+                session_links: Vec::new(),
                 coverage: None,
             },
             None,

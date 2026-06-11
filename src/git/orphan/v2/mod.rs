@@ -95,6 +95,11 @@ pub struct AnchorRecord {
     pub anchor: crate::core::anchor::Anchor,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub session_refs: Vec<SessionRef>,
+    /// Anchor-scoped per-session contribution stats (tokens, duration,
+    /// tool usage AS OF this commit). Session-lifetime facts live in the
+    /// session record; these are what this commit drew from each session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_links: Vec<crate::core::anchor::SessionLink>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coverage: Option<CoverageManifest>,
 }
@@ -469,6 +474,62 @@ pub fn read_anchor(project_root: &str, repo_id: &str, sha: &str) -> Option<Ancho
     read_json(project_root, &format!("{dir}/anchor.json"))
 }
 
+/// Recursive `ls-tree` of the repo's anchor layer, against whichever ref
+/// has it (local branch first, remote-tracking fallback). Returns the
+/// ref that resolved plus the listing, so callers can batch-read from
+/// the same ref.
+fn ls_anchor_layer(project_root: &str, repo_id: &str) -> Option<(String, String)> {
+    let dir = format!("repos/{}/anchors/", repo_key(repo_id));
+    for refname in [BRANCH.to_string(), format!("refs/remotes/origin/{BRANCH}")] {
+        if let Ok(listing) = git_in(
+            project_root,
+            &["ls-tree", "-r", "--name-only", &refname, &dir],
+        ) {
+            if !listing.trim().is_empty() {
+                return Some((refname, listing));
+            }
+        }
+    }
+    None
+}
+
+/// Every anchor sha stored for `repo_id`.
+pub fn list_anchor_shas(project_root: &str, repo_id: &str) -> Vec<String> {
+    let Some((_, listing)) = ls_anchor_layer(project_root, repo_id) else {
+        return Vec::new();
+    };
+    listing
+        .lines()
+        .filter_map(|line| {
+            // repos/<key>/anchors/<p>/<rest>/anchor.json
+            let parts: Vec<&str> = line.split('/').collect();
+            match parts.as_slice() {
+                [_, _, _, p, rest, "anchor.json"] => Some(format!("{p}{rest}")),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Bulk-read every anchor record for `repo_id`: one `ls-tree` + one
+/// `cat-file --batch`. This is the feed/TUI hot path.
+pub fn read_all_anchor_records(project_root: &str, repo_id: &str) -> Vec<AnchorRecord> {
+    let Some((refname, listing)) = ls_anchor_layer(project_root, repo_id) else {
+        return Vec::new();
+    };
+    let paths: Vec<String> = listing
+        .lines()
+        .filter(|l| l.ends_with("/anchor.json"))
+        .map(|l| format!("{refname}:{l}"))
+        .collect();
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    super::batch_cat_file(project_root, &refs)
+        .into_iter()
+        .flatten()
+        .filter_map(|content| serde_json::from_str(&content).ok())
+        .collect()
+}
+
 /// Re-key v2 anchor records after a history rewrite, using git's exact
 /// old→new pairs from the `post-rewrite` hook. Only the sha-keyed anchor
 /// layer needs this — provenance and conversation layers are keyed by
@@ -487,6 +548,11 @@ pub fn rekey_anchors_from_pairs(
         return Ok(());
     }
     let key = repo_key(repo_id);
+    // A squash reports several olds mapping to ONE new; git lists them in
+    // history order, and the new commit carries the LATEST old's state —
+    // so later pairs in this batch override earlier ones. Across batches
+    // (replays) an existing record at `new` is left alone.
+    let mut written: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for (old, new) in pairs {
         if old == new {
             continue;
@@ -494,7 +560,7 @@ pub fn rekey_anchors_from_pairs(
         let Some(mut record) = read_anchor(project_root, repo_id, old) else {
             continue;
         };
-        if read_anchor(project_root, repo_id, new).is_some() {
+        if !written.contains(new.as_str()) && read_anchor(project_root, repo_id, new).is_some() {
             continue; // replay — already rekeyed
         }
         record.anchor.commit_hash.clone_from(new);
@@ -502,6 +568,7 @@ pub fn rekey_anchors_from_pairs(
         let timeline =
             read_from_branch_named(project_root, BRANCH, &format!("{old_dir}/timeline.json"));
         write_anchor(project_root, repo_id, &record, timeline.as_deref())?;
+        written.insert(new);
     }
     Ok(())
 }

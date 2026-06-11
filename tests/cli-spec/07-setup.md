@@ -150,7 +150,7 @@ repairing 12 projects...
 When `--repair` detects a broken orphan branch:
 
 ```
-  work-api: orphan branch 'oobo/anchors/v1' is missing or corrupt.
+  work-api: orphan branch 'oobo/anchors/v2' is missing or corrupt.
   rebuild from local DB? [Y/n]:
 ```
 

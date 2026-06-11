@@ -252,6 +252,18 @@ fn write_v2(
             }),
         };
 
+        // turn_count must reflect the turns actually being persisted, not
+        // just hook-state's counter: a MID-turn commit drains before the
+        // counter is bumped, and the record must never undercount its own
+        // stored turns. Counter-max on merge keeps this monotonic.
+        let observed_turns = snapshots
+            .iter()
+            .filter(|t| &t.session_id == sid)
+            .map(|t| t.turn_index + 1)
+            .max()
+            .unwrap_or(0);
+        let turn_count = observed_turns.max(state.and_then(|s| s.turn_count).map_or(0, i64::from));
+
         let record = v2::SessionRecord {
             schema_version: v2::V2_SCHEMA_VERSION,
             session_uid: suid.clone(),
@@ -262,7 +274,7 @@ fn write_v2(
             origin_repo_id: origin_root.as_deref().map(crate::project::id_for_root),
             repos_touched: vec![repo_id.clone()],
             lineage,
-            turn_count: state.and_then(|s| s.turn_count).map_or(0, i64::from),
+            turn_count,
             title: None,
             started_at: state.map_or(0, |s| s.started_at),
             updated_at: state.map_or(now, |s| s.updated_at),
@@ -418,14 +430,31 @@ fn write_v2(
         recorded_at: now,
     };
 
+    let timeline = outcome
+        .anchor
+        .file_interactions
+        .as_ref()
+        .filter(|i| !i.is_empty())
+        .and_then(|interactions| {
+            crate::git::orphan::build_timeline_json(
+                root,
+                &outcome.anchor,
+                &outcome.session_links,
+                interactions,
+            )
+            .ok()
+        });
+
     let record = v2::AnchorRecord {
         anchor: outcome.anchor.clone(),
         session_refs,
+        session_links: outcome.session_links.clone(),
         coverage: Some(coverage),
     };
-    if let Err(e) = v2::write_anchor(root, &repo_id, &record, None) {
+    if let Err(e) = v2::write_anchor(root, &repo_id, &record, timeline.as_deref()) {
         tracing::warn!(%e, "v2 anchor write failed");
     }
+    crate::git::anchor_cache::invalidate(root);
 }
 
 fn canon(path: &str) -> String {

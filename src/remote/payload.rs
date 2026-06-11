@@ -673,6 +673,7 @@ mod tests {
                 home_location: None,
                 turn_uids: vec![format!("turn-{sha}")],
             }],
+            session_links: Vec::new(),
             coverage: None,
         }
     }

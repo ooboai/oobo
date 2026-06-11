@@ -1,6 +1,6 @@
 use crate::error::CliError;
 
-use super::{git_in, read_anchor, read_from_branch, shard_key, write_to_branch, BRANCH};
+use super::{git_in, read_anchor_v1, read_from_branch, shard_key, write_to_branch, BRANCH};
 
 /// Re-key anchors after a history rewrite observed through the git proxy
 /// (rebase, cherry-pick), where git gives us no old→new mapping.
@@ -16,7 +16,7 @@ pub fn rekey_anchors(
     project_root: &str,
     pre_rewrite_commits: &[(String, String)],
 ) -> Result<(), CliError> {
-    if !super::branch_exists(project_root) || pre_rewrite_commits.is_empty() {
+    if pre_rewrite_commits.is_empty() {
         return Ok(());
     }
 
@@ -39,7 +39,15 @@ pub fn rekey_anchors(
         })
         .collect();
 
-    rekey_exact_pairs(project_root, &pairs)
+    let repo_id = crate::project::id_for_root(project_root);
+    super::v2::rekey_anchors_from_pairs(project_root, &repo_id, &pairs)?;
+
+    // Legacy v1 anchors (written before the v2 cut) follow the rewrite
+    // too, so old history stays resolvable.
+    if super::branch_exists(project_root) {
+        rekey_exact_pairs(project_root, &pairs)?;
+    }
+    Ok(())
 }
 
 /// Copy anchor data from old SHAs to new SHAs given an exact old→new
@@ -51,7 +59,7 @@ fn rekey_exact_pairs(project_root: &str, pairs: &[(String, String)]) -> Result<(
         if old_hash == new_hash {
             continue;
         }
-        if read_anchor(project_root, old_hash).is_none() {
+        if read_anchor_v1(project_root, old_hash).is_none() {
             continue;
         }
 
@@ -81,7 +89,7 @@ fn rekey_exact_pairs(project_root: &str, pairs: &[(String, String)]) -> Result<(
             let new_path = format!("{new_base}/{relative}");
 
             if relative == "metadata.json" && !relative.contains('/') {
-                if let Some(mut anchor) = read_anchor(project_root, old_hash) {
+                if let Some(mut anchor) = read_anchor_v1(project_root, old_hash) {
                     anchor.commit_hash.clone_from(new_hash);
                     let json = serde_json::to_string_pretty(&anchor)
                         .map_err(|e| CliError::Git(format!("serialize anchor: {e}")))?;
