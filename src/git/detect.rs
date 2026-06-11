@@ -19,6 +19,20 @@ pub enum CommitAuthor {
     Automated,
 }
 
+/// How the author verdict was reached. Session presence is a *prior* —
+/// "an agent session is open somewhere in this repo" — and needs
+/// per-commit evidence (file overlap) to stick. Env vars are process
+/// certainty: the process running git IS the agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectSource {
+    /// Inferred from a live/recent session in the worktree.
+    SessionPresence,
+    /// Read from the committing process environment (CLAUDECODE, etc.).
+    Env,
+    /// Neither — fell through to the interactive/automated default.
+    Default,
+}
+
 /// Determine whether the current commit was made by an agent, a human,
 /// or a human assisted by an agent.
 ///
@@ -30,40 +44,52 @@ pub enum CommitAuthor {
 /// | No             | Yes         | Human     |
 /// | No             | No          | Automated |
 pub fn detect(project_root: &str) -> CommitAuthor {
+    detect_with_source(project_root).0
+}
+
+/// Like [`detect`], but also reports how the verdict was reached so the
+/// enrichment layer can treat presence-based verdicts as refutable.
+pub fn detect_with_source(project_root: &str) -> (CommitAuthor, DetectSource) {
     let interactive = is_interactive();
 
     if let Some(author) = check_active_sessions(project_root) {
         if interactive {
-            return CommitAuthor::Assisted {
-                tool: match &author {
-                    CommitAuthor::Agent { tool, .. } => tool.clone(),
-                    _ => "unknown".into(),
+            return (
+                CommitAuthor::Assisted {
+                    tool: match &author {
+                        CommitAuthor::Agent { tool, .. } => tool.clone(),
+                        _ => "unknown".into(),
+                    },
+                    session_id: match &author {
+                        CommitAuthor::Agent { session_id, .. } => session_id.clone(),
+                        _ => None,
+                    },
                 },
-                session_id: match &author {
-                    CommitAuthor::Agent { session_id, .. } => session_id.clone(),
-                    _ => None,
-                },
-            };
+                DetectSource::SessionPresence,
+            );
         }
-        return author;
+        return (author, DetectSource::SessionPresence);
     }
 
     if let Some(author) = check_env_vars() {
         match &author {
             CommitAuthor::Agent { tool, .. } if interactive => {
-                return CommitAuthor::Assisted {
-                    tool: tool.clone(),
-                    session_id: None,
-                };
+                return (
+                    CommitAuthor::Assisted {
+                        tool: tool.clone(),
+                        session_id: None,
+                    },
+                    DetectSource::Env,
+                );
             }
-            _ => return author,
+            _ => return (author, DetectSource::Env),
         }
     }
 
     if interactive {
-        CommitAuthor::Human
+        (CommitAuthor::Human, DetectSource::Default)
     } else {
-        CommitAuthor::Automated
+        (CommitAuthor::Automated, DetectSource::Default)
     }
 }
 

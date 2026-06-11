@@ -15,6 +15,7 @@ use super::session_resolver::{
 
 struct CommitEvidence {
     initial_author_type: AuthorType,
+    detect_source: detect::DetectSource,
     per_file: Vec<FileStat>,
     files_changed: Vec<String>,
     active_sessions: Vec<hooks::state::ActiveSession>,
@@ -27,6 +28,18 @@ impl CommitEvidence {
         match &self.initial_author_type {
             // Downgrade: detect said assisted but no sessions overlap this commit.
             AuthorType::Assisted if !has_ai_evidence => AuthorType::Human,
+            // Downgrade: "agent" was inferred only from a live session being
+            // OPEN in the repo, but none of that session's work overlaps this
+            // commit — a script/human committed while an agent idled nearby.
+            // Without this, the whole diff would be blanket-attributed to AI.
+            // Env-derived agent verdicts (the committing process IS the
+            // agent) are certainty, not inference, and are never downgraded.
+            AuthorType::Agent
+                if self.detect_source == detect::DetectSource::SessionPresence
+                    && !has_ai_evidence =>
+            {
+                AuthorType::Automated
+            }
             // Upgrade: detect said human (e.g. ended session was skipped, no env
             // vars) but file-overlap matching found a relevant session.
             AuthorType::Human if has_ai_evidence => AuthorType::Assisted,
@@ -188,7 +201,7 @@ fn enrich_commit(
 }
 
 fn load_commit_evidence(cfg: &Config, project_root: &str, sha: &str) -> CommitEvidence {
-    let author_info = detect::detect(project_root);
+    let (author_info, detect_source) = detect::detect_with_source(project_root);
     let initial_author_type = match &author_info {
         detect::CommitAuthor::Agent { .. } => AuthorType::Agent,
         detect::CommitAuthor::Assisted { .. } => AuthorType::Assisted,
@@ -229,6 +242,7 @@ fn load_commit_evidence(cfg: &Config, project_root: &str, sha: &str) -> CommitEv
 
     CommitEvidence {
         initial_author_type,
+        detect_source,
         per_file,
         files_changed,
         active_sessions,
@@ -416,8 +430,13 @@ mod tests {
     use crate::core::anchor::AuthorType;
 
     fn empty_evidence(author_type: AuthorType) -> CommitEvidence {
+        evidence_from(author_type, detect::DetectSource::SessionPresence)
+    }
+
+    fn evidence_from(author_type: AuthorType, source: detect::DetectSource) -> CommitEvidence {
         CommitEvidence {
             initial_author_type: author_type,
+            detect_source: source,
             per_file: Vec::new(),
             files_changed: Vec::new(),
             active_sessions: Vec::new(),
@@ -494,8 +513,28 @@ mod tests {
     }
 
     #[test]
-    fn test_resolved_keeps_agent_regardless() {
-        let evidence = empty_evidence(AuthorType::Agent);
+    fn test_resolved_downgrades_presence_inferred_agent_without_evidence() {
+        // An idle agent session being OPEN in the repo is not proof that
+        // it authored this commit: with no overlapping evidence, the
+        // verdict falls back to what a session-less detect would say.
+        let evidence = evidence_from(AuthorType::Agent, detect::DetectSource::SessionPresence);
+        assert_eq!(evidence.resolved_author_type(), AuthorType::Automated);
+    }
+
+    #[test]
+    fn test_resolved_keeps_env_certain_agent_without_evidence() {
+        // CLAUDECODE & co. mean the committing process IS the agent —
+        // capture gaps must not rewrite certain authorship.
+        let evidence = evidence_from(AuthorType::Agent, detect::DetectSource::Env);
+        assert_eq!(evidence.resolved_author_type(), AuthorType::Agent);
+    }
+
+    #[test]
+    fn test_resolved_keeps_agent_with_evidence() {
+        let mut evidence = evidence_from(AuthorType::Agent, detect::DetectSource::SessionPresence);
+        evidence
+            .ai_files_touched
+            .push(("src/main.rs".into(), "claude".into()));
         assert_eq!(evidence.resolved_author_type(), AuthorType::Agent);
     }
 }
