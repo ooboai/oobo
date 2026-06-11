@@ -340,21 +340,52 @@ fn capture_turns_for_sessions(
     project_root: &str,
     session_links: &[crate::core::anchor::SessionLink],
 ) {
+    for link in session_links {
+        let transcript_path = crate::hooks::store::read(project_root, &link.session_id)
+            .and_then(|s| s.transcript_path);
+        ingest_turns_for_session(
+            cfg,
+            project_root,
+            &link.agent,
+            &link.session_id,
+            transcript_path.as_deref(),
+        );
+    }
+}
+
+/// Ingest one session's native tap turns into the per-repo turn cache.
+///
+/// Prefers the hook-recorded `transcript_path` (the exact artifact the
+/// tool reported — works for every tool), falling back to the tap's own
+/// artifact lookup for taps that support `SelfLookup`. Without this,
+/// taps like Claude (no `SelfLookup`) never populate the cache during
+/// the live flow and v2 turn records lose tokens/model/prompt.
+pub(crate) fn ingest_turns_for_session(
+    cfg: &Config,
+    project_root: &str,
+    agent: &str,
+    session_id: &str,
+    transcript_path: Option<&str>,
+) {
     use crate::attribution::turn_store::{write_turns, CollectingSink};
     use crate::taps::TapArtifact;
 
-    let taps = collect_enabled_taps(cfg);
-
-    for link in session_links {
-        for tap in &taps {
-            if !is_agent_tool_match(&link.agent, tap.source()) {
-                continue;
-            }
-            let mut sink = CollectingSink::new();
-            let _ = tap.ingest_session(&link.session_id, TapArtifact::SelfLookup, &mut sink);
-            if !sink.turns.is_empty() {
-                let _ = write_turns(project_root, tap.source(), &link.session_id, &sink.turns);
-            }
+    for tap in collect_enabled_taps(cfg) {
+        if !is_agent_tool_match(agent, tap.source()) {
+            continue;
+        }
+        let mut sink = CollectingSink::new();
+        if let Some(p) = transcript_path
+            .map(std::path::Path::new)
+            .filter(|p| p.exists())
+        {
+            let _ = tap.ingest_session(session_id, TapArtifact::File(p), &mut sink);
+        }
+        if sink.turns.is_empty() {
+            let _ = tap.ingest_session(session_id, TapArtifact::SelfLookup, &mut sink);
+        }
+        if !sink.turns.is_empty() {
+            let _ = write_turns(project_root, tap.source(), session_id, &sink.turns);
         }
     }
 }

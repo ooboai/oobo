@@ -2957,7 +2957,7 @@ fn test_provenance_engine_line_level_attribution() {
 }
 
 /// P5 end-to-end: cross-repo session pointers, resolution, clone-only-Y
-/// attribution, goto isolation, share, and doctor.
+/// attribution, goto isolation, and share.
 ///
 /// A session originates in repo X and edits both X and its sibling Y.
 /// Y's anchor must reference the session through a pointer stub (home =
@@ -3222,29 +3222,6 @@ fn test_cross_repo_pointers_resolution_and_goto_isolation() {
         migrate["stubs_updated"], 0,
         "no remote change → nothing to migrate: {migrate}"
     );
-
-    // ── doctor: tools firing + repo health ──
-    let doctor_out = Command::new(oobo_binary())
-        .args(["doctor", "--json"])
-        .env("OOBO_HOME", oobo_home.path())
-        .current_dir(tmp_x.path())
-        .output()
-        .unwrap();
-    assert!(doctor_out.status.success());
-    let doctor: serde_json::Value =
-        serde_json::from_str(&String::from_utf8_lossy(&doctor_out.stdout)).unwrap();
-    let claude_tool = doctor["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|t| t["tool"] == "claude")
-        .expect("claude liveness recorded (hooks fired in this test)");
-    assert!(
-        claude_tool["last_event"].is_string(),
-        "doctor proves hooks are firing: {claude_tool}"
-    );
-    assert_eq!(doctor["repo"]["enabled"], true);
-    assert_eq!(doctor["repo"]["v2_branch"], true);
 }
 
 /// P5 pointer chain, network leg: the home repo is NOT checked out
@@ -3399,8 +3376,8 @@ fn test_no_repo_edit_lands_in_global_ledger() {
     );
 }
 
-/// session-start self-heals a deleted git hook (doctor's "installed AND
-/// firing" guarantee from the tool side).
+/// session-start self-heals a deleted git hook: the app repairs itself
+/// instead of needing a diagnostic command.
 #[test]
 fn test_session_start_self_heals_missing_git_hooks() {
     let oobo_home = isolated_oobo_home();
@@ -3451,6 +3428,29 @@ fn test_mid_turn_commit_backfills_turns_on_stop() {
     git_ok(tmp.path(), &["commit", "-m", "base"]);
 
     let sid = "mid-turn-session";
+
+    // A native Claude transcript: one human prompt and TWO assistant API
+    // calls inside the turn, each with its own billed usage. The v2 turn
+    // must carry the SUM (one oobo turn = many billed calls).
+    let now = chrono::Utc::now();
+    let ts = |off: i64| (now + chrono::Duration::seconds(off)).to_rfc3339();
+    let transcript = tmp.path().join("transcript.jsonl");
+    fs::write(
+        &transcript,
+        format!(
+            concat!(
+                "{{\"type\":\"user\",\"message\":{{\"content\":\"add the agent line\"}},\"uuid\":\"u1\",\"timestamp\":\"{}\"}}\n",
+                "{{\"type\":\"assistant\",\"message\":{{\"model\":\"claude-opus-4-5\",\"usage\":{{\"input_tokens\":100,\"output_tokens\":40,\"cache_read_input_tokens\":1000,\"cache_creation_input_tokens\":10}},\"content\":[{{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{{}}}}]}},\"uuid\":\"a1\",\"timestamp\":\"{}\"}}\n",
+                "{{\"type\":\"assistant\",\"message\":{{\"model\":\"claude-opus-4-5\",\"usage\":{{\"input_tokens\":50,\"output_tokens\":25,\"cache_read_input_tokens\":2000,\"cache_creation_input_tokens\":5}},\"content\":[{{\"type\":\"text\",\"text\":\"done\"}}]}},\"uuid\":\"a2\",\"timestamp\":\"{}\"}}\n",
+            ),
+            ts(0),
+            ts(0),
+            ts(1),
+        ),
+    )
+    .unwrap();
+    let tpath = transcript.to_string_lossy().to_string();
+
     let hook = |event: &str, payload: serde_json::Value| {
         let out = run_oobo_with_stdin(
             tmp.path(),
@@ -3465,7 +3465,7 @@ fn test_mid_turn_commit_backfills_turns_on_stop() {
     let abs = tmp.path().join("app.py").to_string_lossy().to_string();
     hook(
         "session-start",
-        serde_json::json!({"session_id": sid, "agent": "claude"}),
+        serde_json::json!({"session_id": sid, "agent": "claude", "transcript_path": tpath}),
     );
     hook(
         "pre-tool-use",
@@ -3493,7 +3493,7 @@ fn test_mid_turn_commit_backfills_turns_on_stop() {
 
     // Turn ends. The stop hook must finish the turn, re-spool HEAD and
     // re-drain (synchronously under OOBO_WORKER_SYNC=1).
-    let stop_payload = serde_json::json!({"session_id": sid});
+    let stop_payload = serde_json::json!({"session_id": sid, "transcript_path": tpath});
     let stop = Command::new(oobo_binary())
         .args(["hooks", "agent", "stop", "--tool", "claude"])
         .env("OOBO_HOME", oobo_home.path())
@@ -3519,6 +3519,21 @@ fn test_mid_turn_commit_backfills_turns_on_stop() {
     assert!(
         !turns.is_empty(),
         "stop must backfill provenance turns for the mid-turn commit"
+    );
+    // Tokens are the SUM of both assistant API calls in the turn's
+    // window (time-based join; tap entry indices never match snapshot
+    // turn indices). The human prompt rides along as the trigger.
+    let (turn, _) = &turns[0];
+    assert_eq!(turn.tokens.input, Some(150), "input summed across calls");
+    assert_eq!(turn.tokens.output, Some(65), "output summed across calls");
+    assert_eq!(turn.tokens.cache_read, Some(3000));
+    assert_eq!(turn.tokens.cache_creation, Some(15));
+    assert_eq!(turn.model.as_deref(), Some("claude-opus-4-5"));
+    assert_eq!(turn.trigger.as_deref(), Some("add the agent line"));
+    assert!(
+        turn.tool_names.iter().any(|n| n == "Write"),
+        "tool names collected from in-window calls: {:?}",
+        turn.tool_names
     );
     let conv = oobo::git::orphan::v2::list_conversation_turn_indices(root, &suid);
     assert!(

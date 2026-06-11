@@ -147,18 +147,35 @@ fn classify_live(
         }
     }
 
-    // Captured prompt for this turn → human-directed.
+    // Captured prompt for this turn → human-directed. Tap turns index
+    // per transcript ENTRY, not per oobo turn, so the match is by time:
+    // the latest human prompt at/before the edit. Timestamp-less taps
+    // degrade to the index comparison.
+    let ts_of = crate::attribution::turn_store::turn_ts_secs;
     let taps = crate::attribution::turn_store::read_all_turns(repo_root);
-    let prompt = pe.turn_index.and_then(|idx| {
-        taps.iter()
-            .filter(|t| {
-                t.session_id == pe.session_id
-                    && t.role == crate::core::turn::TurnRole::User
-                    && t.turn_index <= idx
-            })
-            .max_by_key(|t| t.turn_index)
-            .and_then(|t| t.message_preview.clone())
-    });
+    let edit_secs = pe.timestamp_us / 1_000_000;
+    let prompt = taps
+        .iter()
+        .filter(|t| {
+            t.session_id == pe.session_id
+                && t.role == crate::core::turn::TurnRole::User
+                && t.message_preview.is_some()
+                && ts_of(t).is_some_and(|ts| ts <= edit_secs + 2)
+        })
+        .max_by_key(|t| (ts_of(t), t.turn_index))
+        .and_then(|t| t.message_preview.clone())
+        .or_else(|| {
+            let idx = pe.turn_index?;
+            taps.iter()
+                .filter(|t| {
+                    t.session_id == pe.session_id
+                        && t.role == crate::core::turn::TurnRole::User
+                        && ts_of(t).is_none()
+                        && t.turn_index <= idx
+                })
+                .max_by_key(|t| t.turn_index)
+                .and_then(|t| t.message_preview.clone())
+        });
     if let Some(prompt) = prompt {
         return Trigger::HumanDirected {
             prompt: Some(prompt),

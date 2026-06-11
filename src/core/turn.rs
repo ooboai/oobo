@@ -265,6 +265,21 @@ impl TurnTokens {
             || self.cache_creation.is_some()
             || self.output.is_some()
     }
+
+    /// Component-wise addition of another call's deltas. A component
+    /// stays `None` only when *neither* side reported it — `None` means
+    /// "not exposed by the tool", never "zero".
+    pub fn accumulate(&mut self, other: &TurnTokens) {
+        fn add(a: &mut Option<i64>, b: Option<i64>) {
+            if let Some(v) = b {
+                *a = Some(a.unwrap_or(0) + v);
+            }
+        }
+        add(&mut self.input, other.input);
+        add(&mut self.cache_read, other.cache_read);
+        add(&mut self.cache_creation, other.cache_creation);
+        add(&mut self.output, other.output);
+    }
 }
 
 impl Turn {

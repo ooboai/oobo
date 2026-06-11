@@ -74,6 +74,20 @@ pub fn read_all_turns(project_root: &str) -> Vec<Turn> {
     all
 }
 
+/// A tap turn's timestamp in unix **seconds**.
+///
+/// Taps store milliseconds when the native artifact carries RFC3339
+/// timestamps (Claude, Codex) and seconds otherwise; normalize so
+/// time-window joins against hook-recorded times (always seconds) work.
+pub fn turn_ts_secs(turn: &Turn) -> Option<i64> {
+    let ts = turn.started_at.or(turn.ended_at)?;
+    Some(if ts.abs() >= 100_000_000_000 {
+        ts / 1000
+    } else {
+        ts
+    })
+}
+
 /// A TurnSink that collects turns and subagent links in memory.
 #[derive(Default)]
 pub struct CollectingSink {

@@ -148,13 +148,18 @@ fn process_entry(cfg: &Config, entry: &SpoolEntry) -> bool {
         return false;
     };
 
-    write_v2(root, entry, &outcome);
+    write_v2(cfg, root, entry, &outcome);
     true
 }
 
 /// Layer the v2 store writes on top of the enrichment outcome:
 /// content claims, provenance sessions + turns, and the anchor record.
-fn write_v2(root: &str, entry: &SpoolEntry, outcome: &crate::git::interceptor::EnrichOutcome) {
+fn write_v2(
+    cfg: &Config,
+    root: &str,
+    entry: &SpoolEntry,
+    outcome: &crate::git::interceptor::EnrichOutcome,
+) {
     let repo_id = crate::project::id_for_root(root);
     let canon_root = canon(root);
 
@@ -178,6 +183,25 @@ fn write_v2(root: &str, entry: &SpoolEntry, outcome: &crate::git::interceptor::E
     if relevant.is_empty() && claim_result.unclaimed_paths.is_empty() {
         // Nothing changed content-wise (e.g. empty merge); still write
         // the anchor record below for completeness.
+    }
+
+    // Pull native tap turns (token deltas, model, prompts) into the
+    // per-repo cache for every relevant session BEFORE the join below.
+    // The hook state records exactly which artifact to read; without
+    // this, tools whose taps can't self-locate (Claude) never populate
+    // the cache in the live flow and v2 turns lose their tokens.
+    for (sid, agent) in &relevant {
+        let transcript_path = sessions
+            .iter()
+            .find(|s| &s.session_id == sid)
+            .and_then(|s| s.transcript_path.clone());
+        crate::git::interceptor::ingest_turns_for_session(
+            cfg,
+            root,
+            agent,
+            sid,
+            transcript_path.as_deref(),
+        );
     }
 
     let snapshots = crate::git::turns::list_turn_snapshots(root);
@@ -254,23 +278,71 @@ fn write_v2(root: &str, entry: &SpoolEntry, outcome: &crate::git::interceptor::E
         }
 
         // Provenance turns: join git-backed turn snapshots (edit
-        // evidence) with tap turns (token deltas) by turn index.
+        // evidence) with tap turns (token deltas) BY TIME. Tap turns
+        // index per transcript ENTRY (each user message, each assistant
+        // API call); snapshots index per oobo TURN (prompt → stop).
+        // Different index spaces — and one oobo turn is usually MANY
+        // billed API calls, so the turn's tokens are the SUM of every
+        // assistant call inside its window.
+        const JOIN_SLACK_SECS: i64 = 2;
+        let ts_of = crate::attribution::turn_store::turn_ts_secs;
         let mut turn_uids = Vec::new();
         for snap in snapshots.iter().filter(|t| &t.session_id == sid) {
             let tuid = identity::turn_uid(&suid, sid, snap.turn_index);
-            let tap = tap_turns.iter().find(|t| {
-                &t.session_id == sid
-                    && t.turn_index == snap.turn_index
-                    && t.role == crate::core::turn::TurnRole::Assistant
-            });
+            let wstart = snap.started_at.unwrap_or(snap.created_at) - JOIN_SLACK_SECS;
+            let wend = snap.ended_at.unwrap_or(snap.created_at) + JOIN_SLACK_SECS;
+
+            let calls: Vec<&crate::core::turn::Turn> = tap_turns
+                .iter()
+                .filter(|t| {
+                    &t.session_id == sid
+                        && t.role == crate::core::turn::TurnRole::Assistant
+                        && ts_of(t).is_some_and(|ts| ts >= wstart && ts <= wend)
+                })
+                .collect();
+
+            let mut tokens = crate::core::turn::TurnTokens::default();
+            let mut model: Option<String> = None;
+            let mut tool_names: Vec<String> = Vec::new();
+            for call in &calls {
+                tokens.accumulate(&call.tokens);
+                if call.model.is_some() {
+                    model.clone_from(&call.model);
+                }
+                if let Some(names) = &call.tool_names {
+                    tool_names.extend(names.split(',').filter(|n| !n.is_empty()).map(String::from));
+                }
+            }
+            if calls.is_empty() {
+                // Timestamp-less taps: degrade to the index join (only
+                // sound when the tap indexes per oobo turn).
+                if let Some(t) = tap_turns.iter().find(|t| {
+                    &t.session_id == sid
+                        && t.turn_index == snap.turn_index
+                        && t.role == crate::core::turn::TurnRole::Assistant
+                        && ts_of(t).is_none()
+                }) {
+                    tokens = t.tokens;
+                    model.clone_from(&t.model);
+                    tool_names = t
+                        .tool_names
+                        .clone()
+                        .map(|names| names.split(',').map(str::to_string).collect())
+                        .unwrap_or_default();
+                }
+            }
+
+            // The human prompt that directed this turn: the latest user
+            // entry at/before the end of the turn's window.
             let trigger = tap_turns
                 .iter()
                 .filter(|t| {
                     &t.session_id == sid
                         && t.role == crate::core::turn::TurnRole::User
-                        && t.turn_index <= snap.turn_index
+                        && t.message_preview.is_some()
+                        && ts_of(t).is_some_and(|ts| ts <= wend)
                 })
-                .max_by_key(|t| t.turn_index)
+                .max_by_key(|t| (ts_of(t), t.turn_index))
                 .and_then(|t| t.message_preview.clone());
             let capture_gap = snap.files.iter().any(|f| f.capture_gap);
             for f in snap.files.iter().filter(|f| f.capture_gap) {
@@ -284,15 +356,12 @@ fn write_v2(root: &str, entry: &SpoolEntry, outcome: &crate::git::interceptor::E
                 turn_index: snap.turn_index,
                 native_turn_index: Some(snap.turn_index),
                 source: snap.source.clone(),
-                model: tap.and_then(|t| t.model.clone()),
+                model,
                 trigger,
                 started_at: snap.started_at,
                 ended_at: snap.ended_at,
-                tokens: tap.map(|t| t.tokens).unwrap_or_default(),
-                tool_names: tap
-                    .and_then(|t| t.tool_names.clone())
-                    .map(|names| names.split(',').map(str::to_string).collect())
-                    .unwrap_or_default(),
+                tokens,
+                tool_names,
                 capture_gap,
             };
             let edits = v2::TurnEdits {
