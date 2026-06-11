@@ -3198,6 +3198,11 @@ fn test_cross_repo_pointers_resolution_and_goto_isolation() {
         row["hydration"]["kind"], "local_repo",
         "conversation resolves through the registry: {row}"
     );
+    assert!(
+        row["turn_count"].as_i64().unwrap_or(0) >= 1,
+        "the listing must report the turns the session is KNOWN to have \
+         (stub turn_count), not just locally readable conversation turns: {row}"
+    );
 
     // ── anchor show in Y surfaces the foreign-home pointer ──
     let y_sha_full = git_stdout(tmp_y.path(), &["rev-parse", "HEAD"]);

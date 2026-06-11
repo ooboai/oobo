@@ -29,6 +29,15 @@ struct SessionRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     home_location: Option<String>,
     hydration: Hydration,
+    /// Turns the session is KNOWN to have. Both the stored counter and
+    /// the readable-conversation count are lower bounds of the truth
+    /// (stubs have a counter but no readable conversation; legacy
+    /// records have conversations but a zero counter), so this is the
+    /// max of the two — same counter-max rule the store itself uses.
+    turn_count: i64,
+    /// Turns whose conversation payload is readable from this repo.
+    /// 0 for a foreign stub without access — that's an access fact,
+    /// not a claim about how many turns the session has.
     conversation_turns: usize,
     updated_at: i64,
     /// Still has live hook-capture state on this machine.
@@ -58,6 +67,11 @@ pub fn run(cfg: &Config, resolve: bool, mode: OutputMode) -> CmdResult {
         let stub = v2::read_provenance_session(&root, &repo_id, &uid);
         let home = stub.as_ref().and_then(|s| s.home_location.clone());
         let s = resolved.session;
+        let stub_count = stub.as_ref().map_or(0, |st| st.turn_count);
+        let turn_count = s
+            .turn_count
+            .max(stub_count)
+            .max(resolved.conversation_turns as i64);
         rows.push(SessionRow {
             session_uid: uid.clone(),
             native_session_ids: s.native_session_ids,
@@ -65,6 +79,7 @@ pub fn run(cfg: &Config, resolve: bool, mode: OutputMode) -> CmdResult {
             title: s.title,
             home_location: home,
             hydration: resolved.hydration,
+            turn_count,
             conversation_turns: resolved.conversation_turns,
             updated_at: if s.updated_at > 0 { s.updated_at } else { ts },
             live: live_ids.contains(&uid),
@@ -85,6 +100,7 @@ pub fn run(cfg: &Config, resolve: bool, mode: OutputMode) -> CmdResult {
             title: None,
             home_location: None,
             hydration: Hydration::Live,
+            turn_count: s.current_turn_index,
             conversation_turns: 0,
             updated_at: s.updated_at,
             live: true,
@@ -117,7 +133,7 @@ pub fn run(cfg: &Config, resolve: bool, mode: OutputMode) -> CmdResult {
                 let title = r.title.as_deref().unwrap_or("(untitled)");
                 println!(
                     "{uid8}  {:<9} {:>3}t  {title}  {home}{live}",
-                    r.tool, r.conversation_turns
+                    r.tool, r.turn_count
                 );
             }
         }
@@ -141,11 +157,18 @@ pub fn run_show(cfg: &Config, uid_arg: &str, mode: OutputMode) -> CmdResult {
         eprintln!("oobo: session '{uid}' not found.");
         return Ok(1);
     };
+    let stub_count = v2::read_provenance_session(&root, &repo_id, &uid).map_or(0, |s| s.turn_count);
+    let turn_count = resolved
+        .session
+        .turn_count
+        .max(stub_count)
+        .max(resolved.conversation_turns as i64);
 
     if mode == OutputMode::Json {
         crate::utils::print_json(&serde_json::json!({
             "session_uid": uid,
             "hydration": resolved.hydration,
+            "turn_count": turn_count,
             "conversation_turns": resolved.conversation_turns,
             "session": resolved.session,
         }));
@@ -179,7 +202,10 @@ pub fn run_show(cfg: &Config, uid_arg: &str, mode: OutputMode) -> CmdResult {
                         .unwrap_or_default()
                 ),
             }
-            println!("  turns available: {}", resolved.conversation_turns);
+            println!(
+                "  turns: {turn_count} ({} with conversation readable here)",
+                resolved.conversation_turns
+            );
             if !s.repos_touched.is_empty() {
                 println!("  repos touched: {}", s.repos_touched.join(", "));
             }
