@@ -2987,7 +2987,10 @@ fn test_provenance_engine_line_level_attribution() {
 
     // Agent session adds line 2 through the hook lifecycle.
     let sid = "prov-e2e-session";
-    let abs_file = tmp.path().join("feature.txt").to_string_lossy().to_string();
+    let abs_file = Path::new(&canon(tmp.path()))
+        .join("feature.txt")
+        .to_string_lossy()
+        .to_string();
     for (event, payload) in [
         (
             "session-start",
