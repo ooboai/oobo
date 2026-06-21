@@ -74,6 +74,7 @@ pub fn derive_id(remote: Option<&str>, path: &str) -> String {
 }
 
 fn detect_remote_for(root: &str) -> Option<String> {
+    let root = crate::utils::normalize_win_path(root);
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let output = std::process::Command::new(&git)
         .args(["remote", "get-url", "origin"])

@@ -71,15 +71,18 @@ pub fn run_git_capture_in(
 
 /// Get the project root via `git rev-parse --show-toplevel`.
 pub fn project_root(cfg: &Config) -> Option<String> {
-    run_git_capture(cfg, &["rev-parse", "--show-toplevel"]).ok()
+    run_git_capture(cfg, &["rev-parse", "--show-toplevel"])
+        .ok()
+        .map(|s| crate::utils::normalize_win_path(&s).to_string())
 }
 
 /// Get the project root for a given working directory (no Config needed).
 pub fn project_root_from(cwd: &str) -> String {
+    let root = crate::utils::normalize_win_path(cwd);
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let mut cmd = Command::new(git);
     cmd.args(["rev-parse", "--show-toplevel"])
-        .current_dir(cwd)
+        .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -88,12 +91,13 @@ pub fn project_root_from(cwd: &str) -> String {
         .ok()
         .filter(|o| o.status.success())
         .map_or_else(
-            || cwd.to_string(),
+            || root.to_string(),
             |o| {
-                String::from_utf8_lossy(&o.stdout)
+                let raw = String::from_utf8_lossy(&o.stdout)
                     .replace('\r', "")
                     .trim()
-                    .to_string()
+                    .to_string();
+                crate::utils::normalize_win_path(&raw).to_string()
             },
         )
 }

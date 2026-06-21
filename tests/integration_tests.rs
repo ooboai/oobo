@@ -3376,7 +3376,7 @@ fn test_pointer_resolves_via_remote_fetch_then_cache_offline() {
     let host_dir = TempDir::new().unwrap();
     let host = host_dir.path().join("anchors-host.git");
     git_ok(host_dir.path(), &["init", "--bare", host.to_str().unwrap()]);
-    let host_url = host.to_string_lossy().to_string();
+    let host_url = format!("{}/anchors-host.git", canon(host_dir.path()));
     let home_pointer = format!("r:{}", oobo::project::canonicalize_remote(&host_url));
 
     // Home repo X: conversation lives here; v2 branch pushed to the host.
