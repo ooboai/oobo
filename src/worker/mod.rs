@@ -481,8 +481,10 @@ fn write_v2(
 }
 
 fn canon(path: &str) -> String {
-    std::fs::canonicalize(path)
-        .map_or_else(|_| path.to_string(), |p| p.to_string_lossy().to_string())
+    std::fs::canonicalize(path).map_or_else(
+        |_| path.to_string(),
+        |p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
+    )
 }
 
 /// Record that an anchor was intentionally dropped so `oobo status` can

@@ -94,7 +94,7 @@ fn resolve_file_repo_root(path: &Path) -> Option<String> {
         if dir.join(".git").exists() {
             return Some(std::fs::canonicalize(dir).map_or_else(
                 |_| dir.to_string_lossy().to_string(),
-                |p| p.to_string_lossy().to_string(),
+                |p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
             ));
         }
         dir = dir.parent()?;
@@ -107,7 +107,8 @@ fn resolve_file_repo_root(path: &Path) -> Option<String> {
 /// macOS `/var` vs `/private/var` and symlinked roots comparable.
 fn canonicalize_best_effort(p: &Path) -> PathBuf {
     if let Ok(c) = std::fs::canonicalize(p) {
-        return c;
+        let s = c.to_string_lossy();
+        return PathBuf::from(crate::utils::normalize_win_path(&s).to_string());
     }
     match (p.parent(), p.file_name()) {
         (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
@@ -132,10 +133,11 @@ mod tests {
     }
 
     fn canon(p: &Path) -> String {
-        std::fs::canonicalize(p)
+        let s = std::fs::canonicalize(p)
             .unwrap()
             .to_string_lossy()
-            .to_string()
+            .to_string();
+        crate::utils::normalize_win_path(&s).to_string()
     }
 
     #[test]

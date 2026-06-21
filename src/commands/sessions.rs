@@ -245,11 +245,11 @@ pub fn run_share(cfg: &Config, uid_arg: &str, target: &str, mode: OutputMode) ->
         }
     };
 
-    let Ok(target_root) = std::fs::canonicalize(target) else {
+    let Ok(target_canon) = std::fs::canonicalize(target) else {
         eprintln!("oobo: target repo '{target}' not found.");
         return Ok(1);
     };
-    let target_root = target_root.to_string_lossy().to_string();
+    let target_root = crate::utils::normalize_win_path(&target_canon.to_string_lossy()).to_string();
     if crate::git::proxy::project_root_from(&target_root).is_empty() {
         eprintln!("oobo: target '{target}' is not a git repository.");
         return Ok(1);

@@ -279,8 +279,10 @@ pub fn claim_commit(repo_root: &str, sha: &str, pending: &[PendingEdit]) -> Clai
 }
 
 fn canon(path: &str) -> String {
-    std::fs::canonicalize(path)
-        .map_or_else(|_| path.to_string(), |p| p.to_string_lossy().to_string())
+    std::fs::canonicalize(path).map_or_else(
+        |_| path.to_string(),
+        |p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
+    )
 }
 
 fn is_null_blob(sha: &str) -> bool {

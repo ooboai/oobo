@@ -130,8 +130,10 @@ fn load_registry() -> Registry {
 /// Record (or refresh) the current root for this repo's project id.
 /// Cheap no-op when the entry is already current.
 pub fn registry_note(root: &str) {
-    let canon = std::fs::canonicalize(root)
-        .map_or_else(|_| root.to_string(), |p| p.to_string_lossy().to_string());
+    let canon = std::fs::canonicalize(root).map_or_else(
+        |_| root.to_string(),
+        |p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
+    );
     let id = id_for_root(&canon);
 
     let mut reg = load_registry();

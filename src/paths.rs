@@ -16,9 +16,14 @@ pub fn slug_from_path(path: &str) -> String {
 }
 
 /// Attempt to canonicalize a path, falling back to a cleaned version.
+/// On Windows, strips the `\\?\` extended-length prefix that
+/// `std::fs::canonicalize` adds (git and other CLI tools choke on it).
 pub fn normalize_path(p: &str) -> String {
     match fs::canonicalize(p) {
-        Ok(canonical) => canonical.to_string_lossy().to_string(),
+        Ok(canonical) => {
+            let s = canonical.to_string_lossy().to_string();
+            crate::utils::normalize_win_path(&s).to_string()
+        }
         Err(_) => p.replace('\\', "/").trim_end_matches('/').to_string(),
     }
 }

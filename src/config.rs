@@ -385,11 +385,13 @@ impl Config {
     pub fn is_ignored(&self, project_root: &str) -> bool {
         let canonical = std::fs::canonicalize(project_root).map_or_else(
             |_| project_root.to_string(),
-            |p| p.to_string_lossy().to_string(),
+            |p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
         );
         self.ignored_repos.iter().any(|p| {
-            let c = std::fs::canonicalize(p)
-                .map_or_else(|_| p.clone(), |p| p.to_string_lossy().to_string());
+            let c = std::fs::canonicalize(p).map_or_else(
+                |_| p.clone(),
+                |p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
+            );
             c == canonical
         })
     }
@@ -588,7 +590,7 @@ mod tests {
         cfg.ignored_repos.push(path.clone());
         let before = cfg.ignored_repos.len();
         let canonical = std::fs::canonicalize(&path)
-            .map(|p| p.to_string_lossy().to_string())
+            .map(|p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string())
             .unwrap_or(path.clone());
         if !cfg.is_ignored(&canonical) {
             cfg.ignored_repos.push(canonical);
@@ -601,14 +603,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().to_string_lossy().to_string();
         let canonical = std::fs::canonicalize(&path)
-            .map(|p| p.to_string_lossy().to_string())
+            .map(|p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string())
             .unwrap_or(path.clone());
         let mut cfg = Config::default();
         cfg.ignored_repos.push(canonical.clone());
         assert!(cfg.is_ignored(&path));
         cfg.ignored_repos.retain(|p| {
-            let c = std::fs::canonicalize(p)
-                .map_or_else(|_| p.clone(), |p| p.to_string_lossy().to_string());
+            let c = std::fs::canonicalize(p).map_or_else(
+                |_| p.clone(),
+                |p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
+            );
             c != canonical
         });
         assert!(!cfg.is_ignored(&path));

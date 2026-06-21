@@ -12,7 +12,7 @@ pub const REF_PREFIX: &str = "refs/oobo/turns/v1";
 pub fn worktree_id(project_root: &str) -> String {
     let canonical = std::fs::canonicalize(project_root).map_or_else(
         |_| project_root.to_string(),
-        |p| p.to_string_lossy().to_string(),
+        |p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
     );
     format!("w{:016x}", fnv1a64(canonical.as_bytes()))
 }
@@ -220,11 +220,12 @@ fn git_command(
 ) -> Result<String, String> {
     use std::io::Write;
 
+    let root = crate::utils::normalize_win_path(project_root);
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let mut command = Command::new(git);
     command
         .args(args)
-        .current_dir(project_root)
+        .current_dir(root)
         .stdin(if stdin_data.is_some() {
             Stdio::piped()
         } else {

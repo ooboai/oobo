@@ -370,7 +370,10 @@ fn read_from_legacy(project_root: &str, session_id: &str) -> Option<ActiveSessio
 
 fn worktree_matches(worktree: &str, project_root: &str) -> bool {
     let canonical = |p: &str| {
-        fs::canonicalize(p).map_or_else(|_| p.to_string(), |b| b.to_string_lossy().to_string())
+        fs::canonicalize(p).map_or_else(
+            |_| p.to_string(),
+            |b| crate::utils::normalize_win_path(&b.to_string_lossy()).to_string(),
+        )
     };
     canonical(worktree) == canonical(project_root)
 }

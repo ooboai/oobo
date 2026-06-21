@@ -900,8 +900,10 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                         // Canonicalize like the worker does, so path-derived
                         // repo ids match the ones the v2 store was written
                         // under (/var vs /private/var on macOS).
-                        let canon_root = std::fs::canonicalize(&root)
-                            .map_or_else(|_| root.clone(), |p| p.to_string_lossy().to_string());
+                        let canon_root = std::fs::canonicalize(&root).map_or_else(
+                            |_| root.clone(),
+                            |p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
+                        );
                         let repo_id = crate::project::id_for_root(&canon_root);
                         if let Err(e) = crate::git::orphan::v2::rekey_anchors_from_pairs(
                             &root, &repo_id, &pairs,

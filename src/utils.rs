@@ -4,6 +4,21 @@ use crate::tools::cursor::transcript::Message;
 
 pub const MAX_SESSION_NAME_LEN: usize = 60;
 
+/// Strip the `\\?\` extended-length prefix that `std::fs::canonicalize`
+/// adds on Windows.  Git and many other CLI tools choke on it.
+/// No-op on non-Windows platforms.
+#[inline]
+pub fn normalize_win_path(p: &str) -> &str {
+    #[cfg(windows)]
+    {
+        p.strip_prefix(r"\\?\").unwrap_or(p)
+    }
+    #[cfg(not(windows))]
+    {
+        p
+    }
+}
+
 /// Normalize any epoch timestamp (seconds, milliseconds, or microseconds) to seconds.
 #[cfg(test)]
 pub fn to_epoch_secs(ts: i64) -> i64 {

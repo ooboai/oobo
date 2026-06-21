@@ -98,7 +98,7 @@ pub(crate) fn build_timeline_json(
 fn v2_repo_id(project_root: &str) -> String {
     let canon = std::fs::canonicalize(project_root).map_or_else(
         |_| project_root.to_string(),
-        |p| p.to_string_lossy().to_string(),
+        |p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
     );
     crate::project::id_for_root(&canon)
 }

@@ -13,10 +13,11 @@ pub(super) fn resolve_worktree(project_root: &str) -> Option<String> {
     if project_root.is_empty() {
         return None;
     }
+    let root = crate::utils::normalize_win_path(project_root);
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let mut cmd = Command::new(git);
     cmd.args(["rev-parse", "--show-toplevel"])
-        .current_dir(project_root)
+        .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -29,7 +30,10 @@ pub(super) fn resolve_worktree(project_root: &str) -> Option<String> {
             .trim()
             .to_string();
         let canonical = std::fs::canonicalize(&raw)
-            .map(|p| p.to_string_lossy().to_string())
+            .map(|p| {
+                let s = p.to_string_lossy().to_string();
+                crate::utils::normalize_win_path(&s).to_string()
+            })
             .unwrap_or(raw);
         Some(canonical)
     } else {
@@ -51,6 +55,7 @@ pub fn snapshot_pre_agent_state(project_root: &str, session_id: &str) -> Result<
 }
 
 fn snapshot_dirty_files(project_root: &str) -> Option<std::collections::HashMap<String, String>> {
+    let root = crate::utils::normalize_win_path(project_root);
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let mut dirty_files: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -61,7 +66,7 @@ fn snapshot_dirty_files(project_root: &str) -> Option<std::collections::HashMap<
     ] {
         if let Ok(o) = Command::new(&git)
             .args(args)
-            .current_dir(project_root)
+            .current_dir(root)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -97,14 +102,15 @@ fn snapshot_dirty_files(project_root: &str) -> Option<std::collections::HashMap<
 }
 
 pub(super) fn hash_object(git: &str, project_root: &str, file: &str) -> Option<String> {
-    let abs_path = std::path::Path::new(project_root).join(file);
+    let root = crate::utils::normalize_win_path(project_root);
+    let abs_path = std::path::Path::new(root).join(file);
     if !abs_path.exists() {
         return None;
     }
     let output = Command::new(git)
         .args(["hash-object", "-w"])
         .arg(&abs_path)
-        .current_dir(project_root)
+        .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

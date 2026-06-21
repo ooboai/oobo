@@ -78,7 +78,7 @@ fn uri_to_path(uri: &str) -> String {
 fn normalize_path(p: &str) -> String {
     let path = Path::new(p);
     match fs::canonicalize(path) {
-        Ok(canonical) => canonical.to_string_lossy().to_string(),
+        Ok(canonical) => crate::utils::normalize_win_path(&canonical.to_string_lossy()).to_string(),
         Err(_) => p.trim_end_matches('/').to_string(),
     }
 }

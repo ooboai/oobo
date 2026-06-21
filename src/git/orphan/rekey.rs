@@ -41,7 +41,7 @@ pub fn rekey_anchors(
 
     let canon_root = std::fs::canonicalize(project_root).map_or_else(
         |_| project_root.to_string(),
-        |p| p.to_string_lossy().to_string(),
+        |p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
     );
     let repo_id = crate::project::id_for_root(&canon_root);
     super::v2::rekey_anchors_from_pairs(project_root, &repo_id, &pairs)?;

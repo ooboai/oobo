@@ -685,8 +685,10 @@ pub fn active_sessions_for_worktree(project_root: &str) -> Vec<ActiveSession> {
             .into_iter()
             .filter(|s| match &s.worktree {
                 Some(session_wt) => {
-                    let canonical = std::fs::canonicalize(session_wt)
-                        .map_or_else(|_| session_wt.clone(), |p| p.to_string_lossy().to_string());
+                    let canonical = std::fs::canonicalize(session_wt).map_or_else(
+                        |_| session_wt.clone(),
+                        |p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
+                    );
                     canonical == wt
                 }
                 None => true,
@@ -1443,10 +1445,11 @@ mod tests {
     }
 
     fn canon(p: &Path) -> String {
-        std::fs::canonicalize(p)
+        let s = std::fs::canonicalize(p)
             .unwrap()
             .to_string_lossy()
-            .to_string()
+            .to_string();
+        crate::utils::normalize_win_path(&s).to_string()
     }
 
     #[test]

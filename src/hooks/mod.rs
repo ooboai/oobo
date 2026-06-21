@@ -812,7 +812,7 @@ fn head_anchor_turn_count(repo_root: &str, agent: &str, session_id: &str) -> Opt
     let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let canon = std::fs::canonicalize(repo_root).map_or_else(
         |_| repo_root.to_string(),
-        |p| p.to_string_lossy().to_string(),
+        |p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
     );
     let repo_id = crate::project::id_for_root(&canon);
     let suid = crate::core::identity::session_uid(agent, session_id);
@@ -850,11 +850,11 @@ fn backfill_v2_turns(repo_root: &str, agent: &str, session_id: &str) {
         return;
     }
     let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let canon = std::fs::canonicalize(repo_root).map_or_else(
+    let canon_backfill = std::fs::canonicalize(repo_root).map_or_else(
         |_| repo_root.to_string(),
-        |p| p.to_string_lossy().to_string(),
+        |p| crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
     );
-    let repo_id = crate::project::id_for_root(&canon);
+    let repo_id = crate::project::id_for_root(&canon_backfill);
     let suid = crate::core::identity::session_uid(agent, session_id);
 
     let Some(mut anchor) = crate::git::orphan::v2::read_anchor(repo_root, &repo_id, &sha) else {
@@ -977,9 +977,10 @@ fn backfill_v2_turns(repo_root: &str, agent: &str, session_id: &str) {
             .as_ref()
             .and_then(|s| s.worktree.as_deref())
             .is_none_or(|origin| {
-                let canon_origin = std::fs::canonicalize(origin)
-                    .map_or(origin.to_string(), |p| p.to_string_lossy().to_string());
-                canon == canon_origin
+                let canon_origin = std::fs::canonicalize(origin).map_or(origin.to_string(), |p| {
+                    crate::utils::normalize_win_path(&p.to_string_lossy()).to_string()
+                });
+                canon_backfill == canon_origin
             });
         if is_home
             && anchor.anchor.transparency_mode == crate::core::anchor::TransparencyMode::On
@@ -1088,10 +1089,22 @@ fn self_heal_project_hooks(project_root: &str) {
 /// and the rest of the attribution pipeline represent file paths.
 /// Canonicalizes both sides to handle symlinks and macOS `/var` vs `/private/var`.
 fn make_relative(abs_path: &str, project_root: &str) -> String {
-    let abs =
-        std::fs::canonicalize(abs_path).unwrap_or_else(|_| std::path::PathBuf::from(abs_path));
-    let root = std::fs::canonicalize(project_root)
-        .unwrap_or_else(|_| std::path::PathBuf::from(project_root));
+    let abs = std::fs::canonicalize(abs_path).map_or_else(
+        |_| std::path::PathBuf::from(abs_path),
+        |p| {
+            std::path::PathBuf::from(
+                crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
+            )
+        },
+    );
+    let root = std::fs::canonicalize(project_root).map_or_else(
+        |_| std::path::PathBuf::from(project_root),
+        |p| {
+            std::path::PathBuf::from(
+                crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
+            )
+        },
+    );
     abs.strip_prefix(&root).map_or_else(
         |_| abs_path.to_string(),
         |p| {
