@@ -21,7 +21,8 @@ pub fn write_turn_snapshot(
     project_root: &str,
     mut snapshot: TurnSnapshot,
 ) -> Result<String, String> {
-    let tree = snapshot_worktree(project_root)?;
+    let edited_paths: Vec<String> = snapshot.files.iter().map(|f| f.path.clone()).collect();
+    let tree = snapshot_worktree(project_root, &edited_paths)?;
     snapshot.tree_hash = Some(tree.clone());
 
     let head = current_head(project_root);
@@ -35,15 +36,29 @@ pub fn write_turn_snapshot(
         snapshot.branch = current_branch(project_root);
     }
 
-    let message =
+    let raw_message =
         serde_json::to_string_pretty(&snapshot).map_err(|e| format!("serialize turn: {e}"))?;
+    let message = crate::redact::sanitize_for_public(&raw_message, project_root);
     let commit = create_commit(project_root, &tree, head.as_deref(), &message)?;
     let turn_ref = ref_for(&snapshot);
-    git_in(project_root, &["update-ref", &turn_ref, &commit])?;
-    git_in(
+    let head_ref = head_ref_for(&snapshot);
+    // Read the old head value for rollback if the second update-ref fails.
+    let old_head = git_in(
         project_root,
-        &["update-ref", &head_ref_for(&snapshot), &commit],
-    )?;
+        &["rev-parse", "--verify", "--quiet", &head_ref],
+    )
+    .ok();
+    git_in(project_root, &["update-ref", &head_ref, &commit])?;
+    if let Err(e) = git_in(project_root, &["update-ref", &turn_ref, &commit]) {
+        // Roll back the head pointer so we don't have a head without
+        // the per-turn ref that list_turn_snapshots skips.
+        if let Some(ref prev) = old_head {
+            let _ = git_in(project_root, &["update-ref", &head_ref, prev]);
+        } else {
+            let _ = git_in(project_root, &["update-ref", "-d", &head_ref]);
+        }
+        return Err(e);
+    }
     Ok(commit)
 }
 
@@ -120,7 +135,7 @@ fn ref_segment(raw: &str) -> String {
     format!("{safe}-{:016x}", fnv1a64(raw.as_bytes()))
 }
 
-fn snapshot_worktree(project_root: &str) -> Result<String, String> {
+fn snapshot_worktree(project_root: &str, paths: &[String]) -> Result<String, String> {
     let tmp = tempfile::tempdir().map_err(|e| format!("temp index: {e}"))?;
     let index_path = tmp.path().join("index");
     let index = index_path.to_string_lossy().to_string();
@@ -132,8 +147,27 @@ fn snapshot_worktree(project_root: &str) -> Result<String, String> {
         git_env_in(project_root, &["read-tree", "--empty"], &env)?;
     }
 
-    git_env_in(project_root, &["add", "-A", "--", "."], &env)?;
-    git_env_in(project_root, &["write-tree"], &env)
+    let base_tree = git_env_in(project_root, &["write-tree"], &env)?;
+
+    if paths.is_empty() {
+        git_env_in(project_root, &["add", "-A", "--", "."], &env)?;
+    } else {
+        let mut args = vec!["add", "--"];
+        let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        args.extend(path_refs);
+        if let Err(e) = git_env_in(project_root, &args, &env) {
+            tracing::warn!(paths = ?paths, error = %e, "git add failed for turn snapshot paths");
+        }
+    }
+    let tree = git_env_in(project_root, &["write-tree"], &env)?;
+    if !paths.is_empty() && tree == base_tree {
+        tracing::warn!(
+            paths = ?paths,
+            "turn snapshot tree unchanged from base — targeted paths may \
+             already be committed or failed to add"
+        );
+    }
+    Ok(tree)
 }
 
 fn create_commit(
@@ -197,10 +231,9 @@ fn git_command(
             Stdio::null()
         })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
+        .stderr(Stdio::piped());
+    crate::git::proxy::scrub_git_env(&mut command);
+    command
         .env("GIT_AUTHOR_NAME", "Oobo")
         .env("GIT_AUTHOR_EMAIL", "oobo@local")
         .env("GIT_COMMITTER_NAME", "Oobo")

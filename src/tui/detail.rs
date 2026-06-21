@@ -29,6 +29,7 @@ pub(super) fn draw_anchor_detail(frame: &mut ratatui::Frame<'_>, app: &App, area
     }
 
     let sessions = load_sessions_for_anchor(&app.root, &anchor.sha);
+    let v2_refs = crate::commands::anchors::load_v2_session_refs(&app.root, &anchor.sha);
     let files = touched_files_for(&app.root, &anchor.sha);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -103,6 +104,34 @@ pub(super) fn draw_anchor_detail(frame: &mut ratatui::Frame<'_>, app: &App, area
                     Style::default().fg(Color::DarkGray),
                 ),
             ]));
+        }
+    }
+
+    if !v2_refs.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  provenance",
+            Style::default().fg(Color::DarkGray),
+        )));
+        for r in &v2_refs {
+            let short_uid: String = r.session_uid.chars().take(8).collect();
+            let (label, color) = hydration_label(&r.hydration);
+            let mut spans = vec![
+                Span::styled("    · ", Style::default().fg(Color::Magenta)),
+                Span::raw(short_uid),
+                Span::styled(
+                    format!("  {} turn{}", r.turns_claimed, plural(r.turns_claimed)),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(format!("  {label}"), Style::default().fg(color)),
+            ];
+            if let Some(home) = r.home_location.as_deref() {
+                spans.push(Span::styled(
+                    format!("  ⇢ {home}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            lines.push(Line::from(spans));
         }
     }
 
@@ -232,6 +261,28 @@ fn draw_shadow_detail(frame: &mut ratatui::Frame<'_>, app: &App, shadow: &Anchor
 
 fn short_session(session_id: &str) -> String {
     session_id.chars().take(18).collect()
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 {
+        ""
+    } else {
+        "s"
+    }
+}
+
+/// Compact hydration badge: where this session's conversation can be
+/// read from, right now, from this repo.
+fn hydration_label(h: &crate::git::orphan::v2::resolve::Hydration) -> (&'static str, Color) {
+    use crate::git::orphan::v2::resolve::Hydration;
+    match h {
+        Hydration::Live => ("live", Color::Yellow),
+        Hydration::Local => ("here", Color::Green),
+        Hydration::LocalRepo { .. } => ("local repo", Color::Green),
+        Hydration::Fetched => ("fetched", Color::Cyan),
+        Hydration::Cached { .. } => ("cached", Color::Cyan),
+        Hydration::StubOnly => ("stub only", Color::DarkGray),
+    }
 }
 
 // ── Search view ───────────────────────────────────────────────────────

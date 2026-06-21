@@ -6,6 +6,7 @@ pub mod delta;
 pub mod goto;
 pub mod mcp_install;
 pub mod recall;
+pub mod sessions;
 pub mod settings;
 pub mod sync;
 pub mod toggle;

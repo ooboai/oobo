@@ -174,6 +174,12 @@ pub struct TurnSnapshot {
     pub model: Option<String>,
     #[serde(default)]
     pub files: Vec<TurnFileSnapshot>,
+    /// Worktree roots of *other* repositories this turn also edited.
+    /// On an origin snapshot these point at the foreign repos that received
+    /// provenance snapshots; on a foreign snapshot this points back at the
+    /// session's origin (where the conversation lives).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cross_repo: Vec<String>,
     #[serde(default)]
     pub memory: TurnMemoryPayload,
 }
@@ -185,6 +191,14 @@ pub struct TurnFileSnapshot {
     pub pre_blob: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_blob: Option<String>,
+    /// True when the captured edit chain does NOT fully account for this
+    /// file's content at turn end: either the chain has a discontinuity
+    /// (pair N's post_blob != pair N+1's pre_blob) or the file on disk
+    /// drifted from the last captured post_blob. An honest marker that
+    /// some delta was made outside captured hooks (human typing, another
+    /// session, a formatter)  --  never silently absorbed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub capture_gap: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -224,7 +238,7 @@ pub struct TurnToolCall {
 }
 
 impl TurnTokens {
-    #[cfg(test)]
+    /// Total tokens billed for this call (raw cost reconciliation).
     pub fn billed(&self) -> i64 {
         self.input.unwrap_or(0)
             + self.cache_read.unwrap_or(0)
@@ -232,22 +246,39 @@ impl TurnTokens {
             + self.output.unwrap_or(0)
     }
 
-    #[cfg(test)]
+    /// The work metric: tokens representing *new* output produced by this
+    /// call (`output + cache_creation`). Context tokens are re-billed on
+    /// nearly every call as the conversation grows, so summing `billed`
+    /// across a session overcounts real work by orders of magnitude.
     pub fn new_work(&self) -> i64 {
         self.output.unwrap_or(0) + self.cache_creation.unwrap_or(0)
     }
 
-    #[cfg(test)]
+    /// Context tokens consumed by this call (`input + cache_read`).
     pub fn context(&self) -> i64 {
         self.input.unwrap_or(0) + self.cache_read.unwrap_or(0)
     }
 
-    #[cfg(test)]
     pub fn has_any(&self) -> bool {
         self.input.is_some()
             || self.cache_read.is_some()
             || self.cache_creation.is_some()
             || self.output.is_some()
+    }
+
+    /// Component-wise addition of another call's deltas. A component
+    /// stays `None` only when *neither* side reported it — `None` means
+    /// "not exposed by the tool", never "zero".
+    pub fn accumulate(&mut self, other: &TurnTokens) {
+        fn add(a: &mut Option<i64>, b: Option<i64>) {
+            if let Some(v) = b {
+                *a = Some(a.unwrap_or(0) + v);
+            }
+        }
+        add(&mut self.input, other.input);
+        add(&mut self.cache_read, other.cache_read);
+        add(&mut self.cache_creation, other.cache_creation);
+        add(&mut self.output, other.output);
     }
 }
 
@@ -309,6 +340,7 @@ impl TurnSnapshot {
             ended_at: None,
             model: None,
             files: Vec::new(),
+            cross_repo: Vec::new(),
             memory: TurnMemoryPayload::default(),
         }
     }

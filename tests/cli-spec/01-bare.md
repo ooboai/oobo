@@ -28,7 +28,7 @@ Filter flags (`-n`, `--since`, `--tool`) are global and apply to bare `oobo` dir
 
 **Exit code:** `0` on clean `q` quit.
 
-**Side effects:** may trigger a background index refresh in a detached thread (no blocking, no output).
+**Side effects:** hook-based capture, spool processing, async worker enrichment (all non-blocking, no output).
 
 ### Disabled-project variant
 
@@ -123,10 +123,10 @@ oobo: not inside a git repository.
 ### Invocation
 `oobo` (after the project folder was renamed from `/a/b` to `/a/c`)
 
-**Behavior:** Project is resolved by `remote_url` first, then `initial_commit_sha`  --  NOT by path. The old row is found, its `primary_path` is updated to the new location, and the old path is appended to `historical_paths`. No user-visible churn; the TUI opens as normal with all prior anchors intact.
+**Behavior:** Project is resolved by `remote_url` first, then `initial_commit_sha`  --  NOT by path. The project config is found, its `primary_path` is updated to the new location, and the old path is appended to `historical_paths`. No user-visible churn; the TUI opens as normal with all prior anchors intact.
 
 **Side effects:**
-- UPDATE on `projects` setting `primary_path` to `$CWD` and appending old path to `historical_paths`.
+- `.oobo/config` updated with the new `primary_path` and old path appended to `historical_paths`.
 
 ---
 
@@ -136,5 +136,5 @@ oobo: not inside a git repository.
 - `oobo --json` in a repo produces JSON anchor listing (default limit 50).
 - `oobo > /tmp/out.txt` in a repo → non-TTY → `--agent` output written to the file.
 - Unknown subcommands produce clap errors (no git passthrough).
-- Running `oobo` on a disabled project NEVER emits a TUI or refreshes the index.
+- Running `oobo` on a disabled project NEVER emits a TUI or processes anchors.
 - Running `oobo` outside a repo always exits `1` with a hint message.

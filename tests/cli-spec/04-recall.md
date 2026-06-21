@@ -1,14 +1,15 @@
 # `oobo recall`
 
-Find any past session across all projects. Search is local-first and reads the local anchor DB. When an API key is configured, remote results are fetched from the backend and merged by score.
+Find any past session across all projects. Search is local-first and reads from local orphan branch anchors (`orphan::list_anchor_hashes` / `read_anchor`). When an API key is configured, remote results are fetched from the backend and merged by score.
 
 Positional arg:
 - `<query>`  --  free-text query. Multi-word queries are treated as AND across terms by default. Quoted substrings match literally.
 
 Flags:
-- `--local`  --  local DB only (default when no API key is configured).
+- `--local`  --  local orphan branch only (default when no API key is configured).
 - `--remote`  --  remote server only (requires `settings set key <...>`).
 - `--both`  --  local + remote merged (default when API key is configured).
+- `--global`  --  search across all projects, not just the current repo.
 - `--since <duration|iso>`  --  time window.
 - `--project <name>`  --  scope to one project.
 - `--tool <name>`  --  scope to one tool.

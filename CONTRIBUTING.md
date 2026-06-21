@@ -78,7 +78,7 @@ oobo is a Rust binary that enriches git commits with AI context via hooks. Key m
 | `src/git/` | Interceptor, orphan branch, anchor builder, session resolver, line attribution |
 | `src/hooks/` | Git hook handlers and agent lifecycle event processing |
 | `src/taps/` | TurnTap pipeline  --  per-turn workspace snapshots (Claude, Cursor, Codex, OpenCode) |
-| `src/attribution/` | Turn store, inference engine, backfill, code attribution |
+| `src/attribution/` | Content claims, turn cache, code attribution |
 | `src/tools/cursor/` | Cursor IDE local data extraction (transcripts, composer) |
 | `src/tools/claude/` | Claude Code local data extraction (JSONL sessions) |
 | `src/tools/vscode_fork.rs` | Shared VS Code fork extraction (Copilot, contrib adapters) |

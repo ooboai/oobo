@@ -6,8 +6,6 @@ Per-project toggle. Imperative verbs  --  NOT a settings key. The source of trut
 - Disabled: `.oobo/config` exists with `[project].enabled = false`.
 - Not enabled: `.oobo/config` does not exist.
 
-The DB may cache indexed data, but it does not decide whether a project is enabled.
-
 No positional args. No flags on either verb (other than the global `--agent` / `--json` / `--interactive`).
 
 ---
@@ -32,17 +30,16 @@ oobo is already enabled for '$PROJECT_NAME'.
 #### Invocation
 `oobo enable`
 
-**Behavior:** Set `[project].enabled` back to `true` in `.oobo/config` (omitted on disk because it is the default). Trigger a background reindex. Print confirmation.
+**Behavior:** Set `[project].enabled` back to `true` in `.oobo/config` (omitted on disk because it is the default). Install hooks. Print confirmation.
 
 **Example output:**
 ```
-oobo enabled for '$PROJECT_NAME'. indexing sessions in the background.
+oobo enabled for '$PROJECT_NAME'. hooks installed.
 ```
 **Exit code:** `0`.
 
 **Side effects:**
 - `.oobo/config` is created or updated.
-- Detached thread scans tool-session paths and enriches the DB.
 - Git hooks (`post-commit`, `pre-push`, `post-merge`, `post-rewrite`) installed if not already.
 
 ### Inside a brand-new repo (never seen by oobo)
@@ -50,7 +47,7 @@ oobo enabled for '$PROJECT_NAME'. indexing sessions in the background.
 #### Invocation
 `oobo enable`
 
-**Behavior:** Create `.oobo/config` with a stable project id. Create/cache the project row if missing. Install hooks. Kick off initial index.
+**Behavior:** Create `.oobo/config` with a stable project id. Install hooks.
 
 **Example output:**
 ```
@@ -74,7 +71,7 @@ enabled $PROJECT_NAME
 
 **Example output:**
 ```json
-{ "project": { "id": "0f5c...", "name": "$PROJECT_NAME", "path": "$REPO" }, "enabled": true, "indexing": true }
+{ "project": { "id": "0f5c...", "name": "$PROJECT_NAME", "path": "$REPO" }, "enabled": true, "project_config": { "created": true } }
 ```
 **Exit code:** `0`.
 
@@ -87,7 +84,7 @@ enabled $PROJECT_NAME
 #### Invocation
 `oobo disable`
 
-**Behavior:** Set `[project].enabled = false` in `.oobo/config`. Stop auto-indexing and commit enrichment. Leave existing anchors intact (disable is reversible, no data deletion).
+**Behavior:** Set `[project].enabled = false` in `.oobo/config`. Stop hook-based capture and commit enrichment. Leave existing anchors intact (disable is reversible, no data deletion).
 
 **Example output:**
 ```
@@ -142,7 +139,7 @@ error: not a git repository. cd into a repo first, or use 'oobo setup' to manage
 
 ### Git repo with no remote AND no commits yet
 
-**Behavior:** Allowed. The project row is created with `remote_url = null` and `initial_commit_sha = null`; identification falls back to `primary_path`. Project will be reconciled (and stable identifiers populated) on the first commit with a remote.
+**Behavior:** Allowed. The project config is created with no remote; identification falls back to `primary_path`. Project will be reconciled (and stable identifiers populated) on the first commit with a remote.
 
 **Example output:**
 ```
@@ -173,7 +170,7 @@ After display, record the local one-shot state. Never emit again for this projec
 
 ## Invariants
 
-- `oobo enable` is idempotent: running it twice is indistinguishable from running it once in side-effect terms (no duplicate hooks, no duplicate rows).
+- `oobo enable` is idempotent: running it twice is indistinguishable from running it once in side-effect terms (no duplicate hooks, no duplicate config entries).
 - `oobo disable` NEVER deletes anchors or sessions.
 - A disabled project retains its anchors and sessions; `oobo enable` resumes tracking.
 - The banner is shown AT MOST ONCE per project per machine.

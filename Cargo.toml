@@ -1,6 +1,6 @@
 [package]
 name = "oobo"
-version = "1.1.2"
+version = "2.0.0"
 edition = "2021"
 authors = ["Oobo Contributors"]
 description = "Context beyond the diff  --  captures AI sessions, tokens, code attribution, and enables semantic code search across your commits"
@@ -42,6 +42,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
 sonar-core = "0.3"
 ctrlc = "3"
+uuid = { version = "1.23.3", features = ["v5"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -51,6 +52,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 proptest = "1.11.0"
+serial_test = "3"
 
 [profile.release]
 opt-level = "z"

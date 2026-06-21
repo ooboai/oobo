@@ -12,5 +12,5 @@ pub mod orphan;
 pub mod proxy;
 mod session_evidence;
 mod session_resolver;
-mod transcripts;
+pub mod spool;
 pub mod turns;

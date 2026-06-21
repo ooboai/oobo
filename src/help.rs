@@ -103,7 +103,7 @@ An anchor captures:
   - The model used (claude-opus-4, gpt-4o, etc.)
   - Optionally, the full transcript (when transparency is on)
 
-Anchors are stored on a git orphan branch (oobo/anchors/v1) that syncs
+Anchors are stored on a git orphan branch (oobo/anchors/v2) that syncs
 with your remote. They travel with your code.
 
 Working memory (shadows) are live session snapshots that appear before
@@ -126,7 +126,7 @@ Usage:
   oobo recall \"query\" --tool cursor Scope to a tool
 
 Search sources:
-  - Local: reads from the oobo/anchors/v1 branch in this repo
+  - Local: reads from the oobo/anchors/v2 branch in this repo
   - Cloud: queries the oobo.ai API (requires API key)
   - Default: local + cloud when a key is configured
 
@@ -180,7 +180,7 @@ oobo uses two types of hooks to capture AI sessions:
 Git hooks (installed in .git/hooks/):
   post-commit   Captures anchor metadata after each commit
   pre-push      Syncs anchors to remote before push
-  post-merge    Re-indexes after merge
+  post-merge    Fetches anchor branches after merge
   post-rewrite  Updates anchors after rebase/amend
 
 Agent hooks (installed in tool config, e.g. ~/.cursor/hooks.json):

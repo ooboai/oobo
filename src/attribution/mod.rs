@@ -42,6 +42,7 @@
 //!   `is_subagent` / `parent_session_id` from the `sessions` table;
 //!   that's M4's job.
 
+pub mod claim;
 #[cfg(test)]
 pub mod inference;
 pub mod turn_store;
@@ -78,9 +79,8 @@ pub struct AttrAnchor {
 /// largest `last_turn_index` already attributed to any anchor.
 pub type PriorCursor = std::collections::HashMap<(String, String), i64>;
 
-/// Pure-function attribution. Returns the contributions that SHOULD
-/// exist in the database for these anchors given these turns and this
-/// prior cursor, in the order the DB should write them in.
+/// Pure-function attribution. Returns the contributions for these
+/// anchors given these turns and this prior cursor, in order.
 ///
 /// Contract:
 /// - `anchors` MUST be sorted ascending by `committed_at_ms`.
@@ -117,8 +117,7 @@ pub fn compute_windows(
 
             // Find the largest turn_index whose started_at <= anchor.committed_at_ms.
             // Turns with no timestamp are considered "before" any
-            // anchor  --  this is the behavior the store's backfill
-            // path expects (timestamps are optional per schema).
+            // anchor (timestamps are optional per schema).
             let mut window_end: i64 = -1;
             for t in session_turns {
                 let eligible = match t.started_at {
@@ -145,6 +144,16 @@ pub fn compute_windows(
 
             for t in session_turns {
                 if t.turn_index < first || t.turn_index > last {
+                    continue;
+                }
+                // Re-check timestamp eligibility: a turn within the
+                // index range may have started AFTER the commit if
+                // turn_index ordering disagrees with timestamp ordering.
+                let eligible = match t.started_at {
+                    Some(ts) => ts <= anchor.committed_at_ms,
+                    None => true,
+                };
+                if !eligible {
                     continue;
                 }
                 if let Some(v) = t.tokens.input {
@@ -395,6 +404,29 @@ mod tests {
         }];
         let out = compute_windows(&anchors, &[t], PriorCursor::new());
         assert_eq!(out[0].tokens.billed(), 155);
+    }
+
+    #[test]
+    fn out_of_order_timestamps_excluded_from_aggregation() {
+        // Turns 0@t=100, 1@t=400, 2@t=250; anchor@t=300.
+        // window_end=2 (idx 2 eligible: 250<=300). But turn 1
+        // (400>300) must NOT contribute tokens despite being in [0,2].
+        let turns = vec![
+            turn("s1", 0, Some(100), 10),
+            turn("s1", 1, Some(400), 20),
+            turn("s1", 2, Some(250), 30),
+        ];
+        let anchors = vec![AttrAnchor {
+            commit_hash: "c1".into(),
+            committed_at_ms: 300,
+        }];
+        let out = compute_windows(&anchors, &turns, PriorCursor::new());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].first_turn_index, 0);
+        assert_eq!(out[0].last_turn_index, 2);
+        // Only turns 0 (10) and 2 (30) should be counted; turn 1 (20)
+        // started after the commit.
+        assert_eq!(out[0].tokens.output, Some(40));
     }
 
     #[test]

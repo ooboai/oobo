@@ -28,6 +28,136 @@ pub struct EventPayload {
     /// Structured per-session transcripts with parent-child relationships.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub session_transcripts: Vec<SessionTranscript>,
+    /// v2 pointer payload: session refs + send-once session records,
+    /// replacing per-commit transcript duplication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v2: Option<V2Payload>,
+}
+
+// ── v2: pointers + provenance, sessions sent exactly once ──────────────
+
+/// The v2 transport: an anchor references its sessions by uid (with
+/// pointers to where the conversation lives); full session records ride
+/// along **only the first time** each is seen — across N commits the
+/// backend receives a session exactly once, keyed by `session_uid`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct V2Payload {
+    pub repo_id: String,
+    pub commit_sha: String,
+    /// Pointers: which sessions (and turns) this anchor claims.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_refs: Vec<SessionRefPayload>,
+    /// Session records not previously sent from this machine. Deduped by
+    /// (`session_uid`, `updated_at`) — an updated session is re-sent once
+    /// with its new state, never repeated per commit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<crate::git::orphan::v2::SessionRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRefPayload {
+    pub session_uid: String,
+    /// Where the conversation layer lives (`None` = the anchor's repo).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_location: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turn_uids: Vec<String>,
+}
+
+/// Send-once tracker: session_uid → updated_at of the last copy sent.
+/// Lives in the oobo home by default; path-injectable for tests.
+pub struct SentSessions {
+    path: std::path::PathBuf,
+}
+
+impl SentSessions {
+    pub fn default_store() -> Self {
+        Self {
+            path: crate::paths::oobo_home()
+                .join("state")
+                .join("sent-sessions.json"),
+        }
+    }
+
+    pub fn at(path: std::path::PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn load(&self) -> std::collections::HashMap<String, i64> {
+        std::fs::read_to_string(&self.path)
+            .ok()
+            .and_then(|c| serde_json::from_str(&c).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(&self, map: &std::collections::HashMap<String, i64>) {
+        let Some(parent) = self.path.parent() else {
+            return;
+        };
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+        if let Ok(json) = serde_json::to_string(map) {
+            let tmp = self.path.with_extension("json.tmp");
+            if std::fs::write(&tmp, json).is_ok() {
+                let _ = std::fs::rename(&tmp, &self.path);
+            }
+        }
+    }
+}
+
+/// Build the v2 payload for one anchor. Session records are attached
+/// only when this tracker hasn't sent them (at this `updated_at`) yet;
+/// attaching marks them sent.
+pub fn build_v2_payload(
+    project_root: &str,
+    repo_id: &str,
+    anchor: &crate::git::orphan::v2::AnchorRecord,
+    tracker: &SentSessions,
+) -> V2Payload {
+    let mut sent = tracker.load();
+    let mut sessions = Vec::new();
+    let mut session_refs = Vec::new();
+
+    for sref in &anchor.session_refs {
+        session_refs.push(SessionRefPayload {
+            session_uid: sref.session_uid.clone(),
+            home_location: sref.home_location.clone(),
+            turn_uids: sref.turn_uids.clone(),
+        });
+
+        // Best available record: conversation layer (full) over
+        // provenance stub. Both are already sanitized at write time.
+        let record =
+            crate::git::orphan::v2::read_conversation_session(project_root, &sref.session_uid)
+                .or_else(|| {
+                    crate::git::orphan::v2::read_provenance_session(
+                        project_root,
+                        repo_id,
+                        &sref.session_uid,
+                    )
+                });
+        let Some(record) = record else { continue };
+
+        let already = sent
+            .get(&sref.session_uid)
+            .is_some_and(|&ts| ts >= record.updated_at);
+        if !already {
+            sent.insert(sref.session_uid.clone(), record.updated_at);
+            sessions.push(record);
+        }
+    }
+
+    if !sessions.is_empty() {
+        tracker.save(&sent);
+    }
+
+    V2Payload {
+        repo_id: repo_id.to_string(),
+        commit_sha: anchor.anchor.commit_hash.clone(),
+        session_refs,
+        sessions,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -438,6 +568,7 @@ mod tests {
                 },
             ],
             session_transcripts: Vec::new(),
+            v2: None,
         };
 
         let json = serde_json::to_string_pretty(&payload).unwrap();
@@ -472,12 +603,147 @@ mod tests {
             anchor: None,
             transcript: Vec::new(),
             session_transcripts: Vec::new(),
+            v2: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("git.push"));
         assert!(!json.contains("anchor"));
         assert!(!json.contains("transcript"));
+    }
+
+    fn init_repo() -> Option<(tempfile::TempDir, String)> {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().to_str().unwrap().to_string();
+        let init = std::process::Command::new("git")
+            .args(["init", &repo])
+            .output();
+        if init.is_err() || !init.unwrap().status.success() {
+            return None;
+        }
+        for args in [
+            &["config", "user.name", "T"][..],
+            &["config", "user.email", "t@t"][..],
+        ] {
+            let _ = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output();
+        }
+        let _ = std::process::Command::new("git")
+            .args(["-C", &repo, "commit", "--allow-empty", "-m", "init"])
+            .output();
+        Some((tmp, repo))
+    }
+
+    fn mk_v2_anchor(sha: &str, session_uid: &str) -> crate::git::orphan::v2::AnchorRecord {
+        let mut anchor = Anchor {
+            anchor_schema_version: ANCHOR_SCHEMA_VERSION,
+            oobo_version: "test".into(),
+            commit_hash: sha.into(),
+            branch: "main".into(),
+            author: "T <t@t>".into(),
+            author_type: AuthorType::Assisted,
+            contributors: Vec::new(),
+            committed_at: 1000,
+            message: "m".into(),
+            files_changed: Vec::new(),
+            added: 0,
+            deleted: 0,
+            file_changes: Vec::new(),
+            ai_added: 0,
+            ai_deleted: 0,
+            human_added: 0,
+            human_deleted: 0,
+            ai_percentage: None,
+            session_ids: Vec::new(),
+            summary: None,
+            intent: None,
+            reasoning: None,
+            transparency_mode: TransparencyMode::Off,
+            file_interactions: None,
+            turns: Vec::new(),
+        };
+        anchor.commit_hash = sha.into();
+        crate::git::orphan::v2::AnchorRecord {
+            anchor,
+            session_refs: vec![crate::git::orphan::v2::SessionRef {
+                session_uid: session_uid.into(),
+                home_location: None,
+                turn_uids: vec![format!("turn-{sha}")],
+            }],
+            session_links: Vec::new(),
+            coverage: None,
+        }
+    }
+
+    fn mk_session_record(uid: &str, updated_at: i64) -> crate::git::orphan::v2::SessionRecord {
+        crate::git::orphan::v2::SessionRecord {
+            schema_version: crate::git::orphan::v2::V2_SCHEMA_VERSION,
+            session_uid: uid.into(),
+            native_session_ids: vec!["native-1".into()],
+            tool: "claude".into(),
+            model: None,
+            home_location: None,
+            origin_repo_id: None,
+            repos_touched: Vec::new(),
+            lineage: crate::core::identity::SessionLineage::default(),
+            turn_count: 1,
+            title: None,
+            started_at: updated_at - 10,
+            updated_at,
+            ended_at: None,
+        }
+    }
+
+    /// The P5 done-when: across N commits referencing the same session,
+    /// the backend receives the session record exactly once.
+    #[test]
+    fn v2_payload_sends_each_session_exactly_once_across_commits() {
+        let Some((_tmp, repo)) = init_repo() else {
+            return;
+        };
+        let repo_id = crate::project::id_for_root(&repo);
+        let uid = "11112222333344445555666677778888";
+
+        crate::git::orphan::v2::write_provenance_session(
+            &repo,
+            &repo_id,
+            &mk_session_record(uid, 5000),
+        )
+        .unwrap();
+
+        let tracker_dir = tempfile::tempdir().unwrap();
+        let tracker = SentSessions::at(tracker_dir.path().join("sent.json"));
+
+        let mut total_sessions_sent = 0usize;
+        for sha in ["aaa111", "bbb222", "ccc333"] {
+            let payload = build_v2_payload(&repo, &repo_id, &mk_v2_anchor(sha, uid), &tracker);
+            assert_eq!(
+                payload.session_refs.len(),
+                1,
+                "every commit's payload carries the pointer"
+            );
+            assert_eq!(payload.commit_sha, sha);
+            total_sessions_sent += payload.sessions.len();
+        }
+        assert_eq!(
+            total_sessions_sent, 1,
+            "session record must cross the wire exactly once"
+        );
+
+        // The session was updated since → re-sent exactly once more.
+        crate::git::orphan::v2::write_provenance_session(
+            &repo,
+            &repo_id,
+            &mk_session_record(uid, 9000),
+        )
+        .unwrap();
+        let p4 = build_v2_payload(&repo, &repo_id, &mk_v2_anchor("ddd444", uid), &tracker);
+        assert_eq!(p4.sessions.len(), 1, "updated session re-sent once");
+        let p5 = build_v2_payload(&repo, &repo_id, &mk_v2_anchor("eee555", uid), &tracker);
+        assert_eq!(p5.sessions.len(), 0, "and then deduped again");
     }
 
     #[test]

@@ -107,7 +107,7 @@ Git:     commit = diff(files)
 Anchor:  anchor = commit + sessions + tokens + attribution
 ```
 
-Each anchor records which AI sessions contributed, token counts, code attribution (AI vs human lines), model used, and session duration. Anchors live on a git orphan branch (`oobo/anchors/v1`) that travels with the repo -- no external dependencies.
+Each anchor records which AI sessions contributed, token counts, code attribution (AI vs human lines), model used, and session duration. Anchors live on a git orphan branch (`oobo/anchors/v2`, with `oobo/anchors/v1` as read-only legacy) that travels with the repo -- no external dependencies.
 
 ---
 
@@ -274,7 +274,7 @@ oobo disable                                 # stop tracking this repo
 ```bash
 oobo setup                                   # interactive wizard: install hooks, discover tools, seed config
 oobo setup --non-interactive                 # for scripts + first-run agents
-oobo setup --reindex                         # forced full rescan
+oobo setup --reindex                         # no-op (prints "no longer needed")
 oobo setup --repair                          # fix broken symlinks / hooks
 oobo update                                  # check for updates and self-update
 ```

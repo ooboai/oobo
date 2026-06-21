@@ -111,14 +111,15 @@ pub fn run_show(cfg: &Config, sha: &str, mode: OutputMode) -> CmdResult {
         .ok_or_else(|| format!("anchor row missing for {commit_hash}"))?;
 
     let sessions = load_sessions(&root, &commit_hash);
+    let v2_refs = load_v2_session_refs(&root, &commit_hash);
 
     match mode {
         OutputMode::Json => {
-            emit_show_json(cfg, &anchor, &sessions);
+            emit_show_json(cfg, &anchor, &sessions, &v2_refs);
             Ok(0)
         }
         OutputMode::Agent => {
-            emit_show_agent(&anchor, &sessions);
+            emit_show_agent(&anchor, &sessions, &v2_refs);
             Ok(0)
         }
         OutputMode::Tui => crate::tui::app::run_show(cfg, &commit_hash),
@@ -139,6 +140,48 @@ struct SessionInfo {
     cache_read: i64,
     cache_write: i64,
     total: i64,
+}
+
+/// v2 session refs for an anchor, with passive pointer resolution —
+/// foreign-home sessions show their pointer + hydration state, so the
+/// listing in repo Y honestly reports sessions homed in repo X.
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct V2SessionRefInfo {
+    pub(crate) session_uid: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) home_location: Option<String>,
+    pub(crate) hydration: crate::git::orphan::v2::resolve::Hydration,
+    pub(crate) turns_claimed: usize,
+}
+
+pub(crate) fn load_v2_session_refs(project_root: &str, commit_hash: &str) -> Vec<V2SessionRefInfo> {
+    let repo_id = crate::project::id_for_root(project_root);
+    let Some(record) = crate::git::orphan::v2::read_anchor(project_root, &repo_id, commit_hash)
+    else {
+        return Vec::new();
+    };
+    record
+        .session_refs
+        .iter()
+        .map(|r| {
+            let hydration = crate::git::orphan::v2::resolve::resolve_conversation_with(
+                project_root,
+                &repo_id,
+                &r.session_uid,
+                false,
+            )
+            .map_or(
+                crate::git::orphan::v2::resolve::Hydration::StubOnly,
+                |res| res.hydration,
+            );
+            V2SessionRefInfo {
+                session_uid: r.session_uid.clone(),
+                home_location: r.home_location.clone(),
+                hydration,
+                turns_claimed: r.turn_uids.len(),
+            }
+        })
+        .collect()
 }
 
 fn load_sessions(project_root: &str, commit_hash: &str) -> Vec<SessionInfo> {
@@ -170,15 +213,46 @@ fn load_sessions(project_root: &str, commit_hash: &str) -> Vec<SessionInfo> {
 // ------------------------------------------------------------------
 
 fn resolve_sha(project_root: &str, prefix: &str) -> Vec<(String, String)> {
+    // Accept git revs (HEAD, HEAD~2, branch names, tags) in addition to
+    // sha prefixes — `oobo anchor show HEAD` should just work.
+    let prefix = if prefix.chars().all(|c| c.is_ascii_hexdigit()) {
+        prefix.to_string()
+    } else {
+        rev_parse(project_root, prefix).unwrap_or_else(|| prefix.to_string())
+    };
     let hashes = crate::git::orphan::list_anchor_hashes(project_root);
     hashes
         .into_iter()
-        .filter(|h| h.starts_with(prefix))
+        .filter(|h| h.starts_with(&prefix))
         .filter_map(|h| {
             let anchor = crate::git::orphan::read_anchor(project_root, &h)?;
             Some((h, anchor.message))
         })
         .collect()
+}
+
+fn rev_parse(project_root: &str, rev: &str) -> Option<String> {
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+    let out = std::process::Command::new(git)
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{rev}^{{commit}}"),
+        ])
+        .current_dir(project_root)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if sha.is_empty() {
+        None
+    } else {
+        Some(sha)
+    }
 }
 
 // ------------------------------------------------------------------
@@ -368,7 +442,7 @@ fn emit_list_json(_cfg: &Config, rows: &[FeedRow], project_name: &str, in_repo: 
 // emitters  --  show
 // ------------------------------------------------------------------
 
-fn emit_show_agent(anchor: &Anchor, sessions: &[SessionInfo]) {
+fn emit_show_agent(anchor: &Anchor, sessions: &[SessionInfo], v2_refs: &[V2SessionRefInfo]) {
     let ts = chrono::DateTime::from_timestamp(anchor.committed_at, 0)
         .map(|t| t.to_rfc3339())
         .unwrap_or_default();
@@ -400,6 +474,24 @@ fn emit_show_agent(anchor: &Anchor, sessions: &[SessionInfo]) {
             );
         }
     }
+    if !v2_refs.is_empty() {
+        println!("provenance:");
+        for r in v2_refs {
+            let uid8 = &r.session_uid[..8.min(r.session_uid.len())];
+            let home = r.home_location.as_deref().map_or_else(
+                || "home:here".to_string(),
+                |h| {
+                    use crate::git::orphan::v2::resolve::Hydration;
+                    match &r.hydration {
+                        Hydration::StubOnly => format!("home:{h} (stub — no access)"),
+                        Hydration::Cached { .. } => format!("home:{h} (cached)"),
+                        _ => format!("home:{h}"),
+                    }
+                },
+            );
+            println!("  s:{uid8} {}t {home}", r.turns_claimed);
+        }
+    }
     println!();
     println!("commands:");
     if !anchor.files_changed.is_empty() {
@@ -409,7 +501,12 @@ fn emit_show_agent(anchor: &Anchor, sessions: &[SessionInfo]) {
     println!("  oobo goto <turn-or-commit>   # travel to this point");
 }
 
-fn emit_show_json(cfg: &Config, anchor: &Anchor, sessions: &[SessionInfo]) {
+fn emit_show_json(
+    cfg: &Config,
+    anchor: &Anchor,
+    sessions: &[SessionInfo],
+    v2_refs: &[V2SessionRefInfo],
+) {
     let ts = chrono::DateTime::from_timestamp(anchor.committed_at, 0)
         .map(|t| t.to_rfc3339())
         .unwrap_or_default();
@@ -465,6 +562,7 @@ fn emit_show_json(cfg: &Config, anchor: &Anchor, sessions: &[SessionInfo]) {
             "ai_pct": anchor.ai_percentage,
         },
         "sessions": sess_json,
+        "sessions_v2": v2_refs,
         "shadow_anchors": anchor.turns,
         "files_changed": anchor.files_changed,
         "actions": actions,

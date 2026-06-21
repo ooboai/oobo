@@ -10,7 +10,7 @@ All `hooks` subcommands:
 - Exit `0` on success.
 - Print nothing on stdout by default (pure side effects).
 - Print warnings on stderr with prefix `oobo: warning: ...`; never fatal-error to avoid breaking user git/tool workflows.
-- Write to `~/.oobo/logs/hooks-debug.log` for diagnosability (appends only; bounded rotation in future).
+- Write to `${XDG_DATA_HOME:-$HOME/.local/share}/oobo/logs/hooks.log` for diagnosability (appends only; bounded rotation in future).
 - Respect `OOBO_INTERCEPTED=1` to prevent re-entry when oobo calls git internally.
 
 ---
@@ -35,7 +35,7 @@ Per-repo git hooks are installed into `.git/hooks/`:
 - `post-merge`  --  calls `oobo hooks post-merge`
 - `post-rewrite`  --  calls `oobo hooks post-rewrite`
 
-Existing user hooks are preserved: the original is backed up to `<hook>.pre-oobo` and chained.
+Existing user hooks are preserved: the original is backed up to `<hook>.pre-anchor` and chained.
 
 ---
 
@@ -58,7 +58,7 @@ Each file contains a serialized `ActiveSession` struct with fields including:
 - `current_turn_index`, `current_turn_started_at`, `current_turn_hook_events`, `current_turn_tool_calls`
 - `started_at`, `updated_at`
 
-Session IDs are sanitized: only ASCII alphanumeric and `-` are allowed; anything else maps to `"invalid"`.
+Session IDs are sanitized: only ASCII alphanumeric, `-`, `_`, and `.` are allowed; other characters are mapped to `_`, and `..` sequences are collapsed to prevent path traversal.
 
 ---
 
@@ -200,10 +200,10 @@ Called by the `post-commit` git hook installed into each enabled repo.
 ### Behavior
 1. Early-exit if `OOBO_INTERCEPTED=1` is set.
 2. Locate the project root.
-3. Call `on_write_op` which reads `HEAD` SHA, collects commit metadata, finds active sessions matching the worktree, and creates an anchor on the orphan branch.
+3. Call `on_write_op` which appends the commit SHA to the spool file and kicks an async worker to do the heavy enrichment (session matching, anchor creation) in the background.
 4. Cleanup stale session buffer files older than 86400 s (24 h).
 
-**Side effects:** Anchor written to orphan branch. Stale buffer files pruned.
+**Side effects:** Commit appended to spool. Async worker spawned to create anchor on orphan branch. Stale buffer files pruned.
 
 **Exit code:** `0` regardless of internal errors.
 
@@ -228,10 +228,10 @@ Called by the `pre-push` git hook installed in each enabled repo.
 
 ### Behavior
 1. Locate project root.
-2. If the orphan branch `oobo/anchors/v1` exists → push it to `origin` (or configured remote).
+2. If the orphan branch `oobo/anchors/v2` exists → push it to `origin` (or configured remote). A legacy `oobo/anchors/v1` branch (read-only, pre-v2 data) is pushed too when present.
 3. Log outcome.
 
-**Side effects:** Network I/O: one `git push origin oobo/anchors/v1`.
+**Side effects:** Network I/O: one `git push origin oobo/anchors/v2` (plus the legacy v1 branch when it exists).
 
 **Exit code:** `0`. Failure to push anchors MUST NOT block the user's primary push.
 
@@ -283,6 +283,6 @@ The `session-end` event removes the buffer file immediately. Cleanup is a safety
 - None of the hook subcommands write to stdout by default. Stderr is limited to warnings.
 - `OOBO_INTERCEPTED=1` short-circuits the post-commit body (prevents re-entry).
 - Session state is persisted as JSON buffer files in `~/.oobo/tmp/hook-buffer/`, not in SQLite.
-- The append-only log at `~/.oobo/logs/hooks-debug.log` is the canonical debug trail.
+- The append-only log at `${XDG_DATA_HOME:-$HOME/.local/share}/oobo/logs/hooks.log` is the canonical debug trail.
 - Changing any of these subcommand signatures is a breaking change for installed hook scripts across users' machines  --  requires `oobo setup --repair` to refresh.
 - `oobo hooks` with no subcommand → exit `2` with a clap error (but hidden from normal help).

@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-06-21
+
+### Added
+
+- **Turn snapshots** -- per-turn workspace state captured via agent lifecycle hooks. Each turn records file edits (pre/post blob hashes), tool calls, hook events, model, tokens, and cross-repo activity. Stored on git refs (`refs/oobo/turns/v1/`). Enables `oobo goto` to restore exact workspace state at any point in a session.
+- **`oobo sessions` command** -- list active and recent AI coding sessions with tool, model, turn count, token usage, and timing. Supports `--active`, `--since`, `--tool`, and all output modes.
+- **`oobo session <id>` command** -- drill into a session's metadata, linked commits, per-turn breakdown, and token usage. Accepts prefix-matched session IDs.
+- **`oobo goto` / `oobo back` navigation** -- time-travel to any turn or commit. Auto-stashes dirty changes, loads the target tree, records a return point. Multiple gotos stack like a browser back button.
+- **Foreign repo tracking** -- when an agent edits files outside the home repo, provenance stubs are written to each foreign repo's turn store with a pointer back to the home session.
+- **Subagent tracking** -- subagent spawns and completions are recorded as hook events with agent type and ID.
+- **File edit chains** -- pre/post blob hashes tracked per-file across a turn, detecting capture gaps when edits happen outside hook coverage.
+- **Hook event and tool call caps** -- vectors capped at 200 entries to prevent unbounded growth during long sessions.
+
+### Changed
+
+- **v2 orphan branch is the store of record** -- all new anchors write to `oobo/anchors/v2`. The v1 branch is read-only legacy; pre-2.0 data is still served via v1 fallback. v1 anchor writes are completely cut.
+- **Session state is file-based** -- active session state lives in `~/.oobo/tmp/hook-buffer/<session_id>.json` using atomic read-modify-write with advisory file locks. No local database.
+- **Turn snapshot secret redaction** -- turn snapshot commit messages now pass through `sanitize_for_public` (gitleaks + regex + path stripping) instead of `strip_absolute_paths` only.
+- **Path traversal protection** -- `session_id` and `source` are sanitized before filesystem path construction in the turn store, matching the hook buffer's existing sanitization.
+- **Empty session ID guard** -- empty session IDs are filtered at the hook entry point, preventing filename collisions on `invalid.json`.
+- **Clone-before-take in finish_turn** -- turn data is cloned (not consumed) before the git write attempt. If the write fails, the buffer retains the events for retry instead of losing them permanently.
+
+### Removed
+
+- **SQLite database** -- the entire `src/db/` module is removed. All persistent state lives on the git orphan branch or in the file-based hook buffer. No local database dependency.
+- **`doctor` command** -- the app self-heals; use `oobo setup --repair` instead.
+- **`scanner` module** -- replaced by hook-driven session state.
+- **`auto_backfill` / `inference_runner`** -- attribution inference simplified; backfill handled by the worker.
+- **v1 anchor writes** -- `oobo/anchors/v1` is no longer written to. Pre-2.0 anchors remain readable.
+
+### Fixed
+
+- **Session resume continues the turn chain** -- `claude --resume` no longer resets turn state. Resuming a session continues the turn index instead of colliding on turn 0.
+- **Idle session presence is not authorship** -- a non-interactive commit with an unrelated live session is no longer attributed as agent-authored. Session presence requires per-commit evidence.
+- **Mid-turn commit backfill** -- when an agent runs `git commit` mid-turn, the backfill correctly drains pending turn data with tokens and tool calls.
+- **Sessions listing reports known turns** -- `oobo sessions` now reports turn counts from session metadata rather than counting only locally-readable turn refs.
+
 ## [1.1.2] - 2026-06-01
 
 ### Fixed

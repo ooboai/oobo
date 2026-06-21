@@ -9,15 +9,15 @@ Variables that change oobo's behavior. Part of the public contract  --  tests, s
 Override the base directory for oobo's local state.
 
 - **Default:** `$HOME/.oobo`.
-- **When set:** config, db, logs, skills, and backups all live under `$OOBO_HOME/` instead.
-- **Precedence:** wins over every derived path (db, config, logs).
+- **When set:** config, state, logs, skills, and backups all live under `$OOBO_HOME/` instead.
+- **Precedence:** wins over every derived path (config, state, logs).
 - **Use cases:** tests (every spec test sets this to a tempdir), dev sandboxes, ephemeral CI environments.
 
 Example:
 ```bash
 OOBO_HOME=/tmp/oobo-sandbox oobo setup --non-interactive
 ls /tmp/oobo-sandbox/
-# → config.toml  db/  logs/
+# → config.toml  state/  logs/
 ```
 
 Invariants:
@@ -58,7 +58,7 @@ OOBO_DEBUG=1 oobo 2>oobo.log
 ```
 
 When set:
-- Stderr receives verbose per-operation traces (DB queries, git commands, network calls).
+- Stderr receives verbose per-operation traces (git commands, network calls, file I/O).
 - `~/.oobo/logs/debug.log` (or `$OOBO_HOME/logs/debug.log`) is created and written to in parallel.
 
 Invariants:

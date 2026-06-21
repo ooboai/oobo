@@ -1,21 +1,22 @@
 use crate::error::CliError;
 
-use super::{git_in, read_anchor, read_from_branch, shard_key, write_to_branch, BRANCH};
+use super::{git_in, read_anchor_v1, read_from_branch, shard_key, write_to_branch, BRANCH};
 
-/// Re-key anchors after a history rewrite (rebase, cherry-pick).
+/// Re-key anchors after a history rewrite observed through the git proxy
+/// (rebase, cherry-pick), where git gives us no old→new mapping.
 ///
 /// `pre_rewrite_commits` is a list of (old_commit_hash, tree_hash) captured
 /// before the rewrite. After the rewrite, we find new commits with matching
 /// tree hashes and copy anchors from the old SHA to the new SHA.
 ///
-/// Phase 1: only handles simple rewrites where file content didn't change
-/// (tree hash is preserved). Content-changing rewrites (squash, conflict
-/// resolution) are deferred to Phase 2.
+/// Tree matching only resolves rewrites that preserved content. The
+/// `post-rewrite` hook path ([`rekey_anchors_from_rewrite_pairs`]) does not
+/// have this limitation because git hands it the exact pairs.
 pub fn rekey_anchors(
     project_root: &str,
     pre_rewrite_commits: &[(String, String)],
 ) -> Result<(), CliError> {
-    if !super::branch_exists(project_root) || pre_rewrite_commits.is_empty() {
+    if pre_rewrite_commits.is_empty() {
         return Ok(());
     }
 
@@ -29,55 +30,80 @@ pub fn rekey_anchors(
         .map(|(hash, tree)| (tree.as_str(), hash.as_str()))
         .collect();
 
+    let pairs: Vec<(String, String)> = pre_rewrite_commits
+        .iter()
+        .filter_map(|(old_hash, tree)| {
+            new_by_tree
+                .get(tree.as_str())
+                .map(|&new_hash| (old_hash.clone(), new_hash.to_string()))
+        })
+        .collect();
+
+    let canon_root = std::fs::canonicalize(project_root).map_or_else(
+        |_| project_root.to_string(),
+        |p| p.to_string_lossy().to_string(),
+    );
+    let repo_id = crate::project::id_for_root(&canon_root);
+    super::v2::rekey_anchors_from_pairs(project_root, &repo_id, &pairs)?;
+
+    // Legacy v1 anchors (written before the v2 cut) follow the rewrite
+    // too, so old history stays resolvable.
+    if super::branch_exists(project_root) {
+        rekey_exact_pairs(project_root, &pairs)?;
+    }
+    Ok(())
+}
+
+/// Copy anchor data from old SHAs to new SHAs given an exact old→new
+/// mapping. Skips identity pairs and old SHAs without anchors.
+fn rekey_exact_pairs(project_root: &str, pairs: &[(String, String)]) -> Result<(), CliError> {
     let mut entries = Vec::new();
 
-    for (old_hash, tree) in pre_rewrite_commits {
-        if let Some(&new_hash) = new_by_tree.get(tree.as_str()) {
-            if old_hash == new_hash {
+    for (old_hash, new_hash) in pairs {
+        if old_hash == new_hash {
+            continue;
+        }
+        if read_anchor_v1(project_root, old_hash).is_none() {
+            continue;
+        }
+
+        let (old_prefix, old_rest) = shard_key(old_hash);
+        let old_base = format!("{old_prefix}/{old_rest}");
+        let (new_prefix, new_rest) = shard_key(new_hash);
+        let new_base = format!("{new_prefix}/{new_rest}");
+
+        let file_list = git_in(
+            project_root,
+            &[
+                "ls-tree",
+                "-r",
+                "--name-only",
+                BRANCH,
+                &format!("{old_base}/"),
+            ],
+        )
+        .unwrap_or_default();
+
+        for file_path in file_list.lines() {
+            if file_path.is_empty() {
                 continue;
             }
-            if read_anchor(project_root, old_hash).is_none() {
-                continue;
-            }
+            let relative = file_path.strip_prefix(&old_base).unwrap_or(file_path);
+            let relative = relative.strip_prefix('/').unwrap_or(relative);
+            let new_path = format!("{new_base}/{relative}");
 
-            let (old_prefix, old_rest) = shard_key(old_hash);
-            let old_base = format!("{old_prefix}/{old_rest}");
-            let (new_prefix, new_rest) = shard_key(new_hash);
-            let new_base = format!("{new_prefix}/{new_rest}");
-
-            let file_list = git_in(
-                project_root,
-                &[
-                    "ls-tree",
-                    "-r",
-                    "--name-only",
-                    BRANCH,
-                    &format!("{old_base}/"),
-                ],
-            )
-            .unwrap_or_default();
-
-            for file_path in file_list.lines() {
-                if file_path.is_empty() {
+            if relative == "metadata.json" && !relative.contains('/') {
+                if let Some(mut anchor) = read_anchor_v1(project_root, old_hash) {
+                    anchor.commit_hash.clone_from(new_hash);
+                    let json = serde_json::to_string_pretty(&anchor)
+                        .map_err(|e| CliError::Git(format!("serialize anchor: {e}")))?;
+                    entries.push((new_path, json));
                     continue;
                 }
-                let relative = file_path.strip_prefix(&old_base).unwrap_or(file_path);
-                let relative = relative.strip_prefix('/').unwrap_or(relative);
-                let new_path = format!("{new_base}/{relative}");
+            }
 
-                if relative == "metadata.json" && !relative.contains('/') {
-                    if let Some(mut anchor) = read_anchor(project_root, old_hash) {
-                        anchor.commit_hash = new_hash.to_string();
-                        let json = serde_json::to_string_pretty(&anchor)
-                            .map_err(|e| CliError::Git(format!("serialize anchor: {e}")))?;
-                        entries.push((new_path, json));
-                        continue;
-                    }
-                }
-
-                if let Some(content) = read_from_branch(project_root, file_path) {
-                    entries.push((new_path, content));
-                }
+            if let Some(content) = read_from_branch(project_root, file_path) {
+                entries.push((new_path, content));
             }
         }
     }
@@ -101,25 +127,21 @@ pub fn parse_rewrite_pairs(payload: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Re-key anchors using the exact old→new SHA pairs git provides on the
+/// `post-rewrite` hook's stdin (fires for `commit --amend` and `rebase`).
+///
+/// The pairs are authoritative — used directly, with no tree matching.
+/// This survives content-changing rewrites (amend with staged changes,
+/// rebase with conflict resolution) that tree matching cannot resolve.
 pub fn rekey_anchors_from_rewrite_pairs(
     project_root: &str,
     pairs: &[(String, String)],
 ) -> Result<(), CliError> {
-    if pairs.is_empty() {
+    if pairs.is_empty() || !super::branch_exists(project_root) {
         return Ok(());
     }
 
-    let mut pre_rewrite_commits = Vec::new();
-    for (old_hash, _) in pairs {
-        let tree =
-            git_in(project_root, &["show", "-s", "--format=%T", old_hash]).unwrap_or_default();
-        let tree = tree.trim();
-        if !tree.is_empty() {
-            pre_rewrite_commits.push((old_hash.clone(), tree.to_string()));
-        }
-    }
-
-    rekey_anchors(project_root, &pre_rewrite_commits)
+    rekey_exact_pairs(project_root, pairs)
 }
 
 fn current_branch_commits(project_root: &str) -> Vec<(String, String)> {
