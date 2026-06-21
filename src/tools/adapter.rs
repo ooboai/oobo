@@ -217,12 +217,11 @@ impl Tool for AiderTool {
 
     fn all_sessions(&self) -> Result<Vec<Session>, String> {
         let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-        let project_root = std::process::Command::new(git)
-            .args(["rev-parse", "--show-toplevel"])
-            .stdin(std::process::Stdio::null())
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_QUARANTINE_PATH")
+        let mut cmd = std::process::Command::new(git);
+        cmd.args(["rev-parse", "--show-toplevel"])
+            .stdin(std::process::Stdio::null());
+        crate::git::proxy::scrub_git_env(&mut cmd);
+        let project_root = cmd
             .output()
             .ok()
             .filter(|o| o.status.success())

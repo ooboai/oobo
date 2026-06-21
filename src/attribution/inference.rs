@@ -8,7 +8,7 @@
 //! The explicit path is already covered by taps that see a
 //! filesystem convention (Claude's `subagents/<id>.jsonl`) and emit
 //! [`SubagentLink`](crate::taps::SubagentLink) values onto the
-//! sessions table. This module closes the gap for everything else:
+//! session records. This module closes the gap for everything else:
 //! renamed artifacts, pre-convention transcripts, and tools that
 //! never expose the link at all.
 //!

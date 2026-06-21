@@ -3,7 +3,7 @@ name: oobo
 description: Context beyond the diff - captures AI sessions, tokens, code attribution, semantic code search, and engineering memory via MCP. Use when the user asks about commit history with AI context, session history, code attribution, token usage, code search, or engineering memory.
 metadata:
   author: oobo
-  version: "1.1.2"
+  version: "2.0.0"
 install:
   check: command -v oobo
   url: https://github.com/ooboai/oobo/releases
@@ -48,6 +48,7 @@ Three mutually exclusive modes:
 | List sessions (incl. cross-repo) | `oobo sessions` |
 | Resolve one session's conversation | `oobo session show <uid>` |
 | Copy a conversation to another repo | `oobo session share <uid> --to <repo>` |
+| Re-point stubs after remote change | `oobo session migrate` |
 | Enable tracking in this repo | `oobo enable` |
 | Disable tracking | `oobo disable` |
 | Get a setting | `oobo settings key` |
@@ -112,7 +113,7 @@ The local server (`oobo mcp`) runs as a stdio child process managed by the AI to
 
 ## Legacy commands
 
-0.1.x commands (`scan`, `sessions`, `projects`, `stats`, `card`, `share`, `sync`, `auth`, `ignore`, etc.) now print a migration hint and map to their 1.0 equivalent. The hints will be removed in 1.1.
+0.1.x commands (`scan`, `projects`, `stats`, `card`, `share`, `sync`, `auth`, `ignore`, etc.) are no longer recognized. Users on those versions should upgrade.
 
 ## References
 

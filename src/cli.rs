@@ -33,6 +33,8 @@ Commands (require a git repository):
   recall       Find past sessions and anchors
   enable       Start tracking this project
   disable      Stop tracking this project
+  sessions     List AI sessions for this project
+  session      Inspect a session (show, share, migrate)
 
 Commands (work anywhere):
   setup        Onboarding wizard  --  install hooks, configure tools
@@ -331,7 +333,7 @@ pub enum Command {
         display_order = 8,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo sessions                 Sessions referenced by this repo\n  \
-                       oobo sessions --json          Full JSON with pointer resolution\n  \
+                       oobo sessions --json          Machine-readable JSON output\n  \
                        oobo sessions --resolve       Hydrate foreign conversations now"
     )]
     Sessions {
@@ -340,12 +342,13 @@ pub enum Command {
         resolve: bool,
     },
 
-    /// Operate on a single session (show, share)
+    /// Operate on a single session (show, share, migrate)
     #[command(
         display_order = 9,
         after_help = "\x1b[1mExamples:\x1b[0m\n  \
                        oobo session show <uid>             Resolve one session's conversation\n  \
-                       oobo session share <uid> --to ../y  Copy a conversation into another repo"
+                       oobo session share <uid> --to ../y  Copy a conversation into another repo\n  \
+                       oobo session migrate                Re-point stubs after remote change"
     )]
     Session {
         #[command(subcommand)]
@@ -817,8 +820,9 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                     }
 
                     tracing::debug!(event = %event, tool = ?tool, payload_len = payload.len(), "hook event received");
-                    crate::hooks::handle_event(&event, &payload, tool.as_deref())
-                        .map_err(|e| e.to_string())?;
+                    if let Err(e) = crate::hooks::handle_event(&event, &payload, tool.as_deref()) {
+                        tracing::warn!(event = %event, %e, "hook event handler failed");
+                    }
                 }
                 HookAction::PostCommit { .. } => {
                     // Spool-only: the commit path costs an O_APPEND write.
@@ -840,10 +844,21 @@ async fn dispatch_parsed(cfg: &Config, cli: Cli, mode: OutputMode) -> CmdResult 
                         if !crate::project_config::is_enabled(&root) {
                             return Ok(0);
                         }
-                        // Drain any pending enrichment before metadata leaves
-                        // the machine, so the push carries complete anchors.
                         if crate::git::spool::has_pending(&root) {
-                            let _ = crate::worker::drain(cfg, &root);
+                            let deadline =
+                                std::time::Instant::now() + std::time::Duration::from_secs(5);
+                            match crate::worker::drain_with_deadline(cfg, &root, Some(deadline)) {
+                                Ok(n) if crate::git::spool::has_pending(&root) => {
+                                    tracing::info!(
+                                        processed = n,
+                                        "pre-push drain hit 5s deadline; remaining entries deferred to next trigger"
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(%e, "pre-push drain failed");
+                                }
+                                _ => {}
+                            }
                         }
                         if crate::git::orphan::branch_exists(&root) {
                             if let Err(e) = crate::git::orphan::push(&root) {

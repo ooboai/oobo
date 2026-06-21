@@ -5,7 +5,7 @@ This folder is the **behavioral contract** for the `oobo` CLI. Every user-visibl
 1. A prose description of what the command is supposed to do.
 2. A concrete example of the expected output.
 3. The expected exit code.
-4. Any side effects (files written, DB rows inserted, hooks installed, etc.).
+4. Any side effects (files written, state updated, hooks installed, etc.).
 5. Notable error cases.
 
 It serves two purposes:
@@ -53,7 +53,7 @@ Every invocation follows this block shape:
 
     **Exit code:** `0` / `1` / `2`.
 
-    **Side effects:** files written, DB rows inserted, etc. (or "none").
+    **Side effects:** files written, state updated, etc. (or "none").
 
     **Error cases:**
     - ...

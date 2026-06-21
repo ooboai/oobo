@@ -135,7 +135,7 @@ Possible `status` values: `up-to-date`, `update-available`, `ahead-of-latest` (c
 
 ## `oobo update --post-update` (hidden)
 
-Internal flag. The new binary spawns itself with `--post-update` as the final step of the self-update flow to run any one-time migrations that apply only after a fresh binary is in place (schema migrations that require the new code, config rewrites, etc.).
+Internal flag. The new binary spawns itself with `--post-update` as the final step of the self-update flow to run any one-time migrations that apply only after a fresh binary is in place (config rewrites, state format upgrades, etc.).
 
 Hidden from `oobo update --help`. Never documented in primary help.
 
@@ -150,7 +150,7 @@ Hidden from `oobo update --help`. Never documented in primary help.
 
 **Example output:**
 ```
-post-update migration complete: schema v6 → v7, config rewrite ok.
+post-update migration complete: config rewrite ok.
 ```
 
 **Exit code:** `0` on success; `1` on failure (leaves `.post-update-pending` in place so the user can retry with `oobo update --post-update` manually).

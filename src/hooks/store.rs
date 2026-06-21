@@ -9,7 +9,7 @@
 //!
 //! Read path: buffer → legacy.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -35,11 +35,64 @@ fn legacy_path(project_root: &str, session_id: &str) -> PathBuf {
     legacy_dir(project_root).join(format!("{sanitized}.json"))
 }
 
-fn sanitize(id: &str) -> &str {
-    if !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
-        id
-    } else {
-        "invalid"
+fn sanitize(id: &str) -> String {
+    if id.is_empty() {
+        return "invalid".to_string();
+    }
+    let safe: String = id
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => c,
+            _ => '_',
+        })
+        .collect();
+    let cleaned = safe.replace("..", "_");
+    let trimmed = cleaned.trim_matches('.').to_string();
+    if trimmed.is_empty() {
+        return "invalid".to_string();
+    }
+    trimmed
+}
+
+// ── File locking ──────────────────────────────────────────────────────
+
+/// Advisory lock on the session buffer file. Returns a guard that removes
+/// the lock file on drop.
+struct BufferLock {
+    path: PathBuf,
+}
+
+impl BufferLock {
+    fn acquire(session_id: &str) -> Option<Self> {
+        let dir = buffer_dir();
+        let _ = fs::create_dir_all(&dir);
+        let lock_path = dir.join(format!("{}.lock", sanitize(session_id)));
+        for _ in 0..50 {
+            if OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock_path)
+                .is_ok()
+            {
+                return Some(Self { path: lock_path });
+            }
+            if let Ok(meta) = fs::metadata(&lock_path) {
+                if let Some(age) = meta.modified().ok().and_then(|m| m.elapsed().ok()) {
+                    if age.as_secs() > 30 {
+                        let _ = fs::remove_file(&lock_path);
+                        continue;
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        None
+    }
+}
+
+impl Drop for BufferLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -61,6 +114,116 @@ pub fn read(project_root: &str, session_id: &str) -> Option<ActiveSession> {
 /// Write a session's state to the buffer file.
 pub fn write(_project_root: &str, session_id: &str, state: &ActiveSession) -> std::io::Result<()> {
     write_to_buffer(session_id, state)
+}
+
+/// Atomically read-modify-write a session's state, holding the buffer lock
+/// across the entire cycle so concurrent processes cannot interleave.
+pub fn read_modify_write<F>(project_root: &str, session_id: &str, f: F) -> std::io::Result<bool>
+where
+    F: FnOnce(&mut ActiveSession),
+{
+    let dir = buffer_dir();
+    let _ = fs::create_dir_all(&dir);
+    let _lock = BufferLock::acquire(session_id).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            format!("could not acquire buffer lock for session {session_id}"),
+        )
+    })?;
+    let Some(mut state) = read(project_root, session_id) else {
+        return Ok(false);
+    };
+    f(&mut state);
+    let path = buffer_path(session_id);
+    let json = serde_json::to_string_pretty(&state).map_err(std::io::Error::other)?;
+    atomic_write_json(&path, &json)?;
+    Ok(true)
+}
+
+/// Like `read_modify_write` but the closure can return a value and the
+/// write only happens when a state existed. Returns `None` when the
+/// session doesn't exist.
+pub fn read_modify_write_with<F, T>(
+    project_root: &str,
+    session_id: &str,
+    f: F,
+) -> std::io::Result<Option<T>>
+where
+    F: FnOnce(&mut ActiveSession) -> T,
+{
+    let dir = buffer_dir();
+    let _ = fs::create_dir_all(&dir);
+    let _lock = BufferLock::acquire(session_id).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            format!("could not acquire buffer lock for session {session_id}"),
+        )
+    })?;
+    let Some(mut state) = read(project_root, session_id) else {
+        return Ok(None);
+    };
+    let result = f(&mut state);
+    let path = buffer_path(session_id);
+    let json = serde_json::to_string_pretty(&state).map_err(std::io::Error::other)?;
+    atomic_write_json(&path, &json)?;
+    Ok(Some(result))
+}
+
+/// Lock the session buffer, read the state, and return both the guard and
+/// state for batched mutations. The caller MUST call `write_locked` to
+/// persist changes while still holding the guard.
+pub fn read_locked(project_root: &str, session_id: &str) -> Option<(BufferGuard, ActiveSession)> {
+    let _ = fs::create_dir_all(buffer_dir());
+    let lock = BufferLock::acquire(session_id)?;
+    let state = read(project_root, session_id)?;
+    Some((BufferGuard { _lock: lock }, state))
+}
+
+/// Write session state while holding the buffer guard (lock is already held).
+pub fn write_locked(
+    _guard: &BufferGuard,
+    session_id: &str,
+    state: &ActiveSession,
+) -> std::io::Result<()> {
+    let path = buffer_path(session_id);
+    let json = serde_json::to_string_pretty(state).map_err(std::io::Error::other)?;
+    atomic_write_json(&path, &json)
+}
+
+/// Opaque guard that holds the buffer lock. Dropping it releases the lock.
+pub struct BufferGuard {
+    _lock: BufferLock,
+}
+
+/// Atomically create a session if it doesn't exist yet, under the buffer
+/// lock. Returns `true` if a new session was created, `false` if one
+/// already existed (no-op). This eliminates the check-then-act race in
+/// `write_session` where two concurrent `session-start` hooks could both
+/// see `!exists()` and race on `write()`.
+pub fn create_if_missing<F>(
+    project_root: &str,
+    session_id: &str,
+    make_state: F,
+) -> std::io::Result<bool>
+where
+    F: FnOnce() -> ActiveSession,
+{
+    let dir = buffer_dir();
+    let _ = fs::create_dir_all(&dir);
+    let _lock = BufferLock::acquire(session_id).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            format!("could not acquire buffer lock for session {session_id}"),
+        )
+    })?;
+    if read(project_root, session_id).is_some() {
+        return Ok(false);
+    }
+    let state = make_state();
+    let path = buffer_path(session_id);
+    let json = serde_json::to_string_pretty(&state).map_err(std::io::Error::other)?;
+    atomic_write_json(&path, &json)?;
+    Ok(true)
 }
 
 /// True if a session's state exists in any backend.
@@ -169,6 +332,12 @@ fn read_from_buffer(session_id: &str) -> Option<ActiveSession> {
 fn write_to_buffer(session_id: &str, state: &ActiveSession) -> std::io::Result<()> {
     let dir = buffer_dir();
     fs::create_dir_all(&dir)?;
+    let _lock = BufferLock::acquire(session_id).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            format!("could not acquire buffer lock for session {session_id}"),
+        )
+    })?;
     let path = buffer_path(session_id);
     let json = serde_json::to_string_pretty(state).map_err(std::io::Error::other)?;
     atomic_write_json(&path, &json)
@@ -181,6 +350,11 @@ fn atomic_write_json(path: &Path, json: &str) -> std::io::Result<()> {
     tmp.write_all(json.as_bytes())?;
     tmp.flush()?;
     tmp.persist(path).map_err(|e| e.error)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
     Ok(())
 }
 
@@ -203,12 +377,13 @@ fn worktree_matches(worktree: &str, project_root: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
+
     use super::*;
 
     fn fresh_buffer_env() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var("OOBO_HOME", tmp.path());
-        // Force paths module to pick up the env var.
         tmp
     }
 
@@ -250,6 +425,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_buffer_roundtrip_no_project_root() {
         let _env = fresh_buffer_env();
         let state = mk_state("buf-sid");
@@ -264,8 +440,197 @@ mod tests {
 
     #[test]
     fn test_sanitize_rejects_traversal() {
-        assert_eq!(sanitize("../../etc/passwd"), "invalid");
+        let traversal = sanitize("../../etc/passwd");
+        assert!(
+            !traversal.contains(".."),
+            "must not contain path traversal: {traversal}"
+        );
+        assert!(
+            !traversal.contains('/'),
+            "must not contain separator: {traversal}"
+        );
         assert_eq!(sanitize("good-id-123"), "good-id-123");
         assert_eq!(sanitize(""), "invalid");
+        assert_eq!(sanitize("id_with.dots"), "id_with.dots");
+        assert_eq!(sanitize("id:with:colons"), "id_with_colons");
+        let sneaky = sanitize("..sneaky");
+        assert!(
+            !sneaky.starts_with('.'),
+            "must not start with dot: {sneaky}"
+        );
+        assert_eq!(sanitize("."), "invalid");
+        let dots = sanitize("...");
+        assert!(!dots.contains(".."), "must not contain traversal: {dots}");
+    }
+
+    // ── E1 fix: read_modify_write holds lock across RMW cycle ─────────
+
+    #[test]
+    #[serial]
+    fn test_read_modify_write_updates_state() {
+        let _env = fresh_buffer_env();
+        let state = mk_state("rmw-test");
+        write("", "rmw-test", &state).unwrap();
+
+        let updated = read_modify_write("", "rmw-test", |s| {
+            s.current_turn_index = 42;
+            s.model = Some("opus".into());
+        })
+        .unwrap();
+        assert!(updated, "should return true when session exists");
+
+        let back = read("", "rmw-test").unwrap();
+        assert_eq!(back.current_turn_index, 42);
+        assert_eq!(back.model.as_deref(), Some("opus"));
+        remove("", "rmw-test");
+    }
+
+    #[test]
+    #[serial]
+    fn test_read_modify_write_returns_false_on_missing_session() {
+        let _env = fresh_buffer_env();
+        let result = read_modify_write("", "nonexistent-sid", |_| {}).unwrap();
+        assert!(!result, "should return false when session doesn't exist");
+    }
+
+    #[test]
+    #[serial]
+    fn test_read_modify_write_with_returns_value() {
+        let _env = fresh_buffer_env();
+        let mut state = mk_state("rmw-val-test");
+        state.current_turn_index = 5;
+        write("", "rmw-val-test", &state).unwrap();
+
+        let result = read_modify_write_with("", "rmw-val-test", |s| {
+            let old_idx = s.current_turn_index;
+            s.current_turn_index += 1;
+            old_idx
+        })
+        .unwrap();
+        assert_eq!(result, Some(5), "should return the value from the closure");
+
+        let back = read("", "rmw-val-test").unwrap();
+        assert_eq!(back.current_turn_index, 6, "state should be persisted");
+        remove("", "rmw-val-test");
+    }
+
+    #[test]
+    #[serial]
+    fn test_read_modify_write_with_returns_none_on_missing() {
+        let _env = fresh_buffer_env();
+        let result = read_modify_write_with::<_, i64>("", "no-such-session", |_| 999).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    #[serial]
+    fn test_read_locked_write_locked_roundtrip() {
+        let _env = fresh_buffer_env();
+        let state = mk_state("locked-test");
+        write("", "locked-test", &state).unwrap();
+
+        let (guard, mut loaded) = read_locked("", "locked-test").unwrap();
+        assert_eq!(loaded.session_id, "locked-test");
+        loaded.current_turn_index = 99;
+        loaded.model = Some("sonnet".into());
+        write_locked(&guard, "locked-test", &loaded).unwrap();
+        drop(guard);
+
+        let back = read("", "locked-test").unwrap();
+        assert_eq!(back.current_turn_index, 99);
+        assert_eq!(back.model.as_deref(), Some("sonnet"));
+        remove("", "locked-test");
+    }
+
+    #[test]
+    #[serial]
+    fn test_read_locked_returns_none_on_missing() {
+        let _env = fresh_buffer_env();
+        assert!(read_locked("", "ghost-session").is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn test_lock_file_created_and_released() {
+        let _env = fresh_buffer_env();
+        let state = mk_state("lock-file-test");
+        write("", "lock-file-test", &state).unwrap();
+
+        let lock_path = buffer_dir().join(format!("{}.lock", sanitize("lock-file-test")));
+
+        // Lock file shouldn't exist before we acquire.
+        assert!(!lock_path.exists());
+
+        let (guard, _) = read_locked("", "lock-file-test").unwrap();
+        // Lock file exists while guard is held.
+        assert!(lock_path.exists(), "lock file should exist while held");
+
+        drop(guard);
+        // Lock file removed after guard is dropped.
+        assert!(
+            !lock_path.exists(),
+            "lock file should be removed after drop"
+        );
+        remove("", "lock-file-test");
+    }
+
+    #[test]
+    #[serial]
+    fn test_concurrent_lock_acquisition_serializes() {
+        let _env = fresh_buffer_env();
+        let state = mk_state("serial-test");
+        write("", "serial-test", &state).unwrap();
+
+        // First acquisition succeeds.
+        let lock1 = BufferLock::acquire("serial-test");
+        assert!(lock1.is_some(), "first lock acquisition should succeed");
+
+        // Second acquisition within the same process fails (lock held).
+        let lock2 = BufferLock::acquire("serial-test");
+        assert!(
+            lock2.is_none(),
+            "concurrent lock on same session should fail while held"
+        );
+
+        // After releasing first, second should succeed.
+        drop(lock1);
+        let lock3 = BufferLock::acquire("serial-test");
+        assert!(
+            lock3.is_some(),
+            "lock acquisition should succeed after release"
+        );
+        drop(lock3);
+        remove("", "serial-test");
+    }
+
+    #[test]
+    #[serial]
+    fn test_read_modify_write_blocks_while_locked() {
+        let _env = fresh_buffer_env();
+        let state = mk_state("block-test");
+        write("", "block-test", &state).unwrap();
+
+        // Hold the lock directly.
+        let lock = BufferLock::acquire("block-test").unwrap();
+
+        // read_modify_write should fail because lock is held.
+        let result = read_modify_write("", "block-test", |s| {
+            s.current_turn_index = 999;
+        });
+        assert!(
+            result.is_err(),
+            "read_modify_write should fail when lock is held"
+        );
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+
+        drop(lock);
+
+        // Verify state was NOT modified (the write should have been rejected).
+        let back = read("", "block-test").unwrap();
+        assert_eq!(
+            back.current_turn_index, 0,
+            "state must not be modified when lock blocked the write"
+        );
+        remove("", "block-test");
     }
 }

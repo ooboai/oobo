@@ -250,7 +250,7 @@ impl Publisher {
     pub fn new(project_root: &str) -> Self {
         Self {
             project_root: project_root.to_string(),
-            block_on_secret: false,
+            block_on_secret: true,
         }
     }
 
@@ -259,10 +259,7 @@ impl Publisher {
     pub fn publish(&self, text: &str) -> Result<String, CliError> {
         let clean = crate::redact::sanitize_for_public(text, &self.project_root);
         if self.block_on_secret && clean.contains("[REDACTED]") && !text.contains("[REDACTED]") {
-            return Err(CliError::Git(
-                "refusing to publish: secret detected in content destined for shared storage"
-                    .into(),
-            ));
+            return Err(CliError::SecretBlocked);
         }
         Ok(clean)
     }
@@ -399,8 +396,8 @@ pub fn write_conversation_session(
 }
 
 /// Write an immutable conversation turn (transcript + tool calls) into
-/// the home store. Both payloads pass the publish choke-point. Returns
-/// `Ok(false)` when the turn already exists.
+/// the home store. Detected secrets are redacted (never blocks the write).
+/// Returns `Ok(false)` when the turn already exists.
 pub fn write_conversation_turn(
     project_root: &str,
     session_uid: &str,
@@ -409,7 +406,8 @@ pub fn write_conversation_turn(
     tool_calls_json: &str,
 ) -> Result<bool, CliError> {
     ensure_branch_named(project_root, BRANCH)?;
-    let publisher = Publisher::new(project_root);
+    let mut publisher = Publisher::new(project_root);
+    publisher.block_on_secret = false;
     let dir = format!(
         "{}/turns/{}",
         conversation_session_dir(session_uid),

@@ -303,16 +303,14 @@ fn batch_cat_file(project_root: &str, refs: &[&str]) -> Vec<Option<String>> {
     }
 
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let mut child = match Command::new(git)
-        .args(["cat-file", "--batch"])
+    let mut cmd = Command::new(git);
+    cmd.args(["cat-file", "--batch"])
         .current_dir(project_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .spawn()
-    {
+        .stderr(Stdio::null());
+    crate::git::proxy::scrub_git_env(&mut cmd);
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => return vec![None; refs.len()],
     };
@@ -580,15 +578,14 @@ pub(super) fn read_from_branch_named(
 /// works correctly when called from inside a git hook.
 pub(super) fn git_in(project_root: &str, args: &[&str]) -> Result<String, CliError> {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let output = Command::new(git)
-        .args(args)
+    let mut cmd = Command::new(git);
+    cmd.args(args)
         .current_dir(project_root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
+        .stderr(Stdio::piped());
+    crate::git::proxy::scrub_git_env(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| CliError::Git(format!("git: {e}")))?;
 
@@ -613,15 +610,14 @@ pub(super) fn git_in_timeout(
     timeout: std::time::Duration,
 ) -> Result<String, CliError> {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let mut child = Command::new(git)
-        .args(args)
+    let mut cmd = Command::new(git);
+    cmd.args(args)
         .current_dir(project_root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
+        .stderr(Stdio::piped());
+    crate::git::proxy::scrub_git_env(&mut cmd);
+    let mut child = cmd
         .spawn()
         .map_err(|e| CliError::Git(format!("git: {e}")))?;
 
@@ -669,10 +665,8 @@ fn git_env_in(project_root: &str, args: &[&str], env: &[(&str, &str)]) -> Result
         .current_dir(project_root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH");
+        .stderr(Stdio::piped());
+    crate::git::proxy::scrub_git_env(&mut cmd);
 
     for (k, v) in env {
         cmd.env(k, v);
@@ -699,15 +693,14 @@ fn git_stdin_in(project_root: &str, args: &[&str], stdin_data: &str) -> Result<S
     use std::io::Write;
 
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let mut child = Command::new(git)
-        .args(args)
+    let mut cmd = Command::new(git);
+    cmd.args(args)
         .current_dir(project_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
+        .stderr(Stdio::piped());
+    crate::git::proxy::scrub_git_env(&mut cmd);
+    let mut child = cmd
         .spawn()
         .map_err(|e| CliError::Git(format!("git: {e}")))?;
 

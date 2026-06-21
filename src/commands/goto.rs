@@ -80,17 +80,13 @@ pub fn run(cfg: &Config, target: &str, no_stash: bool, mode: OutputMode) -> CmdR
         None
     };
 
-    // Record return point BEFORE modifying the worktree.
-    // write-tree captures the current index (which is the state we want to restore on `back`).
+    // Capture the current index state BEFORE modifying the worktree,
+    // so `oobo back` can restore it.
     let current_tree = git_capture(&project_root, &["write-tree"])?;
-    // Label: describes what we're leaving (shown on `back`).
     let leaving_label = if is_first_goto {
-        // Leaving HEAD  --  use its commit message.
         git_capture(&project_root, &["show", "-s", "--format=%s", "HEAD"])
             .unwrap_or_else(|_| "HEAD".into())
     } else {
-        // Leaving a previously-loaded target. Read the last stack entry's
-        // "going_to" label, or fall back to a generic description.
         let stack = load_stack(&project_root);
         stack
             .entries
@@ -98,6 +94,25 @@ pub fn run(cfg: &Config, target: &str, no_stash: bool, mode: OutputMode) -> CmdR
             .and_then(|e| e.went_to_label.clone())
             .unwrap_or_else(|| "previous state".into())
     };
+
+    // Load the target tree FIRST. Only push the stack on success —
+    // otherwise a failed read-tree would leave a corrupt stack entry
+    // and `oobo back` would restore the wrong state.
+    if let Err(e) = git_capture(&project_root, &["read-tree", "--reset", "-u", &tree]) {
+        // Undo the stash we just created so the user isn't left with
+        // an orphan stash.
+        if let Some(ref sref) = stash_ref {
+            if let Err(e) = git_capture(&project_root, &["stash", "apply", sref]) {
+                eprintln!(
+                    "oobo: could not restore stash after failed goto: {e}\n  \
+                     Your changes are saved in stash. Run `git stash pop` manually."
+                );
+            } else {
+                let _ = git_capture(&project_root, &["stash", "drop", sref]);
+            }
+        }
+        return Err(e);
+    }
     push_stack(
         &project_root,
         &current_tree,
@@ -105,9 +120,6 @@ pub fn run(cfg: &Config, target: &str, no_stash: bool, mode: OutputMode) -> CmdR
         stash_ref.as_deref(),
         &label,
     )?;
-
-    // Load the target tree.
-    git_capture(&project_root, &["read-tree", "--reset", "-u", &tree])?;
 
     // Mark lineage for the anchor system.
     let restore_id = match &kind {
@@ -196,6 +208,7 @@ pub fn run_back(cfg: &Config, mode: OutputMode) -> CmdResult {
     git_capture(&project_root, &["read-tree", "--reset", "-u", &entry.tree])?;
 
     // Pop the stash if this entry created one.
+    let mut stash_failed = false;
     if let Some(ref stash) = entry.stash_ref {
         let pop_result = git_capture(&project_root, &["stash", "apply", stash]);
         match pop_result {
@@ -207,6 +220,7 @@ pub fn run_back(cfg: &Config, mode: OutputMode) -> CmdResult {
                     "oobo: restored tree but stash apply had conflicts: {e}\n\
                      Your stash is still saved. Run `git stash pop` to resolve manually."
                 );
+                stash_failed = true;
             }
         }
     }
@@ -215,7 +229,8 @@ pub fn run_back(cfg: &Config, mode: OutputMode) -> CmdResult {
         OutputMode::Json => crate::utils::print_json(&serde_json::json!({
             "action": "back",
             "label": entry.label,
-            "stash_applied": entry.stash_ref.is_some(),
+            "stash_applied": entry.stash_ref.is_some() && !stash_failed,
+            "stash_conflict": stash_failed,
             "remaining_depth": remaining,
         })),
         OutputMode::Agent => {
@@ -227,7 +242,12 @@ pub fn run_back(cfg: &Config, mode: OutputMode) -> CmdResult {
             println!("back to {}{depth_hint}", entry.label);
         }
         OutputMode::Tui => {
-            if entry.stash_ref.is_some() {
+            if stash_failed {
+                println!(
+                    "Returned to {} (stash apply had conflicts — resolve manually).",
+                    entry.label
+                );
+            } else if entry.stash_ref.is_some() {
                 println!(
                     "Returned to {} (uncommitted changes restored).",
                     entry.label
@@ -240,7 +260,7 @@ pub fn run_back(cfg: &Config, mode: OutputMode) -> CmdResult {
             }
         }
     }
-    Ok(0)
+    Ok(i32::from(stash_failed))
 }
 
 // ── Internals ────────────────────────────────────────────────────────────
@@ -258,6 +278,9 @@ enum GotoKind {
 }
 
 fn resolve_target(project_root: &str, id: &str) -> Target {
+    if id.is_empty() {
+        return Target::NotFound;
+    }
     // Try exact turn match first.
     if let Some(turn) = crate::git::turns::read_turn_snapshot(project_root, id) {
         return Target::Turn(Box::new(turn));
@@ -423,8 +446,9 @@ fn materialize_turn_memory(
         "tool_calls": turn.memory.tool_calls.clone(),
         "files": turn.files.clone(),
     });
-    let text = serde_json::to_string_pretty(&payload)
+    let raw = serde_json::to_string_pretty(&payload)
         .map_err(|e| CliError::Git(format!("serialize goto memory: {e}")))?;
+    let text = crate::redact::sanitize_for_public(&raw, project_root);
     std::fs::write(&path, text).map_err(|e| CliError::Io {
         context: "write goto memory".into(),
         source: e,
@@ -478,15 +502,14 @@ fn short(hash: &str) -> &str {
 
 fn git_capture(project_root: &str, args: &[&str]) -> Result<String, CliError> {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let output = std::process::Command::new(git)
-        .args(args)
+    let mut cmd = std::process::Command::new(git);
+    cmd.args(args)
         .current_dir(project_root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
+        .stderr(std::process::Stdio::piped());
+    crate::git::proxy::scrub_git_env(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| CliError::Git(format!("git: {e}")))?;
 

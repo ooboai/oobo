@@ -264,16 +264,15 @@ impl ActiveSession {
 
 /// Load state, apply `f`, bump `updated_at`, and save.
 /// No-op (returns `Ok(())`) if the session doesn't exist.
+/// Holds the buffer lock across the full read-modify-write cycle.
 pub(super) fn mutate<F>(project_root: &str, session_id: &str, f: F) -> Result<()>
 where
     F: FnOnce(&mut ActiveSession),
 {
-    let Some(mut state) = store::read(project_root, session_id) else {
-        return Ok(());
-    };
-    f(&mut state);
-    state.bump();
-    store::write(project_root, session_id, &state)?;
+    store::read_modify_write(project_root, session_id, |state| {
+        f(state);
+        state.bump();
+    })?;
     Ok(())
 }
 
@@ -282,14 +281,16 @@ where
 /// Hook events often apply 3–6 mutations to the same session. Without
 /// batching, each mutation does a full JSON round-trip (read + deserialize +
 /// serialize + write). `SessionBatch` amortizes this to a single round-trip.
+/// Holds the buffer lock from open to flush, preventing concurrent RMW races.
 pub struct SessionBatch {
-    project_root: String,
     session_id: String,
     state: ActiveSession,
+    guard: store::BufferGuard,
 }
 
 impl SessionBatch {
     /// Ensure a session exists, then load it for batched mutation.
+    /// Acquires the buffer lock, which is held until `flush` is called.
     pub fn open(
         project_root: &str,
         session_id: &str,
@@ -297,13 +298,13 @@ impl SessionBatch {
         model: Option<&str>,
     ) -> Result<Self> {
         ensure_session(project_root, session_id, agent, model)?;
-        let state = store::read(project_root, session_id).ok_or_else(|| {
+        let (guard, state) = store::read_locked(project_root, session_id).ok_or_else(|| {
             crate::error::OoboError::Other(format!("session '{session_id}' vanished after ensure"))
         })?;
         Ok(Self {
-            project_root: project_root.to_string(),
             session_id: session_id.to_string(),
             state,
+            guard,
         })
     }
 
@@ -316,9 +317,10 @@ impl SessionBatch {
     }
 
     /// Flush all accumulated mutations to disk in a single write.
+    /// The buffer lock is released when this `SessionBatch` is dropped.
     pub fn flush(mut self) -> Result<()> {
         self.state.bump();
-        store::write(&self.project_root, &self.session_id, &self.state)?;
+        store::write_locked(&self.guard, &self.session_id, &self.state)?;
         Ok(())
     }
 }
@@ -336,20 +338,25 @@ pub fn write_session(
     agent: &str,
     model: Option<&str>,
 ) -> Result<()> {
-    if let Some(mut state) = store::read(project_root, session_id) {
-        tracing::info!(session_id, agent, "session resume (same native id)");
-        state.ended_at = None;
-        if model.is_some() {
-            state.model = model.map(std::string::ToString::to_string);
-        }
-        state.bump();
-        store::write(project_root, session_id, &state)?;
-        return Ok(());
-    }
-    tracing::info!(session_id, agent, "session start");
+    // Try to create-if-missing under the buffer lock to prevent the
+    // check-then-act race where two concurrent session-start hooks both
+    // see !exists() and race on write(), with the last writer wiping
+    // turn bookkeeping from the first.
     let worktree = snapshots::resolve_worktree(project_root);
-    let state = ActiveSession::new(session_id, agent, model, worktree);
-    store::write(project_root, session_id, &state)?;
+    let created = store::create_if_missing(project_root, session_id, || {
+        tracing::info!(session_id, agent, "session start");
+        ActiveSession::new(session_id, agent, model, worktree)
+    })?;
+    if !created {
+        tracing::info!(session_id, agent, "session resume (same native id)");
+        store::read_modify_write(project_root, session_id, |state| {
+            state.ended_at = None;
+            if model.is_some() {
+                state.model = model.map(std::string::ToString::to_string);
+            }
+            state.bump();
+        })?;
+    }
     Ok(())
 }
 
@@ -413,6 +420,10 @@ pub fn record_hook_event(
             state.current_turn_started_at = Some(chrono::Utc::now().timestamp());
         }
         let mut events = state.current_turn_hook_events.take().unwrap_or_default();
+        const MAX_HOOK_EVENTS: usize = 200;
+        if events.len() >= MAX_HOOK_EVENTS {
+            events.drain(..=events.len() - MAX_HOOK_EVENTS);
+        }
         events.push(TurnHookEvent {
             name: event_name.to_string(),
             observed_at: chrono::Utc::now().timestamp(),
@@ -435,6 +446,10 @@ pub fn record_tool_call(
             state.current_turn_started_at = Some(chrono::Utc::now().timestamp());
         }
         let mut calls = state.current_turn_tool_calls.take().unwrap_or_default();
+        const MAX_TOOL_CALLS: usize = 200;
+        if calls.len() >= MAX_TOOL_CALLS {
+            calls.drain(..=calls.len() - MAX_TOOL_CALLS);
+        }
         calls.push(TurnToolCall {
             name: tool_name.to_string(),
             observed_at: chrono::Utc::now().timestamp(),
@@ -702,44 +717,22 @@ pub mod test_support {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
+
     use super::*;
     use std::path::Path;
-    use std::sync::Mutex;
-
-    /// All state tests share a single OOBO_HOME env var  --  serialize them
-    /// so that each test's tempdir stays the active home for its duration.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct TestEnv {
         _oobo_home: tempfile::TempDir,
-        prev: Option<std::ffi::OsString>,
-        _guard: std::sync::MutexGuard<'static, ()>,
-    }
-
-    impl Drop for TestEnv {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.prev {
-                    Some(v) => std::env::set_var("OOBO_HOME", v),
-                    None => std::env::remove_var("OOBO_HOME"),
-                }
-            }
-        }
     }
 
     fn setup() -> TestEnv {
-        let guard = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let prev = std::env::var_os("OOBO_HOME");
         let oobo_home = tempfile::tempdir().unwrap();
         unsafe {
             std::env::set_var("OOBO_HOME", oobo_home.path());
         }
         TestEnv {
             _oobo_home: oobo_home,
-            prev,
-            _guard: guard,
         }
     }
 
@@ -762,6 +755,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_session_lifecycle() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -791,6 +785,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_record_and_get_edited_files() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -812,6 +807,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_record_and_get_read_files() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -832,6 +828,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_record_edited_file_nonexistent_session_is_noop() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -844,6 +841,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_record_tool_use_and_bash_commands() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -868,6 +866,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_bash_commands_cap_at_50() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -888,6 +887,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_record_tool_failure() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -909,6 +909,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_subagent_lifecycle() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -931,6 +932,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_record_thinking_accumulates() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -947,6 +949,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_record_compact_increments() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -964,6 +967,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_finish_turn_writes_git_snapshot() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1012,6 +1016,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_finish_turn_prefers_current_turn_file_paths() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1055,6 +1060,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_read_session_model() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1076,6 +1082,7 @@ mod tests {
     /// Later, once we have a real project root, the DB becomes the primary
     /// but the buffered session is still readable.
     #[test]
+    #[serial]
     fn test_pre_git_init_buffer_fallback() {
         let _env = setup();
         // First write: no project root → buffer.
@@ -1097,6 +1104,7 @@ mod tests {
     /// Legacy `.git/oobo-sessions/<sid>.json` files should be readable
     /// as a fallback when no buffer file exists.
     #[test]
+    #[serial]
     fn test_legacy_file_lazy_import() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1119,6 +1127,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_legacy_file_readable_in_active_sessions() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1140,6 +1149,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_snapshot_pre_edit_file_new_file() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1159,6 +1169,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_pre_post_edit_pairing() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1218,6 +1229,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_pre_post_edit_chain_multiple_edits() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1258,6 +1270,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_pre_edit_without_post_does_not_crash() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1292,6 +1305,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_same_blob_pre_post_skipped() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1321,6 +1335,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_touch_promotes_legacy_to_buffer() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1339,6 +1354,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_ended_session_preserves_snapshots() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1378,6 +1394,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_cleanup_stale_respects_ended_grace_period() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1433,6 +1450,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_foreign_pre_post_edit_pairing() {
         let _env = setup();
         let (origin, foreign) = two_repos();
@@ -1484,6 +1502,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_finish_foreign_turns_writes_snapshot_in_foreign_repo() {
         let _env = setup();
         let (origin, foreign) = two_repos();
@@ -1576,6 +1595,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_finish_foreign_turns_without_turn_activity_is_noop() {
         let _env = setup();
         let (origin, foreign) = two_repos();
@@ -1598,6 +1618,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_capture_gap_flagged_when_file_drifts_after_last_captured_edit() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1631,6 +1652,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_no_capture_gap_when_chain_explains_content() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1661,6 +1683,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_capture_gap_flagged_on_interior_chain_discontinuity() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1698,6 +1721,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_event_seq_is_monotonic_across_origin_and_foreign_edits() {
         let _env = setup();
         let (origin, foreign) = two_repos();
@@ -1747,6 +1771,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_origin_finish_turn_links_cross_repo() {
         let _env = setup();
         let (origin, foreign) = two_repos();
@@ -1781,6 +1806,7 @@ mod tests {
     /// repo X edits a file in repo Y via pre-tool-use/after-tool-use, then
     /// stops. Repo Y must end up with a self-contained turn snapshot.
     #[test]
+    #[serial]
     fn test_handle_event_routes_cross_repo_edit() {
         let _env = setup();
         let (origin, foreign) = two_repos();
@@ -1847,6 +1873,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_ended_session_not_re_ended() {
         let _env = setup();
         let dir = tempfile::tempdir().unwrap();
@@ -1870,5 +1897,92 @@ mod tests {
 
         // Both calls should set ended_at; second call just updates the timestamp.
         assert!(second_ended >= first_ended);
+    }
+
+    // ── E1 fix: verify SessionBatch holds lock across batch mutations ───
+
+    #[test]
+    #[serial]
+    fn test_session_batch_holds_lock_during_mutations() {
+        let _env = setup();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        write_session(root_str, "batch-lock", "cursor", Some("opus")).unwrap();
+        let mut batch = SessionBatch::open(root_str, "batch-lock", "cursor", None).unwrap();
+
+        // While batch is open, direct read_modify_write should fail (lock held).
+        let result = store::read_modify_write(root_str, "batch-lock", |s| {
+            s.current_turn_index = 999;
+        });
+        assert!(
+            result.is_err(),
+            "read_modify_write must fail while SessionBatch holds the lock"
+        );
+
+        // But we can still mutate through the batch.
+        batch.state_mut().current_turn_index = 42;
+        batch.flush().unwrap();
+
+        // After flush (which drops the lock), state is persisted.
+        let state = read_session(root_str, "batch-lock").unwrap();
+        assert_eq!(state.current_turn_index, 42);
+    }
+
+    // ── E1 fix: write_session resume path uses atomic RMW ───────────────
+
+    #[test]
+    #[serial]
+    fn test_write_session_resume_clears_ended_atomically() {
+        let _env = setup();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        write_session(root_str, "resume-sess", "cursor", Some("claude")).unwrap();
+        remove_session(root_str, "resume-sess");
+
+        let ended = read_session(root_str, "resume-sess").unwrap();
+        assert!(ended.ended_at.is_some(), "session should be ended");
+
+        // Resume the session with a new model.
+        write_session(root_str, "resume-sess", "cursor", Some("opus")).unwrap();
+        let resumed = read_session(root_str, "resume-sess").unwrap();
+        assert!(resumed.ended_at.is_none(), "ended_at should be cleared");
+        assert_eq!(
+            resumed.model.as_deref(),
+            Some("opus"),
+            "model should be updated"
+        );
+    }
+
+    // ── E1 fix: mutate uses atomic RMW ──────────────────────────────────
+
+    #[test]
+    #[serial]
+    fn test_mutate_persists_changes_atomically() {
+        let _env = setup();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        init_git_repo(root);
+        let root_str = root.to_str().unwrap();
+
+        write_session(root_str, "atomic-mut", "cursor", None).unwrap();
+
+        let initial_ts = read_session(root_str, "atomic-mut").unwrap().updated_at;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        mutate(root_str, "atomic-mut", |s| {
+            s.current_turn_index = 10;
+        })
+        .unwrap();
+        let after = read_session(root_str, "atomic-mut").unwrap();
+        assert_eq!(after.current_turn_index, 10);
+        assert!(
+            after.updated_at >= initial_ts,
+            "bump() should update updated_at"
+        );
     }
 }

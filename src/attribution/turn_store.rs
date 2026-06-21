@@ -16,8 +16,28 @@ fn cache_dir(project_root: &str) -> PathBuf {
 
 fn session_path(project_root: &str, source: &str, session_id: &str) -> PathBuf {
     cache_dir(project_root)
-        .join(source)
-        .join(format!("{session_id}.json"))
+        .join(sanitize_segment(source))
+        .join(format!("{}.json", sanitize_segment(session_id)))
+}
+
+fn sanitize_segment(raw: &str) -> String {
+    if raw.is_empty() {
+        return "invalid".to_string();
+    }
+    let safe: String = raw
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => c,
+            _ => '_',
+        })
+        .collect();
+    let cleaned = safe.replace("..", "_");
+    let trimmed = cleaned.trim_matches('.').to_string();
+    if trimmed.is_empty() {
+        "invalid".to_string()
+    } else {
+        trimmed
+    }
 }
 
 #[cfg(test)]

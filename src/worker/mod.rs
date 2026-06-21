@@ -2,9 +2,9 @@
 //!
 //! The git write path appends commits to the spool ([`crate::git::spool`])
 //! and spawns this worker. The worker drains the spool: for each pending
-//! commit it runs the full enrichment pipeline (anchor build + v1 orphan
-//! write), then layers the v2 work on top — content claims, provenance
-//! sessions/turns, the v2 anchor record, and a best-effort orphan push.
+//! commit it runs the full enrichment pipeline (anchor build, content
+//! claims, provenance sessions/turns, the v2 anchor record) and a
+//! best-effort orphan push.
 //!
 //! Invariants:
 //! - **Singleton per repo** via [`WorkerLock`] (stale locks stolen).
@@ -56,6 +56,16 @@ pub fn spawn_drain(project_root: &str) {
 
 /// Drain the spool for a repo. Returns the number of commits enriched.
 pub fn drain(cfg: &Config, project_root: &str) -> Result<u32, CliError> {
+    drain_with_deadline(cfg, project_root, None)
+}
+
+/// Drain with an optional time budget. Returns early once the deadline is
+/// reached, leaving remaining entries for the next trigger.
+pub fn drain_with_deadline(
+    cfg: &Config,
+    project_root: &str,
+    deadline: Option<std::time::Instant>,
+) -> Result<u32, CliError> {
     let Some(lock) = WorkerLock::acquire(project_root) else {
         // Another worker is live; it will see our entries.
         return Ok(0);
@@ -73,6 +83,12 @@ pub fn drain(cfg: &Config, project_root: &str) -> Result<u32, CliError> {
             let entries = spool::read_entries(file);
             let mut failed: Vec<SpoolEntry> = Vec::new();
             for entry in entries {
+                if let Some(dl) = deadline {
+                    if std::time::Instant::now() >= dl {
+                        failed.push(entry);
+                        continue;
+                    }
+                }
                 let key = (entry.root.clone(), entry.sha.clone());
                 if !attempted.insert(key) {
                     // Already failed this run; keep for the next drain.
@@ -81,10 +97,15 @@ pub fn drain(cfg: &Config, project_root: &str) -> Result<u32, CliError> {
                 }
                 saw_new = true;
                 lock.heartbeat();
-                if process_entry(cfg, &entry) {
-                    processed += 1;
-                } else {
-                    tracing::debug!(sha = %entry.sha, "spool entry dropped (commit gone or repo disabled)");
+                match process_entry(cfg, &entry) {
+                    EntryOutcome::Processed => processed += 1,
+                    EntryOutcome::Dropped => {
+                        tracing::debug!(sha = %entry.sha, "spool entry dropped (commit gone or repo disabled)");
+                    }
+                    EntryOutcome::Retry => {
+                        tracing::warn!(sha = %entry.sha, "v2 write failed, keeping for retry");
+                        failed.push(entry);
+                    }
                 }
             }
             spool::complete_work(file, &failed);
@@ -98,39 +119,29 @@ pub fn drain(cfg: &Config, project_root: &str) -> Result<u32, CliError> {
 
     if processed > 0 {
         crate::hooks::state::cleanup_stale(project_root, 86400);
-        // Best-effort v2 push; offline/no-remote is fine (pre-push retries).
-        if v2::branch_exists(project_root) {
-            if let Err(e) = v2::push(project_root) {
-                tracing::debug!(%e, "v2 push deferred");
-            }
-        }
     }
 
     Ok(processed)
 }
 
-/// Process one spooled commit. `false` = dropped on purpose
-/// (repo/commit no longer addressable). Every fallible sub-step inside
-/// logs and degrades instead of failing the whole entry.
-fn process_entry(cfg: &Config, entry: &SpoolEntry) -> bool {
-    // Canonicalize before deriving any identity from the path: the spool
-    // may record /var/... while readers resolve /private/var/... (macOS),
-    // and repo ids must be stable across both spellings.
+enum EntryOutcome {
+    Processed,
+    /// Commit or repo is permanently gone — safe to discard.
+    Dropped,
+    /// Transient write failure — keep in spool for retry.
+    Retry,
+}
+
+fn process_entry(cfg: &Config, entry: &SpoolEntry) -> EntryOutcome {
     let root = canon(&entry.root);
     let root = root.as_str();
     if !Path::new(root).exists() || cfg.is_ignored(root) || !crate::project_config::is_enabled(root)
     {
-        return false;
+        return EntryOutcome::Dropped;
     }
 
-    // Keep the machine-local registry fresh: pointer resolution uses it
-    // to find home repos checked out on this machine.
     crate::project::registry_note(root);
 
-    // The commit may have been rewritten away before we got to it
-    // (rebase between spool and drain). Anchors for already-enriched
-    // commits are rekeyed by the post-rewrite hook; an unprocessed
-    // vanished sha has nothing to attach to.
     let probe = format!("{}^{{commit}}", entry.sha);
     if crate::git::proxy::run_git_capture_in(
         cfg,
@@ -139,17 +150,19 @@ fn process_entry(cfg: &Config, entry: &SpoolEntry) -> bool {
     )
     .is_err()
     {
-        return false;
+        return EntryOutcome::Dropped;
     }
 
     let Some(outcome) =
         crate::git::interceptor::enrich_commit_for(cfg, root, &entry.branch, &entry.sha)
     else {
-        return false;
+        return EntryOutcome::Dropped;
     };
 
-    write_v2(cfg, root, entry, &outcome);
-    true
+    if !write_v2(cfg, root, entry, &outcome) {
+        return EntryOutcome::Retry;
+    }
+    EntryOutcome::Processed
 }
 
 /// Layer the v2 store writes on top of the enrichment outcome:
@@ -159,7 +172,7 @@ fn write_v2(
     root: &str,
     entry: &SpoolEntry,
     outcome: &crate::git::interceptor::EnrichOutcome,
-) {
+) -> bool {
     let repo_id = crate::project::id_for_root(root);
     let canon_root = canon(root);
 
@@ -282,10 +295,12 @@ fn write_v2(
         };
         if let Err(e) = v2::write_provenance_session(root, &repo_id, &record) {
             tracing::warn!(%e, "v2 provenance session write failed");
+            return false;
         }
         if is_home {
             if let Err(e) = v2::write_conversation_session(root, &record) {
                 tracing::warn!(%e, "v2 conversation session write failed");
+                return false;
             }
         }
 
@@ -381,13 +396,14 @@ fn write_v2(
             };
             if let Err(e) = v2::write_provenance_turn(root, &repo_id, &turn, &edits) {
                 tracing::warn!(%e, "v2 provenance turn write failed");
+                return false;
             }
 
             // Conversation layer: full turn memory (transcript slice +
             // tool calls) written ONCE, at the session's home repo only,
             // gated behind transparency mode like v1 transcripts.
-            // `write_conversation_turn` is content-addressed-idempotent:
-            // an already-stored turn index is never overwritten.
+            // Content-addressed-idempotent: an already-stored turn
+            // index is never overwritten.
             if is_home
                 && outcome.anchor.transparency_mode == crate::core::anchor::TransparencyMode::On
                 && (snap.memory.transcript.is_some() || !snap.memory.tool_calls.is_empty())
@@ -452,12 +468,80 @@ fn write_v2(
         coverage: Some(coverage),
     };
     if let Err(e) = v2::write_anchor(root, &repo_id, &record, timeline.as_deref()) {
-        tracing::warn!(%e, "v2 anchor write failed");
+        if matches!(e, crate::error::CliError::SecretBlocked) {
+            tracing::warn!("v2 anchor blocked by secret detection — skipping (not retryable)");
+            record_anchor_drop(root, &entry.sha, "secret_detected");
+        } else {
+            tracing::warn!(%e, "v2 anchor write failed — will retry");
+            return false;
+        }
     }
     crate::git::anchor_cache::invalidate(root);
+    true
 }
 
 fn canon(path: &str) -> String {
     std::fs::canonicalize(path)
         .map_or_else(|_| path.to_string(), |p| p.to_string_lossy().to_string())
+}
+
+/// Record that an anchor was intentionally dropped so `oobo status` can
+/// surface it to the user. Writes to `~/.oobo/state/last-drop.json`.
+fn record_anchor_drop(project_root: &str, sha: &str, reason: &str) {
+    let dir = crate::paths::oobo_home().join("state");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let entry = serde_json::json!({
+        "commit": sha,
+        "reason": reason,
+        "repo": project_root,
+        "timestamp": chrono::Utc::now().timestamp(),
+    });
+    let _ = std::fs::write(dir.join("last-drop.json"), entry.to_string());
+}
+
+#[cfg(test)]
+mod tests {
+    use serial_test::serial;
+
+    use super::*;
+
+    #[test]
+    #[serial]
+    fn test_record_anchor_drop_creates_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("OOBO_HOME", tmp.path());
+
+        record_anchor_drop("/home/user/project", "abc123def456", "secret_detected");
+
+        let path = tmp.path().join("state").join("last-drop.json");
+        assert!(path.exists(), "last-drop.json should be created");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed["commit"], "abc123def456");
+        assert_eq!(parsed["reason"], "secret_detected");
+        assert_eq!(parsed["repo"], "/home/user/project");
+        assert!(parsed["timestamp"].is_number());
+    }
+
+    #[test]
+    #[serial]
+    fn test_record_anchor_drop_overwrites_previous() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("OOBO_HOME", tmp.path());
+
+        record_anchor_drop("/repo1", "sha-first", "secret_detected");
+        record_anchor_drop("/repo2", "sha-second", "secret_detected");
+
+        let path = tmp.path().join("state").join("last-drop.json");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(
+            parsed["commit"], "sha-second",
+            "last drop should overwrite previous"
+        );
+        assert_eq!(parsed["repo"], "/repo2");
+    }
 }

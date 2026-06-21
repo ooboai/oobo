@@ -124,7 +124,7 @@ pub struct FileChange {
 }
 
 /// Anchor metadata  --  the enriched commit primitive.
-/// One per commit, stored on the orphan branch (`oobo/anchors/v1`).
+/// One per commit, stored on the orphan branch (`oobo/anchors/v2`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Anchor {
     /// Version of the portable anchor metadata schema.

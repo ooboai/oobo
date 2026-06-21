@@ -92,7 +92,10 @@ fn resolve_file_repo_root(path: &Path) -> Option<String> {
     let mut dir = path.parent()?;
     loop {
         if dir.join(".git").exists() {
-            return Some(dir.to_string_lossy().to_string());
+            return Some(std::fs::canonicalize(dir).map_or_else(
+                |_| dir.to_string_lossy().to_string(),
+                |p| p.to_string_lossy().to_string(),
+            ));
         }
         dir = dir.parent()?;
     }

@@ -326,17 +326,14 @@ fn added_lines(repo_root: &str, pre: &str, post: &str) -> HashSet<String> {
 
 fn git(repo_root: &str, args: &[&str]) -> Option<String> {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let output = Command::new(git)
-        .args(args)
+    let mut cmd = Command::new(git);
+    cmd.args(args)
         .current_dir(repo_root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
-        .output()
-        .ok()?;
+        .stderr(Stdio::null());
+    crate::git::proxy::scrub_git_env(&mut cmd);
+    let output = cmd.output().ok()?;
     if output.status.success() {
         Some(String::from_utf8_lossy(&output.stdout).to_string())
     } else {

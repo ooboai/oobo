@@ -176,16 +176,14 @@ pub fn resolve_git_common_dir(project_root: &str) -> std::path::PathBuf {
 
 fn resolve_git_path(project_root: &str, flag: &str) -> std::path::PathBuf {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let output = std::process::Command::new(git)
-        .args(["rev-parse", flag])
+    let mut cmd = std::process::Command::new(git);
+    cmd.args(["rev-parse", flag])
         .current_dir(project_root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
-        .output();
+        .stderr(std::process::Stdio::null());
+    crate::git::proxy::scrub_git_env(&mut cmd);
+    let output = cmd.output();
 
     if let Ok(o) = output {
         if o.status.success() {

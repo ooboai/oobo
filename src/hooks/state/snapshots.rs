@@ -14,17 +14,14 @@ pub(super) fn resolve_worktree(project_root: &str) -> Option<String> {
         return None;
     }
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let output = Command::new(git)
-        .args(["rev-parse", "--show-toplevel"])
+    let mut cmd = Command::new(git);
+    cmd.args(["rev-parse", "--show-toplevel"])
         .current_dir(project_root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
-        .output()
-        .ok()?;
+        .stderr(Stdio::null());
+    crate::git::proxy::scrub_git_env(&mut cmd);
+    let output = cmd.output().ok()?;
 
     if output.status.success() {
         let raw = String::from_utf8_lossy(&output.stdout)

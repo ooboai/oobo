@@ -4,6 +4,15 @@ use crate::config::Config;
 use crate::error::{CliError, CmdResult};
 use crate::git::{commands, interceptor};
 
+/// Scrub git environment variables that would interfere with git
+/// subcommands running in a different worktree/repo.
+pub fn scrub_git_env(cmd: &mut Command) -> &mut Command {
+    cmd.env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_QUARANTINE_PATH")
+        .env_remove("GIT_INDEX_FILE")
+}
+
 /// Run the real git binary with the given arguments, inheriting stdio.
 /// Returns the exit code.
 pub fn run_git(cfg: &Config, args: &[&str]) -> CmdResult {
@@ -36,10 +45,8 @@ pub fn run_git_capture_in(
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH");
+        .stderr(Stdio::piped());
+    scrub_git_env(&mut cmd);
     if let Some(d) = dir {
         cmd.current_dir(d);
     }
@@ -70,16 +77,14 @@ pub fn project_root(cfg: &Config) -> Option<String> {
 /// Get the project root for a given working directory (no Config needed).
 pub fn project_root_from(cwd: &str) -> String {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    Command::new(git)
-        .args(["rev-parse", "--show-toplevel"])
+    let mut cmd = Command::new(git);
+    cmd.args(["rev-parse", "--show-toplevel"])
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
-        .output()
+        .stderr(Stdio::null());
+    scrub_git_env(&mut cmd);
+    cmd.output()
         .ok()
         .filter(|o| o.status.success())
         .map_or_else(
@@ -173,8 +178,8 @@ fn is_fetch(args: &[&str]) -> bool {
     commands::subcommand_name(args) == Some("fetch")
 }
 
-/// After a successful `git clone`, resolve the cloned directory, fetch
-/// the orphan branch if it exists on the remote, and hydrate the local DB.
+/// After a successful `git clone`, resolve the cloned directory and fetch
+/// the orphan branch if it exists on the remote.
 fn post_clone(_cfg: &Config, args: &[&str]) {
     let clone_dir = match resolve_clone_dir(args) {
         Some(d) => d,

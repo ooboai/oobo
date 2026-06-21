@@ -77,7 +77,8 @@ pub fn handle_event(
     let session_id_field = event
         .session_id
         .as_deref()
-        .or(event.extra.get("conversation_id").and_then(|v| v.as_str()));
+        .or(event.extra.get("conversation_id").and_then(|v| v.as_str()))
+        .filter(|s| !s.is_empty());
 
     match event_name {
         "session-start" => {
@@ -119,16 +120,26 @@ pub fn handle_event(
         }
         "before-submit-prompt" => {
             if let Some(sid) = session_id_field {
-                let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
-                let _ = state::start_turn(&project_root, sid);
-                let _ = state::record_hook_event(
+                if let Err(e) =
+                    state::ensure_session(&project_root, sid, agent, event.model.as_deref())
+                {
+                    tracing::warn!(%e, session = sid, "ensure_session failed (lock contention?)");
+                }
+                if let Err(e) = state::start_turn(&project_root, sid) {
+                    tracing::warn!(%e, session = sid, "start_turn failed (lock contention?)");
+                }
+                if let Err(e) = state::record_hook_event(
                     &project_root,
                     sid,
                     event_name,
                     Some(event.extra.clone()),
-                );
+                ) {
+                    tracing::warn!(%e, session = sid, "record_hook_event failed");
+                }
                 if !project_root.is_empty() {
-                    let _ = state::snapshot_pre_agent_state(&project_root, sid);
+                    if let Err(e) = state::snapshot_pre_agent_state(&project_root, sid) {
+                        tracing::warn!(%e, session = sid, "snapshot_pre_agent_state failed");
+                    }
                 }
             }
         }
@@ -344,15 +355,19 @@ pub fn handle_event(
                         Some(tool_name)
                     };
                     if routed.foreign {
-                        let _ = state::record_post_edit_file_in_repo(
+                        if let Err(e) = state::record_post_edit_file_in_repo(
                             &project_root,
                             sid,
                             &routed.repo_root,
                             &routed.rel,
                             tool,
-                        );
-                    } else {
-                        let _ = state::record_post_edit_file(&project_root, sid, &routed.rel, tool);
+                        ) {
+                            tracing::warn!(%e, session = sid, file = %routed.rel, "record_post_edit_file_in_repo failed");
+                        }
+                    } else if let Err(e) =
+                        state::record_post_edit_file(&project_root, sid, &routed.rel, tool)
+                    {
+                        tracing::warn!(%e, session = sid, file = %routed.rel, "record_post_edit_file failed");
                     }
                 }
             }
@@ -451,27 +466,31 @@ pub fn handle_event(
         }
         "stop" => {
             if let Some(sid) = session_id_field {
-                let _ = state::ensure_session(&project_root, sid, agent, event.model.as_deref());
-                let _ = state::update_session_metrics(
+                if let Err(e) =
+                    state::ensure_session(&project_root, sid, agent, event.model.as_deref())
+                {
+                    tracing::warn!(%e, session = sid, "stop: ensure_session failed");
+                }
+                if let Err(e) = state::update_session_metrics(
                     &project_root,
                     sid,
                     event.loop_count,
                     event.context_tokens,
                     event.context_window_size,
-                );
+                ) {
+                    tracing::warn!(%e, session = sid, "stop: update_session_metrics failed");
+                }
                 let transcript_path = event.extra.get("transcript_path").and_then(|v| v.as_str());
-                let _ = state::record_hook_event(
+                if let Err(e) = state::record_hook_event(
                     &project_root,
                     sid,
                     event_name,
                     Some(event.extra.clone()),
-                );
+                ) {
+                    tracing::warn!(%e, session = sid, "stop: record_hook_event failed");
+                }
                 state::touch_session(&project_root, sid, transcript_path)?;
 
-                // Check BEFORE finishing the turn: does HEAD's anchor
-                // reference this session with zero turns (= mid-turn
-                // commit drained before the turn snapshot existed)?
-                let needs_backfill = head_anchor_needs_backfill(&project_root, agent, sid);
                 if !project_root.is_empty() {
                     let files = if is_cursor_agent(agent) {
                         let db_files = crate::tools::cursor::composer_data::files_edited_in_session(
@@ -504,13 +523,27 @@ pub fn handle_event(
                     )
                     .ok()
                     .flatten();
-                    // Agents commit MID-turn: the commit's drain ran before
-                    // this turn finalized, so its anchor claimed the session
-                    // but has zero turns. Re-spool + drain (async,
-                    // idempotent) so the worker fills in provenance +
-                    // conversation turns now that the snapshot exists.
-                    if finished.is_some() && needs_backfill {
-                        respool_after_turn(&project_root);
+                    // Agents commit MID-turn: the commit's drain ran
+                    // before this turn's snapshot existed, so the v2
+                    // anchor is missing the just-finished turn.
+                    //
+                    // A full respool would re-enrich the anchor and
+                    // claim the new turn's snapshot in `anchor.turns`,
+                    // hiding the shadow anchor from the feed even
+                    // though its content isn't in this commit. Instead,
+                    // do a targeted v2-only backfill that writes the
+                    // missing provenance turn and patches the anchor's
+                    // session_refs without touching `anchor.turns`.
+                    if finished.is_some() {
+                        if let Some(anchor_turns) =
+                            head_anchor_turn_count(&project_root, agent, sid)
+                        {
+                            let session_turns = crate::hooks::store::read(&project_root, sid)
+                                .map_or(0, |s| s.current_turn_index as usize);
+                            if anchor_turns < session_turns {
+                                backfill_v2_turns(&project_root, agent, sid);
+                            }
+                        }
                     }
                 }
                 // Foreign-repo turns are finished regardless of whether the
@@ -520,8 +553,16 @@ pub fn handle_event(
                     state::finish_foreign_turns(&project_root, sid, agent, event.model.as_deref())
                         .unwrap_or_default();
                 for (repo_root, _) in &foreign {
-                    if head_anchor_needs_backfill(repo_root, agent, sid) {
-                        respool_after_turn(repo_root);
+                    if let Some(anchor_turns) = head_anchor_turn_count(repo_root, agent, sid) {
+                        // Use the foreign repo's own turn index (how many turns
+                        // touched IT), not the origin session's total turn count.
+                        let foreign_turns = crate::hooks::store::read(&project_root, sid)
+                            .and_then(|s| s.foreign_repos)
+                            .and_then(|repos| repos.get(repo_root).map(|c| c.turn_index as usize))
+                            .unwrap_or(0);
+                        if anchor_turns < foreign_turns {
+                            backfill_v2_turns(repo_root, agent, sid);
+                        }
                     }
                 }
             }
@@ -578,11 +619,17 @@ pub fn handle_event(
                     }
                 }
                 if !project_root.is_empty() {
-                    let _ =
-                        state::finish_turn(&project_root, sid, agent, event.model.as_deref(), None);
+                    if let Err(e) =
+                        state::finish_turn(&project_root, sid, agent, event.model.as_deref(), None)
+                    {
+                        tracing::warn!(%e, session = sid, "session-end: finish_turn failed");
+                    }
                 }
-                let _ =
-                    state::finish_foreign_turns(&project_root, sid, agent, event.model.as_deref());
+                if let Err(e) =
+                    state::finish_foreign_turns(&project_root, sid, agent, event.model.as_deref())
+                {
+                    tracing::warn!(%e, session = sid, "session-end: finish_foreign_turns failed");
+                }
             }
         }
         _ => {
@@ -609,14 +656,14 @@ fn dirty_worktree_files(project_root: &str) -> Vec<String> {
     let mut files = std::collections::HashSet::new();
 
     // Modified tracked files (staged + unstaged)
-    if let Ok(o) = std::process::Command::new(&git)
-        .args(["diff", "--name-only", "HEAD"])
+    let mut cmd = std::process::Command::new(&git);
+    cmd.args(["diff", "--name-only", "HEAD"])
         .current_dir(project_root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-    {
+        .stderr(std::process::Stdio::null());
+    crate::git::proxy::scrub_git_env(&mut cmd);
+    if let Ok(o) = cmd.output() {
         if o.status.success() {
             for line in String::from_utf8_lossy(&o.stdout).lines() {
                 if !line.is_empty() {
@@ -627,14 +674,14 @@ fn dirty_worktree_files(project_root: &str) -> Vec<String> {
     }
 
     // Untracked files (new files created by the agent)
-    if let Ok(o) = std::process::Command::new(&git)
-        .args(["ls-files", "--others", "--exclude-standard"])
+    let mut cmd = std::process::Command::new(&git);
+    cmd.args(["ls-files", "--others", "--exclude-standard"])
         .current_dir(project_root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-    {
+        .stderr(std::process::Stdio::null());
+    crate::git::proxy::scrub_git_env(&mut cmd);
+    if let Ok(o) = cmd.output() {
         if o.status.success() {
             for line in String::from_utf8_lossy(&o.stdout).lines() {
                 if !line.is_empty() {
@@ -725,36 +772,41 @@ fn record_no_repo_touch(session_id: &str, agent: &str, tool_name: &str, path: &s
         "timestamp": chrono::Utc::now().timestamp(),
     });
     use std::io::Write as _;
+    let ledger_path = dir.join("no-repo-ledger.jsonl");
+    let is_new = !ledger_path.exists();
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(dir.join("no-repo-ledger.jsonl"))
+        .open(&ledger_path)
     {
         let _ = writeln!(f, "{entry}");
+        #[cfg(unix)]
+        if is_new {
+            use std::os::unix::fs::PermissionsExt as _;
+            let _ = std::fs::set_permissions(&ledger_path, std::fs::Permissions::from_mode(0o600));
+        }
     }
 }
 
-/// True when HEAD's v2 anchor already references this session but has no
-/// turns for it — the exact signature of a MID-turn commit: the drain ran
-/// at commit time, content-claimed the session's live edits, but the turn
-/// snapshot didn't exist yet. Content-based and clock-free.
-fn head_anchor_needs_backfill(repo_root: &str, agent: &str, session_id: &str) -> bool {
+/// Returns how many provenance turns HEAD's v2 anchor has for this
+/// session, or `None` if the anchor doesn't reference it at all.
+fn head_anchor_turn_count(repo_root: &str, agent: &str, session_id: &str) -> Option<usize> {
     if repo_root.is_empty() {
-        return false;
+        return None;
     }
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let Ok(out) = std::process::Command::new(git)
-        .args(["rev-parse", "--verify", "--quiet", "HEAD"])
+    let mut cmd = std::process::Command::new(git);
+    cmd.args(["rev-parse", "--verify", "--quiet", "HEAD"])
         .current_dir(repo_root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-    else {
-        return false;
+        .stderr(std::process::Stdio::null());
+    crate::git::proxy::scrub_git_env(&mut cmd);
+    let Ok(out) = cmd.output() else {
+        return None;
     };
     if !out.status.success() {
-        return false;
+        return None;
     }
     let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let canon = std::fs::canonicalize(repo_root).map_or_else(
@@ -763,38 +815,249 @@ fn head_anchor_needs_backfill(repo_root: &str, agent: &str, session_id: &str) ->
     );
     let repo_id = crate::project::id_for_root(&canon);
     let suid = crate::core::identity::session_uid(agent, session_id);
-    let Some(anchor) = crate::git::orphan::v2::read_anchor(repo_root, &repo_id, &sha) else {
-        return false;
-    };
+    let anchor = crate::git::orphan::v2::read_anchor(repo_root, &repo_id, &sha)?;
     anchor
         .session_refs
         .iter()
-        .any(|r| r.session_uid == suid && r.turn_uids.is_empty())
+        .find(|r| r.session_uid == suid)
+        .map(|r| r.turn_uids.len())
 }
 
-/// Re-spool a repo's HEAD after a turn finalizes, then kick the worker.
+/// Targeted v2 backfill: write the missing provenance turn(s) and update
+/// the anchor's session_refs without re-enriching the full anchor.
 ///
-/// The dominant agentic pattern is committing MID-turn: the agent's Bash
-/// tool runs `git commit`, post-commit spools and drains immediately —
-/// but the turn snapshot (edits, transcript, tool calls) is only written
-/// when `stop` fires, after the drain already ran. Without this re-drain
-/// the anchor exists but carries zero provenance/conversation turns.
-/// Everything downstream is idempotent, so re-draining an already
-/// complete commit is a no-op.
-fn respool_after_turn(repo_root: &str) {
+/// This is the safe alternative to `respool_after_turn` for mid-turn
+/// commits in multi-turn sessions: the anchor's portable `turns` array
+/// is NOT touched (preventing the feed from hiding shadow anchors for
+/// content that isn't in the commit).
+fn backfill_v2_turns(repo_root: &str, agent: &str, session_id: &str) {
     if repo_root.is_empty() || !crate::project_config::is_enabled(repo_root) {
         return;
     }
-    if crate::git::spool::append_commit(repo_root).is_err() {
-        return; // not a git repo / unreadable HEAD — nothing to re-drain
+    let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+    let mut cmd = std::process::Command::new(git);
+    cmd.args(["rev-parse", "--verify", "--quiet", "HEAD"])
+        .current_dir(repo_root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    crate::git::proxy::scrub_git_env(&mut cmd);
+    let Ok(out) = cmd.output() else {
+        return;
+    };
+    if !out.status.success() {
+        return;
     }
-    if std::env::var("OOBO_WORKER_SYNC").as_deref() == Ok("1") {
-        let cfg = crate::config::Config::load_or_default();
-        if let Err(e) = crate::worker::drain(&cfg, repo_root) {
-            tracing::warn!(%e, "post-turn sync drain failed");
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let canon = std::fs::canonicalize(repo_root).map_or_else(
+        |_| repo_root.to_string(),
+        |p| p.to_string_lossy().to_string(),
+    );
+    let repo_id = crate::project::id_for_root(&canon);
+    let suid = crate::core::identity::session_uid(agent, session_id);
+
+    let Some(mut anchor) = crate::git::orphan::v2::read_anchor(repo_root, &repo_id, &sha) else {
+        return;
+    };
+
+    let Some(sref) = anchor
+        .session_refs
+        .iter_mut()
+        .find(|r| r.session_uid == suid)
+    else {
+        return;
+    };
+
+    let existing: std::collections::HashSet<String> = sref.turn_uids.iter().cloned().collect();
+    let snapshots = crate::git::turns::list_turn_snapshots(repo_root);
+
+    // Read session state ONCE and reuse throughout the function.
+    let session_state = crate::hooks::store::read(repo_root, session_id);
+    let transcript_path = session_state
+        .as_ref()
+        .and_then(|s| s.transcript_path.clone());
+    let cfg = crate::config::Config::load_or_default();
+    crate::git::interceptor::ingest_turns_for_session(
+        &cfg,
+        repo_root,
+        agent,
+        session_id,
+        transcript_path.as_deref(),
+    );
+    let tap_turns = crate::attribution::turn_store::read_all_turns(repo_root);
+    let ts_of = crate::attribution::turn_store::turn_ts_secs;
+
+    const JOIN_SLACK_SECS: i64 = 2;
+    let mut new_uids = Vec::new();
+
+    for snap in snapshots.iter().filter(|t| t.session_id == session_id) {
+        let tuid = crate::core::identity::turn_uid(&suid, session_id, snap.turn_index);
+        if existing.contains(&tuid) {
+            continue;
         }
-    } else {
-        crate::worker::spawn_drain(repo_root);
+        let wstart = snap.started_at.unwrap_or(snap.created_at) - JOIN_SLACK_SECS;
+        let wend = snap.ended_at.unwrap_or(snap.created_at) + JOIN_SLACK_SECS;
+
+        let mut tokens = crate::core::turn::TurnTokens::default();
+        let mut model: Option<String> = None;
+        let mut tool_names: Vec<String> = Vec::new();
+        let mut found_time_calls = false;
+        for call in tap_turns.iter().filter(|t| {
+            t.session_id == session_id
+                && t.role == crate::core::turn::TurnRole::Assistant
+                && ts_of(t).is_some_and(|ts| ts >= wstart && ts <= wend)
+        }) {
+            found_time_calls = true;
+            tokens.accumulate(&call.tokens);
+            if call.model.is_some() {
+                model.clone_from(&call.model);
+            }
+            if let Some(names) = &call.tool_names {
+                tool_names.extend(names.split(',').filter(|n| !n.is_empty()).map(String::from));
+            }
+        }
+        // Timestamp-less taps: degrade to the index join (only sound when
+        // the tap indexes per oobo turn). Mirrors worker::write_v2.
+        if !found_time_calls {
+            if let Some(t) = tap_turns.iter().find(|t| {
+                t.session_id == session_id
+                    && t.turn_index == snap.turn_index
+                    && t.role == crate::core::turn::TurnRole::Assistant
+                    && ts_of(t).is_none()
+            }) {
+                tokens = t.tokens;
+                model.clone_from(&t.model);
+                tool_names = t
+                    .tool_names
+                    .clone()
+                    .map(|names| names.split(',').map(str::to_string).collect())
+                    .unwrap_or_default();
+            }
+        }
+
+        let trigger = tap_turns
+            .iter()
+            .filter(|t| {
+                t.session_id == session_id
+                    && t.role == crate::core::turn::TurnRole::User
+                    && t.message_preview.is_some()
+                    && ts_of(t).is_some_and(|ts| ts <= wend)
+            })
+            .max_by_key(|t| (ts_of(t), t.turn_index))
+            .and_then(|t| t.message_preview.clone());
+
+        let turn = crate::git::orphan::v2::TurnRecord {
+            schema_version: crate::git::orphan::v2::V2_SCHEMA_VERSION,
+            turn_uid: tuid.clone(),
+            session_uid: suid.clone(),
+            turn_index: snap.turn_index,
+            native_turn_index: Some(snap.turn_index),
+            source: snap.source.clone(),
+            model,
+            trigger,
+            started_at: snap.started_at,
+            ended_at: snap.ended_at,
+            tokens,
+            tool_names,
+            capture_gap: snap.files.iter().any(|f| f.capture_gap),
+        };
+        let edits = crate::git::orphan::v2::TurnEdits {
+            files: snap.files.clone(),
+        };
+        if let Err(e) =
+            crate::git::orphan::v2::write_provenance_turn(repo_root, &repo_id, &turn, &edits)
+        {
+            tracing::warn!(%e, turn_uid = %tuid, "backfill: provenance turn write failed");
+        }
+
+        // Conversation layer: transcript + tool calls at the session's
+        // home repo ONLY (never write transcripts into foreign repos).
+        let is_home = session_state
+            .as_ref()
+            .and_then(|s| s.worktree.as_deref())
+            .is_none_or(|origin| {
+                let canon_origin = std::fs::canonicalize(origin)
+                    .map_or(origin.to_string(), |p| p.to_string_lossy().to_string());
+                canon == canon_origin
+            });
+        if is_home
+            && anchor.anchor.transparency_mode == crate::core::anchor::TransparencyMode::On
+            && (snap.memory.transcript.is_some() || !snap.memory.tool_calls.is_empty())
+        {
+            let transcript_json = serde_json::json!({
+                "schema_version": crate::git::orphan::v2::V2_SCHEMA_VERSION,
+                "turn_uid": tuid,
+                "session_uid": suid,
+                "turn_index": snap.turn_index,
+                "native_transcript_path": snap.memory.transcript_path,
+                "transcript": snap.memory.transcript,
+            })
+            .to_string();
+            let tool_calls_json =
+                serde_json::to_string(&snap.memory.tool_calls).unwrap_or_else(|_| "[]".into());
+            if let Err(e) = crate::git::orphan::v2::write_conversation_turn(
+                repo_root,
+                &suid,
+                snap.turn_index,
+                &transcript_json,
+                &tool_calls_json,
+            ) {
+                tracing::warn!(%e, turn_index = snap.turn_index, "backfill: conversation turn write failed");
+            }
+        }
+
+        new_uids.push(tuid);
+    }
+
+    if new_uids.is_empty() {
+        return;
+    }
+
+    // Update the session record's turn_count to reflect the new turns.
+    let new_turn_count = snapshots
+        .iter()
+        .filter(|t| t.session_id == session_id)
+        .map(|t| t.turn_index + 1)
+        .max()
+        .unwrap_or(0);
+    if new_turn_count > 0 {
+        let tool = crate::core::tool::normalize_source(agent).to_string();
+        let updated_record = crate::git::orphan::v2::SessionRecord {
+            schema_version: crate::git::orphan::v2::V2_SCHEMA_VERSION,
+            session_uid: suid.clone(),
+            native_session_ids: vec![session_id.to_string()],
+            tool,
+            model: session_state.as_ref().and_then(|s| s.model.clone()),
+            home_location: None,
+            origin_repo_id: Some(repo_id.clone()),
+            repos_touched: vec![repo_id.clone()],
+            lineage: crate::core::identity::SessionLineage::default(),
+            turn_count: new_turn_count,
+            title: None,
+            started_at: session_state.as_ref().map_or(0, |s| s.started_at),
+            updated_at: session_state.as_ref().map_or(0, |s| s.updated_at),
+            ended_at: session_state.as_ref().and_then(|s| s.ended_at),
+        };
+        if let Err(e) =
+            crate::git::orphan::v2::write_provenance_session(repo_root, &repo_id, &updated_record)
+        {
+            tracing::warn!(%e, session_uid = %suid, "backfill: provenance session write failed");
+        }
+    }
+
+    // Patch the anchor's session_refs with the new turn UIDs.
+    sref.turn_uids.extend(new_uids);
+    if let Err(e) = crate::git::orphan::v2::write_anchor(repo_root, &repo_id, &anchor, None) {
+        tracing::warn!(%e, "backfill: anchor update failed");
+    }
+    crate::git::anchor_cache::invalidate(repo_root);
+
+    // Push the updated v2 branch so backfilled turns aren't stranded
+    // locally when the session's last turn was itself a push.
+    if crate::git::orphan::v2::branch_exists(repo_root) {
+        if let Err(e) = crate::git::orphan::v2::push(repo_root) {
+            tracing::warn!(%e, "backfill: v2 push failed");
+        }
     }
 }
 

@@ -54,15 +54,23 @@ fn run_repair(opts: &SetupOptions) {
         Err(_) => "failed",
     };
 
-    let orphan_status = if crate::git::orphan::branch_exists(&path) {
+    let orphan_status = if crate::git::orphan::branch_exists(&path)
+        || crate::git::orphan::v2::branch_exists(&path)
+    {
         "ok"
-    } else if crate::git::orphan::remote_branch_exists(&path) {
-        match crate::git::orphan::fetch_and_reconcile(&path) {
-            Ok(()) => "rebuilt from remote",
-            Err(_) => "missing",
-        }
     } else {
-        "missing (no remote branch)"
+        let mut rebuilt = false;
+        if crate::git::orphan::remote_branch_exists(&path) {
+            rebuilt |= crate::git::orphan::fetch_and_reconcile(&path).is_ok();
+        }
+        if crate::git::orphan::v2::remote_branch_exists(&path) {
+            rebuilt |= crate::git::orphan::v2::fetch_and_reconcile(&path).is_ok();
+        }
+        if rebuilt {
+            "rebuilt from remote"
+        } else {
+            "missing (no remote branch)"
+        }
     };
 
     match mode {

@@ -209,17 +209,14 @@ fn blob_at(repo_root: &str, rev: &str, path: &str) -> Option<String> {
 
 fn git(repo_root: &str, args: &[&str]) -> Option<String> {
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-    let output = std::process::Command::new(git)
-        .args(args)
+    let mut cmd = std::process::Command::new(git);
+    cmd.args(args)
         .current_dir(repo_root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_QUARANTINE_PATH")
-        .output()
-        .ok()?;
+        .stderr(std::process::Stdio::null());
+    crate::git::proxy::scrub_git_env(&mut cmd);
+    let output = cmd.output().ok()?;
     if output.status.success() {
         let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if s.is_empty() {

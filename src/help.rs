@@ -180,7 +180,7 @@ oobo uses two types of hooks to capture AI sessions:
 Git hooks (installed in .git/hooks/):
   post-commit   Captures anchor metadata after each commit
   pre-push      Syncs anchors to remote before push
-  post-merge    Re-indexes after merge
+  post-merge    Fetches anchor branches after merge
   post-rewrite  Updates anchors after rebase/amend
 
 Agent hooks (installed in tool config, e.g. ~/.cursor/hooks.json):

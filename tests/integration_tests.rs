@@ -1178,10 +1178,27 @@ fn test_e2e_turn_capture_and_from_preview() {
     let resumed_arr = resumed_json["anchors"]
         .as_array()
         .unwrap_or_else(|| panic!("expected anchors array: {resumed_json}"));
+    // Inspect: list all snapshots with their turn_index
+    let all_snapshots = oobo::git::turns::list_turn_snapshots(tmp.path().to_str().unwrap());
+    let snap_info: Vec<String> = all_snapshots
+        .iter()
+        .map(|s| {
+            format!(
+                "id={} turn_index={} session_id={}",
+                s.id, s.turn_index, s.session_id
+            )
+        })
+        .collect();
     let restored_turn = resumed_arr
         .iter()
         .find(|item| item["type"] == "shadow_anchor" && item["turn_index"] == 1)
-        .expect("second shadow anchor should be captured after restore");
+        .unwrap_or_else(|| {
+            panic!(
+                "second shadow anchor missing.\nsnapshots: {:?}\nAll anchors:\n{}",
+                snap_info,
+                serde_json::to_string_pretty(&resumed_json).unwrap()
+            )
+        });
     assert_eq!(restored_turn["restored_from"], turn_id);
 }
 

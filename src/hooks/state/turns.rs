@@ -13,88 +13,80 @@ pub fn finish_turn(
     model: Option<&str>,
     transcript_path: Option<&str>,
 ) -> Result<Option<String>> {
-    let Some(mut state) = store::read(project_root, session_id) else {
-        return Ok(None);
-    };
+    let result = store::read_modify_write_with(project_root, session_id, |state| {
+        let has_turn_memory = state.current_turn_started_at.is_some()
+            || state
+                .current_turn_hook_events
+                .as_ref()
+                .is_some_and(|events| !events.is_empty())
+            || state
+                .current_turn_tool_calls
+                .as_ref()
+                .is_some_and(|calls| !calls.is_empty());
 
-    let has_turn_memory = state.current_turn_started_at.is_some()
-        || state
-            .current_turn_hook_events
+        if !has_turn_memory {
+            return None;
+        }
+
+        let source = crate::core::tool::normalize_source(agent);
+        let worktree_id = crate::git::turns::worktree_id(project_root);
+        let project_id = crate::project::id_for_root(project_root);
+        let mut snapshot = TurnSnapshot::new(
+            &project_id,
+            &worktree_id,
+            source,
+            &state.session_id,
+            state.current_turn_index,
+        );
+        snapshot.parent_id.clone_from(&state.last_turn_snapshot_id);
+        snapshot.restored_from = take_restored_from(project_root);
+        snapshot.started_at = state.current_turn_started_at;
+        snapshot.ended_at = Some(chrono::Utc::now().timestamp());
+        snapshot.model = model.map(str::to_string).or_else(|| state.model.clone());
+        snapshot.files = turn_files(project_root, state);
+        let mut cross: Vec<String> = state
+            .foreign_repos
             .as_ref()
-            .is_some_and(|events| !events.is_empty())
-        || state
-            .current_turn_tool_calls
-            .as_ref()
-            .is_some_and(|calls| !calls.is_empty())
-        || state
-            .edited_files
-            .as_ref()
-            .is_some_and(|files| !files.is_empty());
+            .map(|repos| {
+                repos
+                    .iter()
+                    .filter(|(_, c)| c.turn_files.as_ref().is_some_and(|f| !f.is_empty()))
+                    .map(|(root, _)| root.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        cross.sort();
+        snapshot.cross_repo = cross;
 
-    if !has_turn_memory {
-        return Ok(None);
-    }
+        let transcript = transcript_path
+            .map(str::to_string)
+            .or_else(|| state.transcript_path.clone());
+        // Clone instead of .take() — if the git write fails, we must NOT
+        // have wiped these from the buffer. Only clear after success.
+        snapshot.memory = TurnMemoryPayload {
+            transcript_path: transcript.clone(),
+            transcript: transcript.as_deref().and_then(load_transcript_payload),
+            hook_events: state.current_turn_hook_events.clone().unwrap_or_default(),
+            tool_calls: state.current_turn_tool_calls.clone().unwrap_or_default(),
+        };
 
-    let source = crate::core::tool::normalize_source(agent);
-    let worktree_id = crate::git::turns::worktree_id(project_root);
-    let project_id = crate::project::id_for_root(project_root);
-    let mut snapshot = TurnSnapshot::new(
-        &project_id,
-        &worktree_id,
-        source,
-        &state.session_id,
-        state.current_turn_index,
-    );
-    snapshot.parent_id.clone_from(&state.last_turn_snapshot_id);
-    snapshot.restored_from = take_restored_from(project_root);
-    snapshot.started_at = state.current_turn_started_at;
-    snapshot.ended_at = Some(chrono::Utc::now().timestamp());
-    snapshot.model = model.map(str::to_string).or_else(|| state.model.clone());
-    snapshot.files = turn_files(project_root, &state);
-    // Link to foreign repos this turn also edited (finished separately by
-    // `finish_foreign_turns`).
-    let mut cross: Vec<String> = state
-        .foreign_repos
-        .as_ref()
-        .map(|repos| {
-            repos
-                .iter()
-                .filter(|(_, c)| c.turn_files.as_ref().is_some_and(|f| !f.is_empty()))
-                .map(|(root, _)| root.clone())
-                .collect()
-        })
-        .unwrap_or_default();
-    cross.sort();
-    snapshot.cross_repo = cross;
+        let snapshot_id = snapshot.id.clone();
+        if crate::git::turns::write_turn_snapshot(project_root, snapshot).is_err() {
+            return None;
+        }
 
-    let transcript = transcript_path
-        .map(str::to_string)
-        .or_else(|| state.transcript_path.clone());
-    snapshot.memory = TurnMemoryPayload {
-        transcript_path: transcript.clone(),
-        transcript: transcript.as_deref().and_then(load_transcript_payload),
-        hook_events: state.current_turn_hook_events.take().unwrap_or_default(),
-        tool_calls: state.current_turn_tool_calls.take().unwrap_or_default(),
-    };
-
-    let snapshot_id = snapshot.id.clone();
-    crate::git::turns::write_turn_snapshot(project_root, snapshot)?;
-
-    state.last_turn_snapshot_id = Some(snapshot_id.clone());
-    // Finishing a turn consumes its index (mirrors the foreign-capture
-    // path): the next turn is sequential regardless of whether the tool
-    // fires a turn-start hook before its first event.
-    state.current_turn_index += 1;
-    state.current_turn_started_at = None;
-    state.current_turn_hook_events = None;
-    state.current_turn_tool_calls = None;
-    // Reset per-turn edit chain  --  each turn gets a fresh chain.
-    state.pre_edit_pending = None;
-    state.file_edit_chain = None;
-    state.bump();
-    store::write(project_root, session_id, &state)?;
-
-    Ok(Some(snapshot_id))
+        // Git write succeeded — now clear the buffer.
+        state.last_turn_snapshot_id = Some(snapshot_id.clone());
+        state.current_turn_index += 1;
+        state.current_turn_started_at = None;
+        state.current_turn_hook_events = None;
+        state.current_turn_tool_calls = None;
+        state.pre_edit_pending = None;
+        state.file_edit_chain = None;
+        state.bump();
+        Some(snapshot_id)
+    })?;
+    Ok(result.flatten())
 }
 
 /// Finish the current turn for every *foreign* repo this session touched,
@@ -111,106 +103,103 @@ pub fn finish_foreign_turns(
     agent: &str,
     model: Option<&str>,
 ) -> Result<Vec<(String, String)>> {
-    let Some(mut state) = store::read(origin_root, session_id) else {
-        return Ok(Vec::new());
-    };
-    let Some(foreign) = state.foreign_repos.as_mut() else {
-        return Ok(Vec::new());
-    };
+    let result = store::read_modify_write_with(origin_root, session_id, |state| {
+        let Some(foreign) = state.foreign_repos.as_mut() else {
+            return Vec::new();
+        };
 
-    let source = crate::core::tool::normalize_source(agent);
-    let model = model.map(str::to_string).or_else(|| state.model.clone());
-    let session_id_owned = state.session_id.clone();
-    let mut written = Vec::new();
+        let source = crate::core::tool::normalize_source(agent);
+        let model = model.map(str::to_string).or_else(|| state.model.clone());
+        let session_id_owned = state.session_id.clone();
+        let mut written = Vec::new();
 
-    for (repo_root, capture) in foreign.iter_mut() {
-        let turn_files: Vec<String> = capture
-            .turn_files
-            .as_ref()
-            .map(|f| f.iter().cloned().collect())
-            .unwrap_or_default();
-        if turn_files.is_empty() {
-            continue;
+        for (repo_root, capture) in foreign.iter_mut() {
+            let turn_files: Vec<String> = capture
+                .turn_files
+                .as_ref()
+                .map(|f| f.iter().cloned().collect())
+                .unwrap_or_default();
+            if turn_files.is_empty() {
+                continue;
+            }
+
+            let worktree_id = crate::git::turns::worktree_id(repo_root);
+            let project_id = crate::project::id_for_root(repo_root);
+            let mut snapshot = TurnSnapshot::new(
+                &project_id,
+                &worktree_id,
+                source,
+                &session_id_owned,
+                capture.turn_index,
+            );
+            snapshot
+                .parent_id
+                .clone_from(&capture.last_turn_snapshot_id);
+            snapshot.started_at = capture.turn_started_at;
+            snapshot.ended_at = Some(chrono::Utc::now().timestamp());
+            snapshot.model.clone_from(&model);
+            if !origin_root.is_empty() {
+                snapshot.cross_repo = vec![origin_root.to_string()];
+            }
+
+            let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
+            let mut files = turn_files;
+            files.sort();
+            snapshot.files = files
+                .into_iter()
+                .map(|path| {
+                    let (pre, post, gap) = if let Some(pairs) = capture
+                        .file_edit_chain
+                        .as_ref()
+                        .and_then(|c| c.get(&path))
+                        .filter(|pairs| !pairs.is_empty())
+                    {
+                        let current = super::snapshots::hash_object(&git, repo_root, &path);
+                        (
+                            Some(pairs.first().unwrap().pre_blob.clone()),
+                            Some(pairs.last().unwrap().post_blob.clone()),
+                            chain_has_gap(pairs, current.as_deref()),
+                        )
+                    } else {
+                        (
+                            None,
+                            capture
+                                .file_snapshots
+                                .as_ref()
+                                .and_then(|s| s.get(&path))
+                                .cloned(),
+                            false,
+                        )
+                    };
+                    TurnFileSnapshot {
+                        pre_blob: pre,
+                        post_blob: post,
+                        capture_gap: gap,
+                        path,
+                    }
+                })
+                .collect();
+
+            let snapshot_id = snapshot.id.clone();
+            if crate::git::turns::write_turn_snapshot(repo_root, snapshot).is_err() {
+                continue;
+            }
+
+            capture.last_turn_snapshot_id = Some(snapshot_id.clone());
+            capture.turn_index += 1;
+            capture.turn_started_at = None;
+            capture.turn_files = None;
+            capture.pre_edit_pending = None;
+            capture.file_edit_chain = None;
+            written.push((repo_root.clone(), snapshot_id));
         }
 
-        let worktree_id = crate::git::turns::worktree_id(repo_root);
-        let project_id = crate::project::id_for_root(repo_root);
-        let mut snapshot = TurnSnapshot::new(
-            &project_id,
-            &worktree_id,
-            source,
-            &session_id_owned,
-            capture.turn_index,
-        );
-        snapshot
-            .parent_id
-            .clone_from(&capture.last_turn_snapshot_id);
-        snapshot.started_at = capture.turn_started_at;
-        snapshot.ended_at = Some(chrono::Utc::now().timestamp());
-        snapshot.model.clone_from(&model);
-        // Point back at the session's origin, where the conversation lives.
-        if !origin_root.is_empty() {
-            snapshot.cross_repo = vec![origin_root.to_string()];
+        if !written.is_empty() {
+            state.bump();
         }
-
-        let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
-        let mut files = turn_files;
-        files.sort();
-        snapshot.files = files
-            .into_iter()
-            .map(|path| {
-                let (pre, post, gap) = if let Some(pairs) = capture
-                    .file_edit_chain
-                    .as_ref()
-                    .and_then(|c| c.get(&path))
-                    .filter(|pairs| !pairs.is_empty())
-                {
-                    let current = super::snapshots::hash_object(&git, repo_root, &path);
-                    (
-                        Some(pairs.first().unwrap().pre_blob.clone()),
-                        Some(pairs.last().unwrap().post_blob.clone()),
-                        chain_has_gap(pairs, current.as_deref()),
-                    )
-                } else {
-                    (
-                        None,
-                        capture
-                            .file_snapshots
-                            .as_ref()
-                            .and_then(|s| s.get(&path))
-                            .cloned(),
-                        false,
-                    )
-                };
-                TurnFileSnapshot {
-                    pre_blob: pre,
-                    post_blob: post,
-                    capture_gap: gap,
-                    path,
-                }
-            })
-            .collect();
-
-        let snapshot_id = snapshot.id.clone();
-        if crate::git::turns::write_turn_snapshot(repo_root, snapshot).is_err() {
-            continue;
-        }
-
-        capture.last_turn_snapshot_id = Some(snapshot_id.clone());
-        capture.turn_index += 1;
-        capture.turn_started_at = None;
-        capture.turn_files = None;
-        capture.pre_edit_pending = None;
-        capture.file_edit_chain = None;
-        written.push((repo_root.clone(), snapshot_id));
-    }
-
-    if !written.is_empty() {
-        state.bump();
-        store::write(origin_root, session_id, &state)?;
-    }
-
-    Ok(written)
+        written
+    })?;
+    Ok(result.unwrap_or_default())
 }
 
 pub fn mark_restored_from(project_root: &str, id: &str) -> std::io::Result<()> {

@@ -340,6 +340,9 @@ pub fn run_migrate(cfg: &Config, mode: OutputMode) -> CmdResult {
 /// Match a uid argument against stored sessions: exact uid, uid prefix,
 /// or exact native session id.
 fn resolve_uid(root: &str, repo_id: &str, arg: &str) -> Option<String> {
+    if arg.is_empty() {
+        return None;
+    }
     let known = v2::list_sessions_by_time(root, repo_id);
     if known.iter().any(|(_, uid)| uid == arg) {
         return Some(arg.to_string());
