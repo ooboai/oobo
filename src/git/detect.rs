@@ -175,10 +175,11 @@ pub fn resolve_git_common_dir(project_root: &str) -> std::path::PathBuf {
 }
 
 fn resolve_git_path(project_root: &str, flag: &str) -> std::path::PathBuf {
+    let root = crate::utils::normalize_win_path(project_root);
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let mut cmd = std::process::Command::new(git);
     cmd.args(["rev-parse", flag])
-        .current_dir(project_root)
+        .current_dir(root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
@@ -193,13 +194,15 @@ fn resolve_git_path(project_root: &str, flag: &str) -> std::path::PathBuf {
                 .to_string();
             let p = std::path::Path::new(&raw);
             if p.is_absolute() {
-                return p.to_path_buf();
+                return std::path::PathBuf::from(
+                    crate::utils::normalize_win_path(&p.to_string_lossy()).to_string(),
+                );
             }
-            return std::path::Path::new(project_root).join(p);
+            return std::path::Path::new(root).join(p);
         }
     }
 
-    std::path::Path::new(project_root).join(".git")
+    std::path::Path::new(root).join(".git")
 }
 
 #[cfg(test)]

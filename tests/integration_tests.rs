@@ -6,6 +6,11 @@ use std::process::Command;
 
 use tempfile::TempDir;
 
+fn canon(p: &Path) -> String {
+    let s = fs::canonicalize(p).unwrap().to_string_lossy().to_string();
+    oobo::utils::normalize_win_path(&s).to_string()
+}
+
 // ── Fixture helpers ─────────────────────────────────────────────────────────
 
 /// Return a fresh TempDir to use as OOBO_HOME in tests that run oobo hooks.
@@ -2256,8 +2261,8 @@ fn test_post_rewrite_amend_rekeys_orphan_anchor() {
 
     // The v2 anchor record must be rekeyed by the same hook: blame and
     // `anchor show` on the rewritten sha need the session refs.
-    let canon_root = fs::canonicalize(tmp.path()).unwrap();
-    let repo_id = oobo::project::id_for_root(canon_root.to_str().unwrap());
+    let canon_root = canon(tmp.path());
+    let repo_id = oobo::project::id_for_root(&canon_root);
     let v2 = oobo::git::orphan::v2::read_anchor(tmp.path().to_str().unwrap(), &repo_id, &new_sha)
         .expect("post-rewrite should rekey the v2 anchor record");
     assert_eq!(v2.anchor.commit_hash, new_sha);
@@ -2755,8 +2760,8 @@ fn test_session_resume_continues_turn_chain() {
     anchor_commit_ok(tmp.path(), oobo_home.path(), "two turns, one session");
     let sha = git_stdout(tmp.path(), &["rev-parse", "HEAD"]);
 
-    let canon_root = fs::canonicalize(root).unwrap();
-    let repo_id = oobo::project::id_for_root(canon_root.to_str().unwrap());
+    let canon_root = canon(Path::new(root));
+    let repo_id = oobo::project::id_for_root(&canon_root);
     let suid = oobo::core::identity::session_uid("claude", sid);
 
     let turns = oobo::git::orphan::v2::list_provenance_turns(root, &repo_id, &suid);
@@ -2867,8 +2872,8 @@ fn test_spool_worker_end_to_end_and_idempotent_redrain() {
 
     // v2 anchor exists, content-claimed to the hook session.
     // (The worker canonicalizes the root before deriving the repo id.)
-    let canon_root = fs::canonicalize(root).unwrap();
-    let repo_id = oobo::project::id_for_root(canon_root.to_str().unwrap());
+    let canon_root = canon(Path::new(root));
+    let repo_id = oobo::project::id_for_root(&canon_root);
     let v2 = oobo::git::orphan::v2::read_anchor(root, &repo_id, &sha)
         .expect("v2 anchor record written by worker");
     assert_eq!(v2.anchor.commit_hash, sha);
@@ -3030,9 +3035,8 @@ fn test_provenance_engine_line_level_attribution() {
     let sha = git_stdout(tmp.path(), &["rev-parse", "HEAD"]);
 
     // ── Engine: line → edit → session, with honest gaps ──
-    let canon_root = fs::canonicalize(root).unwrap();
-    let canon_root = canon_root.to_str().unwrap();
-    let p = oobo::provenance::gather::file_provenance(canon_root, &sha, "feature.txt")
+    let canon_root = canon(Path::new(root));
+    let p = oobo::provenance::gather::file_provenance(&canon_root, &sha, "feature.txt")
         .expect("provenance computed");
 
     assert_eq!(p.lines.len(), 3);
@@ -3064,7 +3068,7 @@ fn test_provenance_engine_line_level_attribution() {
         tmp.path().join(".oobo/cache/provenance").exists(),
         "provenance cached per commit"
     );
-    let cached = oobo::provenance::cache::read(canon_root, &sha, "feature.txt")
+    let cached = oobo::provenance::cache::read(&canon_root, &sha, "feature.txt")
         .expect("cache entry readable");
     assert_eq!(cached.lines, p.lines);
 
@@ -3169,10 +3173,10 @@ fn test_cross_repo_pointers_resolution_and_goto_isolation() {
     git_ok(tmp_y.path(), &["add", "."]);
     anchor_commit_ok(tmp_y.path(), oobo_home.path(), "agent work in Y");
 
-    let canon_x = fs::canonicalize(tmp_x.path()).unwrap();
-    let canon_y = fs::canonicalize(tmp_y.path()).unwrap();
-    let x_root = canon_x.to_str().unwrap();
-    let y_root = canon_y.to_str().unwrap();
+    let canon_x = canon(tmp_x.path());
+    let canon_y = canon(tmp_y.path());
+    let x_root = &canon_x;
+    let y_root = &canon_y;
     let x_id = oobo::project::id_for_root(x_root);
     let y_id = oobo::project::id_for_root(y_root);
     let uid = oobo::core::identity::session_uid("claude", sid);
@@ -3252,22 +3256,13 @@ fn test_cross_repo_pointers_resolution_and_goto_isolation() {
         &["clone", "--quiet", y_root, clone_path.to_str().unwrap()],
     );
     // Full attribution offline: the claimed anchor traveled with the clone.
-    let clone_repo_id =
-        oobo::project::id_for_root(fs::canonicalize(&clone_path).unwrap().to_str().unwrap());
+    let canon_clone = canon(Path::new(&clone_path));
+    let clone_repo_id = oobo::project::id_for_root(&canon_clone);
     let y_sha = git_stdout(tmp_y.path(), &["rev-parse", "HEAD"]);
-    let cloned_anchor = oobo::git::orphan::v2::read_anchor(
-        fs::canonicalize(&clone_path).unwrap().to_str().unwrap(),
-        &clone_repo_id,
-        &y_sha,
-    );
+    let cloned_anchor = oobo::git::orphan::v2::read_anchor(&canon_clone, &clone_repo_id, &y_sha);
     // The clone's repo id differs (path-derived), so look up under Y's id.
-    let cloned_anchor = cloned_anchor.or_else(|| {
-        oobo::git::orphan::v2::read_anchor(
-            fs::canonicalize(&clone_path).unwrap().to_str().unwrap(),
-            &y_id,
-            &y_sha,
-        )
-    });
+    let cloned_anchor =
+        cloned_anchor.or_else(|| oobo::git::orphan::v2::read_anchor(&canon_clone, &y_id, &y_sha));
     let cloned_anchor = cloned_anchor.expect("v2 anchor travels with a plain git clone");
     assert!(
         cloned_anchor
@@ -3346,9 +3341,9 @@ fn test_cross_repo_pointers_resolution_and_goto_isolation() {
         "share failed: {}",
         String::from_utf8_lossy(&share_out.stderr)
     );
-    let z_root = fs::canonicalize(tmp_z.path()).unwrap();
+    let z_root = canon(tmp_z.path());
     assert!(
-        oobo::git::orphan::v2::read_conversation_session(z_root.to_str().unwrap(), &uid).is_some(),
+        oobo::git::orphan::v2::read_conversation_session(&z_root, &uid).is_some(),
         "shared copy exists in Z's store"
     );
 
@@ -3392,8 +3387,7 @@ fn test_pointer_resolves_via_remote_fetch_then_cache_offline() {
     git_ok(tmp_x.path(), &["add", "."]);
     git_ok(tmp_x.path(), &["commit", "-m", "base x"]);
 
-    let x_root = fs::canonicalize(tmp_x.path()).unwrap();
-    let x_root = x_root.to_str().unwrap();
+    let x_root = canon(tmp_x.path());
     let uid = "fedcba9876543210fedcba9876543210";
     let now = chrono::Utc::now().timestamp();
     let record = oobo::git::orphan::v2::SessionRecord {
@@ -3412,7 +3406,7 @@ fn test_pointer_resolves_via_remote_fetch_then_cache_offline() {
         updated_at: now,
         ended_at: None,
     };
-    oobo::git::orphan::v2::write_conversation_session(x_root, &record).unwrap();
+    oobo::git::orphan::v2::write_conversation_session(&x_root, &record).unwrap();
     git_ok(
         tmp_x.path(),
         &["push", "--quiet", &host_url, "oobo/anchors/v2"],
@@ -3423,19 +3417,18 @@ fn test_pointer_resolves_via_remote_fetch_then_cache_offline() {
     init_git_repo(tmp_y.path());
     enable_anchor_for_repo(tmp_y.path(), oobo_home.path());
     git_ok(tmp_y.path(), &["commit", "--allow-empty", "-m", "base y"]);
-    let y_root = fs::canonicalize(tmp_y.path()).unwrap();
-    let y_root = y_root.to_str().unwrap();
-    let y_id = oobo::project::id_for_root(y_root);
+    let y_root = canon(tmp_y.path());
+    let y_id = oobo::project::id_for_root(&y_root);
 
-    let mut y_cfg = oobo::project_config::ProjectConfig::load(y_root)
+    let mut y_cfg = oobo::project_config::ProjectConfig::load(&y_root)
         .unwrap()
         .expect("enable wrote .oobo/config");
     y_cfg.anchors.remote = host_url.clone();
-    y_cfg.save(y_root).unwrap();
+    y_cfg.save(&y_root).unwrap();
 
     let mut stub = record.clone();
     stub.home_location = Some(home_pointer.clone());
-    oobo::git::orphan::v2::write_provenance_session(y_root, &y_id, &stub).unwrap();
+    oobo::git::orphan::v2::write_provenance_session(&y_root, &y_id, &stub).unwrap();
 
     // Fresh oobo home: no registry entry for X, no cache → the only way
     // to the conversation is the network leg.
@@ -3627,8 +3620,8 @@ fn test_mid_turn_commit_backfills_turns_on_stop() {
     anchor_commit_ok(tmp.path(), oobo_home.path(), "mid-turn commit");
     let sha = git_stdout(tmp.path(), &["rev-parse", "HEAD"]);
 
-    let canon_root = fs::canonicalize(root).unwrap();
-    let repo_id = oobo::project::id_for_root(canon_root.to_str().unwrap());
+    let canon_root = canon(Path::new(root));
+    let repo_id = oobo::project::id_for_root(&canon_root);
     let suid = oobo::core::identity::session_uid("claude", sid);
     assert!(
         oobo::git::orphan::v2::list_provenance_turns(root, &repo_id, &suid).is_empty(),
@@ -3773,8 +3766,8 @@ fn test_v2_lineage_from_subagent_and_resume_signals() {
     git_ok(tmp.path(), &["add", "."]);
     anchor_commit_ok(tmp.path(), oobo_home.path(), "lineage commit");
 
-    let canon_root = fs::canonicalize(root).unwrap();
-    let repo_id = oobo::project::id_for_root(canon_root.to_str().unwrap());
+    let canon_root = canon(Path::new(root));
+    let repo_id = oobo::project::id_for_root(&canon_root);
 
     let child_uid = oobo::core::identity::session_uid("cursor", "child-sess");
     let child = oobo::git::orphan::v2::read_provenance_session(root, &repo_id, &child_uid)

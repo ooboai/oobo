@@ -577,10 +577,11 @@ pub(super) fn read_from_branch_named(
 /// Uses the real git binary and clears hook-related env vars so this
 /// works correctly when called from inside a git hook.
 pub(super) fn git_in(project_root: &str, args: &[&str]) -> Result<String, CliError> {
+    let root = crate::utils::normalize_win_path(project_root);
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let mut cmd = Command::new(git);
     cmd.args(args)
-        .current_dir(project_root)
+        .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -609,10 +610,11 @@ pub(super) fn git_in_timeout(
     args: &[&str],
     timeout: std::time::Duration,
 ) -> Result<String, CliError> {
+    let root = crate::utils::normalize_win_path(project_root);
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let mut cmd = Command::new(git);
     cmd.args(args)
-        .current_dir(project_root)
+        .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -659,10 +661,11 @@ pub(super) fn git_in_timeout(
 
 /// Run a git command with extra environment variables.
 fn git_env_in(project_root: &str, args: &[&str], env: &[(&str, &str)]) -> Result<String, CliError> {
+    let root = crate::utils::normalize_win_path(project_root);
     let git = crate::config::find_real_git().unwrap_or_else(|| "git".into());
     let mut cmd = Command::new(git);
     cmd.args(args)
-        .current_dir(project_root)
+        .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
