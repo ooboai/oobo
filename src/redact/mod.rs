@@ -158,9 +158,10 @@ fn redact_basic(text: &str) -> String {
     static PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
     let patterns = PATTERNS.get_or_init(|| {
         [
-            r#"(?i)(sk|pk|api[_-]?key|token|secret|password|passwd|auth)[_\-]?\s*[:=]\s*['"]?([a-zA-Z0-9\-_.]{20,})['"]?"#,
+            r#"(?i)(sk|pk|api[_-]?key|token|secret|password|passwd|auth|key)[_\-]?\s*[:=]\s*['"]?([a-zA-Z0-9\-_.]{20,})['"]?"#,
             r"AKIA[0-9A-Z]{16}",
             r"(?i)(bearer|authorization)\s+[a-zA-Z0-9\-_.+/=]{30,}",
+            r"(?-u)\b(sk|pk)_(live|test|prod|staging)_[a-zA-Z0-9\-_.]{10,}",
         ]
         .iter()
         .filter_map(|p| Regex::new(p).ok())

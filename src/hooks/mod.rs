@@ -773,6 +773,7 @@ fn record_no_repo_touch(session_id: &str, agent: &str, tool_name: &str, path: &s
     });
     use std::io::Write as _;
     let ledger_path = dir.join("no-repo-ledger.jsonl");
+    #[cfg(unix)]
     let is_new = !ledger_path.exists();
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
