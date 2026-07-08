@@ -76,7 +76,7 @@ detect_platform() {
             fi
             ;;
         MINGW*|MSYS*|CYGWIN*)
-            error "Windows is not yet supported. Build from source: https://github.com/ooboai/oobo#build-from-source"
+            error "On Windows, use PowerShell instead: irm https://oobo.ai/install.ps1 | iex"
             ;;
         *)
             error "Unsupported operating system: $os"
